@@ -151,6 +151,12 @@ export default function PaymentDialog({
   const [invoiceData, setInvoiceData] = useState<any>(null);
   const [roundOffInput, setRoundOffInput] = useState(roundOffAmount.toFixed(2));
   const [isAutoPrinting, setIsAutoPrinting] = useState(false);
+  
+  // Additional discount states
+  const [additionalDiscountPercentage, setAdditionalDiscountPercentage] = useState(0);
+  const [additionalDiscountAmount, setAdditionalDiscountAmount] = useState(0);
+  const [applyAdditionalDiscountOn, setApplyAdditionalDiscountOn] = useState<"Grand Total" | "Net Total">("Grand Total");
+  
   const [sharingMode, setSharingMode] = useState<string | null>(
     initialSharingMode
   ); // 'email', 'sms', 'whatsapp'
@@ -499,7 +505,9 @@ export default function PaymentDialog({
       (sum, coupon) => sum + coupon.value,
       0
     );
-    const taxableAmount = Math.max(0, subtotal - couponDiscount);
+    
+    // Net total is subtotal minus coupon discount (before tax and additional discount)
+    const netTotal = Math.max(0, subtotal - couponDiscount);
 
     const selectedTax = salesTaxCharges.find(
       (tax) => tax.id === selectedSalesTaxCharges
@@ -508,26 +516,50 @@ export default function PaymentDialog({
     const isInclusive = selectedTax?.is_inclusive || false;
 
     let taxAmount: number;
-    let grandTotal: number;
+    let grandTotalBeforeDiscount: number;
+    let additionalDiscount: number;
+
+    // Calculate additional discount based on percentage or amount
+    // Percentage takes priority if both are set
+    const calculateAdditionalDiscount = (baseAmount: number) => {
+      if (additionalDiscountPercentage > 0) {
+        return parseFloat(((baseAmount * additionalDiscountPercentage) / 100).toFixed(2));
+      }
+      return additionalDiscountAmount;
+    };
 
     if (isInclusive) {
       // For inclusive tax: tax is already included in the taxable amount
-      taxAmount = (taxableAmount * taxRate) / (100 + taxRate);
+      taxAmount = (netTotal * taxRate) / (100 + taxRate);
       taxAmount = parseFloat(taxAmount.toFixed(2));
-      grandTotal = taxableAmount;
+      grandTotalBeforeDiscount = netTotal;
     } else {
       // For exclusive tax: tax is added to the taxable amount
-      taxAmount = (taxableAmount * taxRate) / 100;
+      taxAmount = (netTotal * taxRate) / 100;
       taxAmount = parseFloat(taxAmount.toFixed(2)); // Ensure 2 decimal places
-      grandTotal = taxableAmount + taxAmount;
+      grandTotalBeforeDiscount = netTotal + taxAmount;
     }
+
+    // Apply additional discount based on selected option
+    if (applyAdditionalDiscountOn === "Net Total") {
+      // Apply discount on Net Total (before tax)
+      additionalDiscount = calculateAdditionalDiscount(netTotal);
+    } else {
+      // Apply discount on Grand Total (after tax)
+      additionalDiscount = calculateAdditionalDiscount(grandTotalBeforeDiscount);
+    }
+
+    const grandTotal = grandTotalBeforeDiscount - additionalDiscount + roundOffAmount;
 
     return {
       subtotal,
       couponDiscount,
-      taxableAmount,
+      taxableAmount: netTotal, // Keep as taxableAmount for backward compatibility
+      netTotal,
       taxAmount,
-      grandTotal: grandTotal + roundOffAmount,
+      additionalDiscount,
+      grandTotalBeforeDiscount,
+      grandTotal: Math.max(0, grandTotal), // Ensure grand total doesn't go negative
       selectedTax,
       isInclusive,
     };
@@ -537,6 +569,9 @@ export default function PaymentDialog({
     selectedSalesTaxCharges,
     salesTaxCharges,
     roundOffAmount,
+    additionalDiscountPercentage,
+    additionalDiscountAmount,
+    applyAdditionalDiscountOn,
   ]);
 
   // Calculate total paid amount from all payment methods (for both B2C and B2B)
@@ -1002,6 +1037,10 @@ export default function PaymentDialog({
       taxType: calculations.isInclusive ? "inclusive" : "exclusive",
       couponDiscount: calculations.couponDiscount,
       roundOffAmount,
+      // Additional discount fields
+      additionalDiscountPercentage,
+      additionalDiscountAmount: calculations.additionalDiscount, // Use calculated amount
+      applyAdditionalDiscountOn,
       grandTotal: calculations.grandTotal,
       amountPaid: netAmountToSend, // Send net amount (grand total for B2C, total paid for B2B)
       outstandingAmount: outstandingAmount,
@@ -2320,6 +2359,86 @@ export default function PaymentDialog({
                   </div>
                 </div>
 
+                {/* Additional Discount Section */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    Additional Discount
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Apply Discount On
+                      </label>
+                      <select
+                        value={applyAdditionalDiscountOn}
+                        onChange={(e) => setApplyAdditionalDiscountOn(e.target.value as "Grand Total" | "Net Total")}
+                        disabled={invoiceSubmitted || isProcessingPayment}
+                        className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
+                          invoiceSubmitted || isProcessingPayment
+                            ? "cursor-not-allowed opacity-50"
+                            : ""
+                        }`}
+                      >
+                        <option value="Grand Total">Grand Total</option>
+                        <option value="Net Total">Net Total</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Discount Percentage (%)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        value={additionalDiscountPercentage || ""}
+                        onChange={(e) => {
+                          const value = parseFloat(e.target.value) || 0;
+                          setAdditionalDiscountPercentage(Math.min(100, Math.max(0, value)));
+                          // Clear amount when percentage is set
+                          if (value > 0) {
+                            setAdditionalDiscountAmount(0);
+                          }
+                        }}
+                        disabled={invoiceSubmitted || isProcessingPayment}
+                        placeholder="0.00"
+                        className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
+                          invoiceSubmitted || isProcessingPayment
+                            ? "cursor-not-allowed opacity-50"
+                            : ""
+                        }`}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                        Discount Amount ({currencySymbol})
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={additionalDiscountAmount || ""}
+                        onChange={(e) => {
+                          const value = parseFloat(e.target.value) || 0;
+                          setAdditionalDiscountAmount(Math.max(0, value));
+                          // Clear percentage when amount is set
+                          if (value > 0) {
+                            setAdditionalDiscountPercentage(0);
+                          }
+                        }}
+                        disabled={invoiceSubmitted || isProcessingPayment}
+                        placeholder="0.00"
+                        className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
+                          invoiceSubmitted || isProcessingPayment
+                            ? "cursor-not-allowed opacity-50"
+                            : ""
+                        }`}
+                      />
+                    </div>
+                  </div>
+                </div>
+
                 {/* Totals Section */}
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
@@ -2396,6 +2515,14 @@ export default function PaymentDialog({
                             : formatCurrency(calculations.taxAmount)}
                         </span>
                       </div>
+                      {calculations.additionalDiscount > 0 && (
+                        <div className="flex justify-between text-green-600 dark:text-green-400">
+                          <span>Additional Discount</span>
+                          <span>
+                            -{formatCurrency(calculations.additionalDiscount)}
+                          </span>
+                        </div>
+                      )}
                       {roundOffAmount !== 0 && (
                         <div className="flex justify-between">
                           <span className="text-gray-600 dark:text-gray-400">

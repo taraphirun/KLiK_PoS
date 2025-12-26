@@ -527,6 +527,9 @@ def create_and_submit_invoice(data):
 			mode_of_payment,
 			business_type,
 			roundoff_amount,
+			additional_discount_percentage,
+			additional_discount_amount,
+			apply_additional_discount_on,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -545,6 +548,9 @@ def create_and_submit_invoice(data):
 			business_type,
 			roundoff_amount,
 			include_payments=True,
+			additional_discount_percentage=additional_discount_percentage,
+			additional_discount_amount=additional_discount_amount,
+			apply_additional_discount_on=apply_additional_discount_on,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -617,6 +623,9 @@ def create_draft_invoice(data):
 			mode_of_payment,
 			business_type,
 			roundoff_amount,
+			additional_discount_percentage,
+			additional_discount_amount,
+			apply_additional_discount_on,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -627,6 +636,9 @@ def create_draft_invoice(data):
 			business_type,
 			roundoff_amount,
 			include_payments=True,
+			additional_discount_percentage=additional_discount_percentage,
+			additional_discount_amount=additional_discount_amount,
+			apply_additional_discount_on=apply_additional_discount_on,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -657,6 +669,11 @@ def parse_invoice_data(data):
 	if roundoff_amount != 0:
 		_roundoff_account = get_writeoff_account()
 
+	# Extract additional discount data from frontend
+	additional_discount_percentage = data.get("additionalDiscountPercentage", 0.0)
+	additional_discount_amount = data.get("additionalDiscountAmount", 0.0)
+	apply_additional_discount_on = data.get("applyAdditionalDiscountOn", "Grand Total")
+
 	if data.get("amountPaid"):
 		amount_paid = data.get("amountPaid")
 
@@ -677,6 +694,9 @@ def parse_invoice_data(data):
 		mode_of_payment,
 		business_type,
 		roundoff_amount,
+		additional_discount_percentage,
+		additional_discount_amount,
+		apply_additional_discount_on,
 	)
 
 
@@ -689,6 +709,9 @@ def build_sales_invoice_doc(
 	business_type,
 	roundoff_amount=0.0,
 	include_payments=False,
+	additional_discount_percentage=0.0,
+	additional_discount_amount=0.0,
+	apply_additional_discount_on="Grand Total",
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -708,6 +731,11 @@ def build_sales_invoice_doc(
 
 	# Handle round-off
 	_set_roundoff_fields(doc, roundoff_amount)
+
+	# Handle additional discount
+	_set_additional_discount_fields(
+		doc, additional_discount_percentage, additional_discount_amount, apply_additional_discount_on
+	)
 
 	# Set taxes and charges
 	_set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile)
@@ -807,6 +835,28 @@ def _set_roundoff_fields(doc, roundoff_amount):
 		doc.custom_roundoff_amount = flt(abs(roundoff_amount))
 		doc.custom_roundoff_account = get_writeoff_account()
 		doc.custom_base_roundoff_amount = flt(abs(roundoff_amount) * conversion_rate)
+
+
+def _set_additional_discount_fields(
+	doc, additional_discount_percentage, additional_discount_amount, apply_additional_discount_on
+):
+	"""Set additional discount fields on the Sales Invoice document.
+
+	ERPNext Sales Invoice has these standard fields:
+	- apply_discount_on: 'Grand Total' or 'Net Total'
+	- additional_discount_percentage: Percentage discount to apply
+	- discount_amount: Fixed discount amount (calculated from percentage or set directly)
+	"""
+	# Only set if there's a discount to apply
+	if additional_discount_percentage > 0 or additional_discount_amount > 0:
+		doc.apply_discount_on = apply_additional_discount_on
+
+		if additional_discount_percentage > 0:
+			# Use percentage - ERPNext will calculate the amount automatically
+			doc.additional_discount_percentage = flt(additional_discount_percentage)
+		else:
+			# Use fixed amount
+			doc.discount_amount = flt(additional_discount_amount)
 
 
 def _set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile):
