@@ -115,6 +115,52 @@ export default function AddCustomerModal({
     telegram_display_name: string;
   } | null>(null);
   const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
+  const [selectedTelegramContact, setSelectedTelegramContact] = useState<TelegramContact | null>(null);
+
+  // Auto-detected Telegram contact from phone number
+  const [phoneMatchedTelegram, setPhoneMatchedTelegram] = useState<TelegramContact | null>(null);
+  const [isCheckingPhoneTelegram, setIsCheckingPhoneTelegram] = useState(false);
+  const phoneCheckTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Watch phone number and auto-search Telegram
+  useEffect(() => {
+    // Clear previous timeout
+    if (phoneCheckTimeoutRef.current) {
+      clearTimeout(phoneCheckTimeoutRef.current);
+    }
+
+    // Don't search if already linked or phone is too short
+    const phoneDigits = formData.phone.replace(/\D/g, '');
+    if (linkedTelegramContact || selectedTelegramContact || phoneDigits.length < 10) {
+      setPhoneMatchedTelegram(null);
+      return;
+    }
+
+    // Debounce the search
+    phoneCheckTimeoutRef.current = setTimeout(async () => {
+      setIsCheckingPhoneTelegram(true);
+      try {
+        const result = await searchTelegramContact(formData.phone, 'phone');
+        if (result.success && result.contacts.length > 0 && result.contacts[0]) {
+          // Found a matching contact
+          setPhoneMatchedTelegram(result.contacts[0]);
+        } else {
+          setPhoneMatchedTelegram(null);
+        }
+      } catch {
+        setPhoneMatchedTelegram(null);
+      } finally {
+        setIsCheckingPhoneTelegram(false);
+      }
+    }, 500); // 500ms debounce
+
+    return () => {
+      if (phoneCheckTimeoutRef.current) {
+        clearTimeout(phoneCheckTimeoutRef.current);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.phone, linkedTelegramContact, selectedTelegramContact]);
 
   // Fetch customer groups and territories
   useEffect(() => {
@@ -402,14 +448,19 @@ export default function AddCustomerModal({
     }
   };
 
-  // Select a Telegram contact from search results (store for linking after customer creation)
-  const [selectedTelegramContact, setSelectedTelegramContact] = useState<TelegramContact | null>(null);
-
   const handleSelectTelegramContact = (contact: TelegramContact) => {
     setSelectedTelegramContact(contact);
+    setPhoneMatchedTelegram(null); // Clear phone match when manually selecting
     const displayName = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 
                         (contact.telegram_username ? `@${contact.telegram_username}` : `User ${contact.telegram_user_id}`);
     toast.success(`Selected: ${displayName}`);
+  };
+
+  // Quick link from phone number match
+  const handleQuickLinkFromPhone = () => {
+    if (phoneMatchedTelegram) {
+      handleSelectTelegramContact(phoneMatchedTelegram);
+    }
   };
 
   // Load existing Telegram link when editing
@@ -923,6 +974,39 @@ export default function AddCustomerModal({
                       {errors.phone && (
                         <p className="text-red-500 text-xs mt-1">{errors.phone}</p>
                       )}
+                      
+                      {/* Show Telegram quick link if phone matches a contact */}
+                      {phoneMatchedTelegram && !linkedTelegramContact && (
+                        <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-800">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2">
+                              <svg className="w-4 h-4 text-blue-500" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.02-1.96 1.25-5.54 3.67-.52.36-1 .53-1.42.52-.47-.01-1.37-.27-2.04-.49-.82-.27-1.47-.42-1.42-.88.03-.24.37-.49 1.02-.75 4-1.74 6.67-2.89 8.01-3.45 3.81-1.58 4.6-1.85 5.12-1.86.11 0 .37.03.53.17.14.12.18.28.2.45-.01.06.01.24 0 .38z"/>
+                              </svg>
+                              <span className="text-sm text-blue-700 dark:text-blue-300">
+                                {isCheckingPhoneTelegram ? (
+                                  "Checking Telegram..."
+                                ) : (
+                                  <>
+                                    Found: <strong>{phoneMatchedTelegram.first_name} {phoneMatchedTelegram.last_name || ''}</strong>
+                                    {phoneMatchedTelegram.telegram_username && (
+                                      <span className="text-blue-500 ml-1">@{phoneMatchedTelegram.telegram_username}</span>
+                                    )}
+                                  </>
+                                )}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleQuickLinkFromPhone}
+                              disabled={isLinkingTelegram}
+                              className="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50"
+                            >
+                              {isLinkingTelegram ? 'Linking...' : 'Link'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1030,6 +1114,39 @@ export default function AddCustomerModal({
                   />
                   {errors.phone && (
                     <p className="text-red-500 text-xs mt-1">{errors.phone}</p>
+                  )}
+                  
+                  {/* Show Telegram quick link if phone matches a contact */}
+                  {phoneMatchedTelegram && !linkedTelegramContact && (
+                    <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/30 rounded-lg border border-blue-200 dark:border-blue-800">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <svg className="w-4 h-4 text-blue-500" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69.01-.03.01-.14-.07-.2-.08-.06-.19-.04-.27-.02-.12.02-1.96 1.25-5.54 3.67-.52.36-1 .53-1.42.52-.47-.01-1.37-.27-2.04-.49-.82-.27-1.47-.42-1.42-.88.03-.24.37-.49 1.02-.75 4-1.74 6.67-2.89 8.01-3.45 3.81-1.58 4.6-1.85 5.12-1.86.11 0 .37.03.53.17.14.12.18.28.2.45-.01.06.01.24 0 .38z"/>
+                          </svg>
+                          <span className="text-sm text-blue-700 dark:text-blue-300">
+                            {isCheckingPhoneTelegram ? (
+                              "Checking Telegram..."
+                            ) : (
+                              <>
+                                Found: <strong>{phoneMatchedTelegram.first_name} {phoneMatchedTelegram.last_name || ''}</strong>
+                                {phoneMatchedTelegram.telegram_username && (
+                                  <span className="text-blue-500 ml-1">@{phoneMatchedTelegram.telegram_username}</span>
+                                )}
+                              </>
+                            )}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleQuickLinkFromPhone}
+                          disabled={isLinkingTelegram}
+                          className="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50"
+                        >
+                          {isLinkingTelegram ? 'Linking...' : 'Link'}
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
                 {errors.contact && (
