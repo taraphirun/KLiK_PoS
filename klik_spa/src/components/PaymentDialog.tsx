@@ -169,6 +169,9 @@ export default function PaymentDialog({
   const [telegramContactInfo, setTelegramContactInfo] = useState<{ telegram_contact_id: string; telegram_display_name: string } | null>(null);
   const [telegramMessage, setTelegramMessage] = useState("");
   const [isLoadingTelegramStatus, setIsLoadingTelegramStatus] = useState(false);
+  const [sendToTelegramOnSubmit, setSendToTelegramOnSubmit] = useState(false);
+  const [customerHasTelegram, setCustomerHasTelegram] = useState(false);
+  const [isCheckingCustomerTelegram, setIsCheckingCustomerTelegram] = useState(false);
 
   // WhatsApp template states
   const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppTemplate[]>([]);
@@ -275,6 +278,50 @@ export default function PaymentDialog({
       });
     }
   };
+
+  // Check if customer has Telegram linked when dialog opens or customer changes
+  useEffect(() => {
+    const checkCustomerTelegram = async () => {
+      if (!isOpen || !selectedCustomer?.name) {
+        setCustomerHasTelegram(false);
+        setTelegramContactInfo(null);
+        setSendToTelegramOnSubmit(false);
+        return;
+      }
+
+      setIsCheckingCustomerTelegram(true);
+      try {
+        // First check if Telegram is enabled
+        const status = await checkTelegramEnabled();
+        if (!status.enabled) {
+          setCustomerHasTelegram(false);
+          setTelegramContactInfo(null);
+          return;
+        }
+        setTelegramEnabled(true);
+
+        // Then check if customer has Telegram contact linked
+        const contactInfo = await getTelegramContactInfo(selectedCustomer.name);
+        if (contactInfo && contactInfo.telegram_contact_id) {
+          setCustomerHasTelegram(true);
+          setTelegramContactInfo(contactInfo);
+          // Auto-check the send to telegram option
+          setSendToTelegramOnSubmit(true);
+        } else {
+          setCustomerHasTelegram(false);
+          setTelegramContactInfo(null);
+        }
+      } catch (error) {
+        console.error('Error checking customer Telegram status:', error);
+        setCustomerHasTelegram(false);
+        setTelegramContactInfo(null);
+      } finally {
+        setIsCheckingCustomerTelegram(false);
+      }
+    };
+
+    checkCustomerTelegram();
+  }, [isOpen, selectedCustomer?.name]);
 
   // Load WhatsApp templates when sharing mode changes to WhatsApp
   useEffect(() => {
@@ -974,6 +1021,24 @@ export default function PaymentDialog({
         : "Payment completed successfully!";
       toast.success(successMessage);
 
+      // Send to Telegram if checkbox is checked and customer has Telegram linked
+      if (sendToTelegramOnSubmit && customerHasTelegram && telegramContactInfo && response.invoice?.name) {
+        try {
+          const telegramMsg = `Hello,\n\nPlease find attached the Sales Invoice ${response.invoice.name}.\n\nThank you!`;
+          await sendInvoiceTelegram({
+            customer_name: selectedCustomer.name,
+            invoice_name: response.invoice.name,
+            message: telegramMsg,
+            attach_file: true,
+            attachment_format: 'Image' // Send as image by default
+          });
+          toast.success("Invoice sent to Telegram successfully!");
+        } catch (telegramError) {
+          console.error("Failed to send invoice to Telegram:", telegramError);
+          toast.warning("Invoice created but failed to send to Telegram");
+        }
+      }
+
       // Delete original draft invoice if it exists (from Edit → Go to Cart workflow)
       const originalDraftInvoiceId = getOriginalDraftInvoiceId();
       // console.log("Checking for original draft invoice to delete:", originalDraftInvoiceId);
@@ -1446,6 +1511,27 @@ export default function PaymentDialog({
 
                 {/* Action Buttons */}
                 <div className="space-y-3 pt-6">
+                  {/* Telegram checkbox for mobile */}
+                  {isCheckingCustomerTelegram ? (
+                    <div className="flex items-center justify-center space-x-2 text-gray-500 py-2">
+                      <Loader2 size={16} className="animate-spin" />
+                      <span className="text-sm">Checking Telegram...</span>
+                    </div>
+                  ) : customerHasTelegram && telegramContactInfo ? (
+                    <label className="flex items-center justify-center space-x-2 cursor-pointer py-2">
+                      <input
+                        type="checkbox"
+                        checked={sendToTelegramOnSubmit}
+                        onChange={(e) => setSendToTelegramOnSubmit(e.target.checked)}
+                        className="w-4 h-4 text-sky-600 border-gray-300 rounded focus:ring-sky-500"
+                      />
+                      <Send size={16} className="text-sky-500" />
+                      <span className="text-sm text-gray-700 dark:text-gray-300">
+                        Send to Telegram ({telegramContactInfo.telegram_display_name})
+                      </span>
+                    </label>
+                  ) : null}
+                  
                   <button
                     onClick={handleCompletePayment}
                     disabled={isActionButtonDisabled()}
@@ -2670,7 +2756,36 @@ export default function PaymentDialog({
           </div>
         ) : (
           <div className="border-t border-gray-200 dark:border-gray-700 p-6 flex-shrink-0 bg-white dark:bg-gray-800">
-            <div className="flex justify-end space-x-4">
+            <div className="flex justify-between items-center">
+              {/* Telegram checkbox - show if customer has Telegram linked */}
+              <div className="flex items-center">
+                {isCheckingCustomerTelegram ? (
+                  <div className="flex items-center space-x-2 text-gray-500">
+                    <Loader2 size={16} className="animate-spin" />
+                    <span className="text-sm">Checking Telegram...</span>
+                  </div>
+                ) : customerHasTelegram && telegramContactInfo ? (
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={sendToTelegramOnSubmit}
+                      onChange={(e) => setSendToTelegramOnSubmit(e.target.checked)}
+                      className="w-4 h-4 text-sky-600 border-gray-300 rounded focus:ring-sky-500"
+                    />
+                    <Send size={16} className="text-sky-500" />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">
+                      Send to Telegram
+                      <span className="text-xs text-gray-500 ml-1">
+                        ({telegramContactInfo.telegram_display_name})
+                      </span>
+                    </span>
+                  </label>
+                ) : (
+                  <div /> // Empty div to maintain flex spacing
+                )}
+              </div>
+              
+              <div className="flex space-x-4">
               <button
                 onClick={handleHoldOrder}
                 disabled={
@@ -2712,6 +2827,7 @@ export default function PaymentDialog({
                   </>
                 )}
               </button>
+              </div>
             </div>
           </div>
         )}

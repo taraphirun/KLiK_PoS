@@ -1246,13 +1246,10 @@ def custom_calculate_totals(self):
 		"Sales Invoice",
 		"POS Invoice",
 	]:
-		self.doc.base_grand_total = (
-			flt(
-				self.doc.grand_total * self.doc.conversion_rate,
-				self.doc.precision("base_grand_total"),
-			)
-			if self.doc.total_taxes_and_charges
-			else self.doc.base_net_total
+		# Always calculate base_grand_total from grand_total to ensure roundoff adjustments are included
+		self.doc.base_grand_total = flt(
+			self.doc.grand_total * self.doc.conversion_rate,
+			self.doc.precision("base_grand_total"),
 		)
 	else:
 		self.doc.taxes_and_charges_added = self.doc.taxes_and_charges_deducted = 0.0
