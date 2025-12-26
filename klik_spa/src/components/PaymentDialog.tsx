@@ -26,7 +26,8 @@ import {
   MessageSquarePlus,
   Loader2,
   Pencil,
-  CheckCircle
+  CheckCircle,
+  Send
 } from "lucide-react";
 import type { CartItem, GiftCoupon } from "../../types";
 import type { Customer } from "../types/customer";
@@ -39,7 +40,7 @@ import { createSalesInvoice } from "../services/salesInvoice";
 import { useNavigate } from "react-router-dom";
 import DisplayPrintPreview from "../utils/invoicePrint";
 import { handlePrintInvoice } from "../utils/printHandler";
-import { sendEmails, sendWhatsAppMessage, sendSMSMessage } from "../services/useSharing";
+import { sendEmails, sendWhatsAppMessage, sendSMSMessage, sendInvoiceTelegram, getTelegramContactInfo, checkTelegramEnabled } from "../services/useSharing";
 import { clearDraftInvoiceCache, getOriginalDraftInvoiceId } from "../utils/draftInvoiceCache";
 // import { deleteDraftInvoice } from "../services/salesInvoice";
 import {
@@ -161,6 +162,13 @@ export default function PaymentDialog({
 
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [isSendingWhatsapp, setIsSendingWhatsapp] = useState(false);
+  const [isSendingTelegram, setIsSendingTelegram] = useState(false);
+
+  // Telegram states
+  const [telegramEnabled, setTelegramEnabled] = useState(false);
+  const [telegramContactInfo, setTelegramContactInfo] = useState<{ telegram_contact_id: string; telegram_display_name: string } | null>(null);
+  const [telegramMessage, setTelegramMessage] = useState("");
+  const [isLoadingTelegramStatus, setIsLoadingTelegramStatus] = useState(false);
 
   // WhatsApp template states
   const [whatsappTemplates, setWhatsappTemplates] = useState<WhatsAppTemplate[]>([]);
@@ -339,6 +347,37 @@ export default function PaymentDialog({
 
     loadEmailTemplates();
   }, [sharingMode, emailTemplates.length]);
+
+  // Check Telegram enabled status and load contact info when sharing mode changes to telegram
+  useEffect(() => {
+    const loadTelegramData = async () => {
+      if (sharingMode === 'telegram') {
+        setIsLoadingTelegramStatus(true);
+        try {
+          // Check if Telegram is enabled
+          const status = await checkTelegramEnabled();
+          setTelegramEnabled(status.enabled);
+
+          // Get customer's Telegram contact info
+          const customerName = invoiceData?.customer || externalInvoiceData?.customer || selectedCustomer?.name;
+          if (customerName) {
+            const contactInfo = await getTelegramContactInfo(customerName);
+            setTelegramContactInfo(contactInfo);
+          }
+
+          // Set default message
+          const invoiceName = invoiceData?.name || externalInvoiceData?.name || '';
+          setTelegramMessage(`Hello,\n\nPlease find attached the Sales Invoice ${invoiceName}.\n\nThank you!`);
+        } catch (error) {
+          console.error('Error loading Telegram data:', error);
+        } finally {
+          setIsLoadingTelegramStatus(false);
+        }
+      }
+    };
+
+    loadTelegramData();
+  }, [sharingMode, invoiceData, externalInvoiceData, selectedCustomer]);
 
   // Helper function to get processed WhatsApp message
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1534,6 +1573,20 @@ export default function PaymentDialog({
               </button>
 
               <button
+                className={`p-2 rounded-lg ${
+                  sharingMode === "telegram"
+                    ? "bg-sky-100 text-sky-700"
+                    : "text-sky-600 hover:bg-sky-100"
+                } dark:text-sky-400 dark:hover:bg-sky-900`}
+                title="Telegram"
+                onClick={() =>
+                  setSharingMode(sharingMode === "telegram" ? null : "telegram")
+                }
+              >
+                <Send size={20} />
+              </button>
+
+              <button
                 className="p-2 text-purple-600 hover:bg-purple-100 dark:text-purple-400 dark:hover:bg-purple-900 rounded-lg"
                 title="View Full"
                 onClick={() => handleViewInvoice(invoiceData)}
@@ -1925,6 +1978,118 @@ export default function PaymentDialog({
                     >
                       Send SMS
                     </button>
+                  </div>
+                )}
+
+                {sharingMode === "telegram" && (
+                  <div className="space-y-4">
+                    {isLoadingTelegramStatus ? (
+                      <div className="flex items-center justify-center py-8">
+                        <Loader2 size={24} className="animate-spin text-sky-600" />
+                        <span className="ml-2 text-gray-600 dark:text-gray-400">Loading Telegram...</span>
+                      </div>
+                    ) : !telegramEnabled ? (
+                      <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                        <p className="text-yellow-800 dark:text-yellow-200 text-sm">
+                          Telegram integration is not enabled. Please configure Telegram Settings and authenticate a user first.
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Customer Name
+                          </label>
+                          <input
+                            type="text"
+                            value={sharingData.name}
+                            readOnly
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-white"
+                          />
+                        </div>
+                        
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Telegram Contact
+                          </label>
+                          {telegramContactInfo ? (
+                            <div className="flex items-center space-x-2 px-3 py-2 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg">
+                              <CheckCircle size={16} className="text-green-600" />
+                              <span className="text-green-800 dark:text-green-200">
+                                {telegramContactInfo.telegram_display_name || telegramContactInfo.telegram_contact_id}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="px-3 py-2 bg-orange-50 dark:bg-orange-900/20 border border-orange-200 dark:border-orange-800 rounded-lg">
+                              <span className="text-orange-800 dark:text-orange-200 text-sm">
+                                No Telegram contact mapped for this customer. Please map a contact in Telegram User Settings.
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                            Message
+                          </label>
+                          <textarea
+                            value={telegramMessage}
+                            onChange={(e) => setTelegramMessage(e.target.value)}
+                            rows={4}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-sky-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                            placeholder="Enter message to send with invoice..."
+                          />
+                        </div>
+
+                        <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-400">
+                          <CheckCircle size={16} className="text-sky-600" />
+                          <span>PDF invoice will be attached automatically</span>
+                        </div>
+
+                        <button
+                          onClick={async () => {
+                            const customerName = invoiceData?.customer || externalInvoiceData?.customer || selectedCustomer?.name;
+                            const invoiceName = invoiceData?.name || externalInvoiceData?.name;
+                            
+                            if (!customerName || !invoiceName) {
+                              toast.error("Missing customer or invoice information");
+                              return;
+                            }
+
+                            setIsSendingTelegram(true);
+                            try {
+                              await sendInvoiceTelegram({
+                                customer_name: customerName,
+                                invoice_name: invoiceName,
+                                message: telegramMessage,
+                                attach_pdf: true
+                              });
+                              toast.success("Invoice sent via Telegram!");
+                              setSharingMode(null);
+                              //eslint-disable-next-line @typescript-eslint/no-explicit-any
+                            } catch (error: any) {
+                              toast.error(error.message || "Failed to send via Telegram");
+                            } finally {
+                              setIsSendingTelegram(false);
+                            }
+                          }}
+                          disabled={!telegramContactInfo || isSendingTelegram}
+                          className="w-full py-3 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center space-x-2"
+                        >
+                          {isSendingTelegram ? (
+                            <>
+                              <Loader2 size={18} className="animate-spin" />
+                              <span>Sending...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Send size={18} />
+                              <span>Send via Telegram</span>
+                            </>
+                          )}
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
