@@ -7,6 +7,11 @@ import {
   CreditCard,
   Building,
   Save,
+  Search,
+  Link,
+  Check,
+  Loader2,
+  MessageCircle,
 } from "lucide-react";
 import { type Customer } from "../types/customer";
 
@@ -17,7 +22,7 @@ type ExtendedCustomer = Customer & {
     buildingNumber?: string;
   };
 };
-import { useCustomerActions } from "../services/customerService";
+import { useCustomerActions, type TelegramContact } from "../services/customerService";
 import { toast } from "react-toastify";
 import { usePOSDetails } from "../hooks/usePOSProfile";
 import PhoneInput from "react-phone-number-input";
@@ -41,7 +46,7 @@ export default function AddCustomerModal({
   prefilledName = "",
   prefilledData = {},
 }: AddCustomerModalProps) {
-  const { createCustomer, updateCustomer } = useCustomerActions();
+  const { createCustomer, updateCustomer, searchTelegramContact, linkTelegramToCustomer, getCustomerTelegramLink } = useCustomerActions();
   const isEditing = !!customer;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -100,6 +105,17 @@ export default function AddCustomerModal({
   const { getCustomerGroups, getTerritories } = useCustomerActions();
   const formInitializedRef = useRef(false);
 
+  // Telegram linking state
+  const [telegramSearch, setTelegramSearch] = useState('');
+  const [telegramSearchType, setTelegramSearchType] = useState<'all' | 'phone' | 'username' | 'name'>('all');
+  const [telegramSearchResults, setTelegramSearchResults] = useState<TelegramContact[]>([]);
+  const [isSearchingTelegram, setIsSearchingTelegram] = useState(false);
+  const [linkedTelegramContact, setLinkedTelegramContact] = useState<{
+    telegram_contact_id: string;
+    telegram_display_name: string;
+  } | null>(null);
+  const [isLinkingTelegram, setIsLinkingTelegram] = useState(false);
+
   // Fetch customer groups and territories
   useEffect(() => {
     const fetchData = async () => {
@@ -121,7 +137,8 @@ export default function AddCustomerModal({
     };
 
     fetchData();
-  }, []); // Remove getCustomerGroups and getTerritories from dependencies
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Intentionally empty - only run once on mount
 
   useEffect(() => {
     if (customer && !formInitializedRef.current) {
@@ -323,6 +340,99 @@ export default function AddCustomerModal({
     return true;
   };
 
+  // Telegram search handler
+  const handleTelegramSearch = async () => {
+    if (!telegramSearch.trim()) {
+      toast.error('Please enter a phone number, username, or name to search');
+      return;
+    }
+
+    setIsSearchingTelegram(true);
+    setTelegramSearchResults([]);
+
+    try {
+      const result = await searchTelegramContact(telegramSearch, telegramSearchType);
+      if (result.success) {
+        setTelegramSearchResults(result.contacts);
+        if (result.contacts.length === 0) {
+          toast.info('No Telegram contacts found');
+        }
+      } else {
+        toast.error(result.message || 'Search failed');
+      }
+    } catch {
+      toast.error('Error searching Telegram contacts');
+    } finally {
+      setIsSearchingTelegram(false);
+    }
+  };
+
+  // Link Telegram contact to customer (called after customer is created)
+  const handleLinkTelegramContact = async (customerName: string, contact: TelegramContact) => {
+    setIsLinkingTelegram(true);
+    try {
+      const displayName = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 
+                          (contact.telegram_username ? `@${contact.telegram_username}` : `User ${contact.telegram_user_id}`);
+      
+      const result = await linkTelegramToCustomer(customerName, contact.telegram_user_id, {
+        telegramDisplayName: displayName,
+        telegramUsername: contact.telegram_username,
+        firstName: contact.first_name,
+        lastName: contact.last_name,
+        phoneNumber: contact.phone_number,
+        isGroup: contact.is_group ? 1 : 0
+      });
+
+      if (result.success) {
+        setLinkedTelegramContact({
+          telegram_contact_id: result.telegram_contact_id || contact.telegram_user_id,
+          telegram_display_name: result.telegram_display_name || displayName
+        });
+        toast.success(`Linked to Telegram: ${displayName}`);
+        return true;
+      } else {
+        toast.error(result.message || 'Failed to link Telegram contact');
+        return false;
+      }
+    } catch {
+      toast.error('Error linking Telegram contact');
+      return false;
+    } finally {
+      setIsLinkingTelegram(false);
+    }
+  };
+
+  // Select a Telegram contact from search results (store for linking after customer creation)
+  const [selectedTelegramContact, setSelectedTelegramContact] = useState<TelegramContact | null>(null);
+
+  const handleSelectTelegramContact = (contact: TelegramContact) => {
+    setSelectedTelegramContact(contact);
+    const displayName = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 
+                        (contact.telegram_username ? `@${contact.telegram_username}` : `User ${contact.telegram_user_id}`);
+    toast.success(`Selected: ${displayName}`);
+  };
+
+  // Load existing Telegram link when editing
+  useEffect(() => {
+    const loadTelegramLink = async () => {
+      if (isEditing && customer?.id) {
+        try {
+          const result = await getCustomerTelegramLink(customer.id);
+          if (result.success && result.linked) {
+            setLinkedTelegramContact({
+              telegram_contact_id: result.telegram_contact_id!,
+              telegram_display_name: result.telegram_display_name!
+            });
+          }
+        } catch (error) {
+          console.error('Error loading Telegram link:', error);
+        }
+      }
+    };
+    loadTelegramLink();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing, customer?.id]); // Only reload when customer changes
+
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -352,12 +462,24 @@ export default function AddCustomerModal({
 
       if (isEditing && customer?.id) {
         const updatedCustomer = await updateCustomer(customer.id, customerData);
+        
+        // Link Telegram contact if selected (for editing)
+        if (selectedTelegramContact) {
+          await handleLinkTelegramContact(customer.id, selectedTelegramContact);
+        }
+        
         onSave({
           ...updatedCustomer,
           id: customer.id,
         });
       } else {
         const newCustomer = await createCustomer(customerData);
+        
+        // Link Telegram contact if selected (for new customer)
+        if (selectedTelegramContact && newCustomer.customer_name) {
+          await handleLinkTelegramContact(newCustomer.customer_name, selectedTelegramContact);
+        }
+        
         onSave({
           ...newCustomer,
           id: newCustomer.customer_name,
@@ -1308,6 +1430,163 @@ export default function AddCustomerModal({
 
               </div>
 
+          </div>
+
+          {/* Telegram Linking Section */}
+          <div className="bg-sky-50 dark:bg-sky-900/20 rounded-lg p-4 border border-sky-200 dark:border-sky-700">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center">
+              <MessageCircle size={20} className="mr-2 text-sky-500" />
+              Link Telegram Contact
+              <span className="text-sm font-normal text-gray-500 ml-2">(Optional)</span>
+            </h3>
+
+            {/* Show linked contact if exists */}
+            {linkedTelegramContact && (
+              <div className="mb-4 p-3 bg-green-100 dark:bg-green-900/30 rounded-lg flex items-center justify-between">
+                <div className="flex items-center">
+                  <Check size={18} className="text-green-600 mr-2" />
+                  <span className="text-green-800 dark:text-green-200">
+                    Linked to: <strong>{linkedTelegramContact.telegram_display_name}</strong>
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLinkedTelegramContact(null);
+                    setSelectedTelegramContact(null);
+                  }}
+                  className="text-red-500 hover:text-red-700 text-sm"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+
+            {/* Show selected contact (before save) */}
+            {selectedTelegramContact && !linkedTelegramContact && (
+              <div className="mb-4 p-3 bg-sky-100 dark:bg-sky-900/30 rounded-lg flex items-center justify-between">
+                <div className="flex items-center">
+                  <Check size={18} className="text-sky-600 mr-2" />
+                  <span className="text-sky-800 dark:text-sky-200">
+                    Selected: <strong>
+                      {[selectedTelegramContact.first_name, selectedTelegramContact.last_name].filter(Boolean).join(' ') || 
+                       (selectedTelegramContact.telegram_username ? `@${selectedTelegramContact.telegram_username}` : `User ${selectedTelegramContact.telegram_user_id}`)}
+                    </strong>
+                    {selectedTelegramContact.phone_number && (
+                      <span className="text-gray-500 ml-2">({selectedTelegramContact.phone_number})</span>
+                    )}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTelegramContact(null)}
+                  className="text-red-500 hover:text-red-700 text-sm"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+
+            {/* Search Section */}
+            {!linkedTelegramContact && !selectedTelegramContact && (
+              <>
+                <div className="flex flex-col md:flex-row gap-2 mb-3">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      value={telegramSearch}
+                      onChange={(e) => setTelegramSearch(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleTelegramSearch();
+                        }
+                      }}
+                      placeholder="Search by phone, @username, or name..."
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 dark:bg-gray-700 dark:text-white"
+                    />
+                  </div>
+                  <select
+                    value={telegramSearchType}
+                    onChange={(e) => setTelegramSearchType(e.target.value as 'all' | 'phone' | 'username' | 'name')}
+                    className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 dark:bg-gray-700 dark:text-white"
+                  >
+                    <option value="all">All</option>
+                    <option value="phone">Phone</option>
+                    <option value="username">Username</option>
+                    <option value="name">Name</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleTelegramSearch}
+                    disabled={isSearchingTelegram || !telegramSearch.trim()}
+                    className="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSearchingTelegram ? (
+                      <Loader2 size={18} className="animate-spin" />
+                    ) : (
+                      <Search size={18} />
+                    )}
+                  </button>
+                </div>
+
+                {/* Search Results */}
+                {telegramSearchResults.length > 0 && (
+                  <div className="mt-3 border border-gray-200 dark:border-gray-600 rounded-lg overflow-hidden">
+                    <div className="max-h-48 overflow-y-auto">
+                      {telegramSearchResults.map((contact, index) => {
+                        const displayName = [contact.first_name, contact.last_name].filter(Boolean).join(' ') || 
+                                           (contact.telegram_username ? `@${contact.telegram_username}` : `User ${contact.telegram_user_id}`);
+                        return (
+                          <div
+                            key={contact.telegram_user_id || index}
+                            className="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-600 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                          >
+                            <div className="flex-1">
+                              <div className="font-medium text-gray-900 dark:text-white">
+                                {displayName}
+                                {contact.from_live_search && (
+                                  <span className="ml-2 text-xs bg-sky-100 text-sky-700 px-2 py-0.5 rounded">Live</span>
+                                )}
+                              </div>
+                              <div className="text-sm text-gray-500 dark:text-gray-400 flex flex-wrap gap-2">
+                                {contact.telegram_username && (
+                                  <span>@{contact.telegram_username}</span>
+                                )}
+                                {contact.phone_number && (
+                                  <span>{contact.phone_number}</span>
+                                )}
+                                {contact.is_bot && (
+                                  <span className="text-orange-500">[Bot]</span>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleSelectTelegramContact(contact)}
+                              disabled={isLinkingTelegram}
+                              className="ml-3 px-3 py-1.5 bg-sky-500 text-white text-sm rounded-lg hover:bg-sky-600 transition-colors flex items-center disabled:opacity-50"
+                            >
+                              {isLinkingTelegram ? (
+                                <Loader2 size={14} className="animate-spin mr-1" />
+                              ) : (
+                                <Link size={14} className="mr-1" />
+                              )}
+                              Select
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Help text */}
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  Search your synced Telegram contacts. The contact will be linked after saving the customer.
+                </p>
+              </>
+            )}
           </div>
 
           {/* Error Display */}
