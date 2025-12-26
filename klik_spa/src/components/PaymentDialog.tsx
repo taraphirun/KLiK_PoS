@@ -2062,7 +2062,8 @@ export default function PaymentDialog({
                                 customer_name: customerName,
                                 invoice_name: invoiceName,
                                 message: telegramMessage,
-                                attach_pdf: true
+                                attach_file: true
+                                // attachment_format is not passed - uses user's setting from Telegram User Settings
                               });
                               toast.success("Invoice sent via Telegram!");
                               setSharingMode(null);

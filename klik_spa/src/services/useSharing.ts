@@ -315,7 +315,8 @@ export async function sendInvoiceTelegram(data: {
   customer_name: string;
   invoice_name: string;
   message?: string;
-  attach_pdf?: boolean;
+  attach_file?: boolean;
+  attachment_format?: 'PDF' | 'Image' | null;  // null = use user's setting
 }): Promise<{ status: string; message: string }> {
   const csrfToken = window.csrf_token;
 
@@ -331,7 +332,8 @@ export async function sendInvoiceTelegram(data: {
       customer_name: data.customer_name,
       invoice_name: data.invoice_name,
       message: data.message,
-      attach_pdf: data.attach_pdf !== false ? 1 : 0
+      attach_file: data.attach_file !== false ? 1 : 0,
+      attachment_format: data.attachment_format || null  // null = use user's setting
     }),
     credentials: 'include',
   });
