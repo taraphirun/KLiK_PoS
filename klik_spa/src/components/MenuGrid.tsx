@@ -18,7 +18,7 @@ interface MenuGridProps {
   onSearchChange: (query: string) => void
   onSearchKeyPress?: (e: React.KeyboardEvent<HTMLInputElement>) => void
   onSearchKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void
-  onAddToCart: (item: MenuItem) => void
+  onAddToCart: (item: MenuItem, event?: React.MouseEvent) => void
   onScanBarcode?: () => void
   scannerOnly?: boolean
   // Pagination props

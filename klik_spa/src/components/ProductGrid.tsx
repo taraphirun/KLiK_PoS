@@ -7,7 +7,7 @@ import type { MenuItem } from "../../types"
 
 interface ProductGridProps {
   items: MenuItem[]
-  onAddToCart: (item: MenuItem) => void
+  onAddToCart: (item: MenuItem, event?: React.MouseEvent) => void
   isMobile?: boolean
   scannerOnly?: boolean
   viewMode?: 'grid' | 'list'

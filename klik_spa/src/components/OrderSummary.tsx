@@ -1607,6 +1607,9 @@ export default function OrderSummary({
   // Keyboard shortcuts for checkout, hold, and clear cart
   useEffect(() => {
     const handleKeyboardShortcuts = (e: KeyboardEvent) => {
+      // Skip shortcuts when PaymentDialog is open (it has its own shortcuts)
+      if (showPaymentDialog) return;
+      
       // Only handle if Cmd (Mac) or Ctrl (Windows/Linux) is pressed
       if (!(e.metaKey || e.ctrlKey)) return;
       
@@ -1676,7 +1679,7 @@ export default function OrderSummary({
     return () => {
       window.removeEventListener('keydown', handleKeyboardShortcuts);
     };
-  }, [cartItems, selectedCustomer, onClearCart, subtotal, total, appliedCoupons, itemDiscounts, totalItemDiscount, itemRoofingSpecs, handleHoldOrder]);
+  }, [cartItems, selectedCustomer, onClearCart, subtotal, total, appliedCoupons, itemDiscounts, totalItemDiscount, itemRoofingSpecs, handleHoldOrder, showPaymentDialog]);
 
   // Apply any pending pre-selections when cart items change
   useEffect(() => {

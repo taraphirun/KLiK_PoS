@@ -93,6 +93,9 @@ export default function RetailPOSLayout() {
   // Keyboard shortcut: Cmd+F (Mac) or Ctrl+F (Windows/Linux) to focus search
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Skip if PaymentDialog is open
+      if (document.body.hasAttribute('data-payment-dialog-open')) return
+      
       // Check for Cmd+F (Mac) or Ctrl+F (Windows/Linux)
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault() // Prevent default browser find
@@ -107,13 +110,20 @@ export default function RetailPOSLayout() {
     }
   }, [])
 
-  const handleAddToCart = (item: MenuItem) => {
+  const handleAddToCart = (item: MenuItem, event?: React.MouseEvent) => {
     // Don't add if item is not available
     if (item.available <= 0) return
 
     // If scanner-only mode is enabled, prevent adding items by clicking
     if (useScannerOnly) {
       console.log('Scanner-only mode enabled. Items can only be added via barcode scanning.')
+      return
+    }
+
+    // If Shift key is held, open quantity dialog instead
+    if (event?.shiftKey) {
+      setQuantityDialogItem(item)
+      setShowQuantityDialog(true)
       return
     }
 
@@ -343,6 +353,9 @@ export default function RetailPOSLayout() {
   // Global keyboard navigation for product grid (Arrow keys for 2D navigation)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Skip if PaymentDialog is open
+      if (document.body.hasAttribute('data-payment-dialog-open')) return
+      
       // Skip if focus is on an input element (except for arrow keys which we want to capture)
       const target = e.target as HTMLElement
       const isInputFocused = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable

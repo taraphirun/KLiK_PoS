@@ -5,7 +5,7 @@ import type { MenuItem } from "../../types"
 
 interface ProductCardProps {
   item: MenuItem
-  onAddToCart: (item: MenuItem) => void
+  onAddToCart: (item: MenuItem, event?: React.MouseEvent) => void
   isMobile?: boolean
   scannerOnly?: boolean
   isSelected?: boolean
@@ -30,7 +30,7 @@ return (
           ? "opacity-70 cursor-not-allowed"
           : "hover:shadow-lg hover:scale-105 cursor-pointer active:scale-95"
       } ${isMobile ? "touch-manipulation" : ""}`}
-      onClick={() => !isDisabled && onAddToCart(item)}
+      onClick={(e) => !isDisabled && onAddToCart(item, e)}
     >
       {/* Image - Maintain same size for consistency */}
       <div className="relative">

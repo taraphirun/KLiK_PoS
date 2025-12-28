@@ -211,6 +211,18 @@ export default function PaymentDialog({
   const { salesTaxCharges, defaultTax } = useSalesTaxCharges();
   const navigate = useNavigate();
 
+  // Set data attribute on body when dialog is open to block other keyboard shortcuts
+  useEffect(() => {
+    if (isOpen) {
+      document.body.setAttribute('data-payment-dialog-open', 'true');
+    } else {
+      document.body.removeAttribute('data-payment-dialog-open');
+    }
+    return () => {
+      document.body.removeAttribute('data-payment-dialog-open');
+    };
+  }, [isOpen]);
+
   // Determine if this is B2B business type
   const isB2B = posDetails?.business_type === "B2B";
   const isB2C = posDetails?.business_type === "B2C";
