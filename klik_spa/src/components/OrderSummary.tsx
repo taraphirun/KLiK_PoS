@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Minus,
   Plus,
@@ -695,6 +695,10 @@ export default function OrderSummary({
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  
+  // Ref for customer search input to enable Cmd+V focus
+  const customerSearchInputRef = useRef<HTMLInputElement>(null);
+  
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
   const { customers, isLoading, refetch: refetchCustomers } = useCustomers(customerSearchQuery);
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1233,7 +1237,7 @@ export default function OrderSummary({
   };
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const handleHoldOrder = async (orderData: any) => {
+  const handleHoldOrder = useCallback(async (orderData: any) => {
     if (!selectedCustomer) {
       toast.error("Kindly select a customer");
       return;
@@ -1246,7 +1250,10 @@ export default function OrderSummary({
       const result = await createDraftSalesInvoice(orderData);
 
       if (result && result.success) {
-        handleClearCart();
+        // Clear cart after successful hold
+        if (onClearCart) {
+          onClearCart();
+        }
         toast.success("Draft invoice created and order held successfully!");
       } else {
         toast.error("Failed to create draft invoice");
@@ -1257,9 +1264,9 @@ export default function OrderSummary({
       const errorMessage = extractErrorFromException(error, "Failed to create draft invoice");
       toast.error(errorMessage);
     }
-  };
+  }, [selectedCustomer, onClearCart]);
 
-  const handleClearCart = () => {
+  const handleClearCartLocal = useCallback(() => {
     if (cartItems.length === 0) return;
 
     // Use dedicated clear function if available
@@ -1286,7 +1293,10 @@ export default function OrderSummary({
     // Reset customer selection
     setSelectedCustomer(null);
     setCustomerSearchQuery("");
-  };
+  }, [cartItems, onClearCart, onRemoveItem, appliedCoupons, onRemoveCoupon]);
+
+  // Alias for backward compatibility
+  const handleClearCart = handleClearCartLocal;
 
   const getCustomerTypeIcon = (customer: Customer) => {
     switch (customer.type) {
@@ -1514,6 +1524,80 @@ export default function OrderSummary({
     };
   }, [cartItems, itemBatches]);
 
+  // Keyboard shortcuts for checkout, hold, and clear cart
+  useEffect(() => {
+    const handleKeyboardShortcuts = (e: KeyboardEvent) => {
+      // Only handle if Cmd (Mac) or Ctrl (Windows/Linux) is pressed
+      if (!(e.metaKey || e.ctrlKey)) return;
+      
+      // Don't trigger shortcuts when typing in input fields (except for these specific shortcuts)
+      const target = e.target as HTMLElement;
+      const isInputField = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+      
+      if (e.key === 'Enter') {
+        // Cmd+Enter: Open checkout/payment dialog
+        e.preventDefault();
+        if (cartItems.length > 0 && selectedCustomer) {
+          setShowPaymentDialog(true);
+        } else if (cartItems.length > 0 && !selectedCustomer) {
+          toast.error("Please select a customer first");
+        }
+      } else if (e.key === 'x' && !isInputField) {
+        // Cmd+X: Hold order (only when not in input field to avoid conflicting with cut)
+        e.preventDefault();
+        if (cartItems.length > 0 && selectedCustomer) {
+          // Build order data and call handleHoldOrder
+          const orderData = {
+            items: cartItems.map((item) => ({
+              id: item.id,
+              quantity: item.quantity,
+              description: item.custom_description,
+              price: item.price,
+              item_group: item.item_group,
+              custom_ds_roofing_spec: itemRoofingSpecs[item.id] || item.custom_ds_roofing_spec,
+              custom_description: item.custom_description,
+            })),
+            customer: { id: selectedCustomer.id },
+            subtotal,
+            total,
+            appliedCoupons,
+            itemDiscounts,
+            totalItemDiscount,
+            status: "held",
+          };
+          handleHoldOrder(orderData);
+        } else if (cartItems.length > 0 && !selectedCustomer) {
+          toast.error("Please select a customer first");
+        }
+      } else if (e.key === 'c' && !isInputField) {
+        // Cmd+C: Clear cart (only when not in input field to avoid conflicting with copy)
+        e.preventDefault();
+        if (cartItems.length > 0 && onClearCart) {
+          onClearCart();
+          toast.info('Cart cleared');
+        }
+      } else if (e.key === 'v' && !isInputField) {
+        // Cmd+V: Focus customer search (only when not in input field to avoid conflicting with paste)
+        e.preventDefault();
+        if (customerSearchInputRef.current) {
+          setCustomerSearchQuery(''); // Clear existing search
+          setSelectedCustomer(null); // Clear selected customer to enable search
+          setShowCustomerDropdown(true);
+          // Use setTimeout to ensure state updates before focus
+          setTimeout(() => {
+            customerSearchInputRef.current?.focus();
+            customerSearchInputRef.current?.select(); // Select all text if any remains
+          }, 10);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyboardShortcuts);
+    return () => {
+      window.removeEventListener('keydown', handleKeyboardShortcuts);
+    };
+  }, [cartItems, selectedCustomer, onClearCart, subtotal, total, appliedCoupons, itemDiscounts, totalItemDiscount, itemRoofingSpecs, handleHoldOrder]);
+
   // Apply any pending pre-selections when cart items change
   useEffect(() => {
     if (!cartItems.length) return
@@ -1574,6 +1658,7 @@ export default function OrderSummary({
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
                 <input
+                  ref={customerSearchInputRef}
                   type="text"
                   placeholder="Search customers... (name, email, or phone)"
                   value={customerSearchQuery}

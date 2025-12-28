@@ -274,8 +274,17 @@ export default function RetailPOSLayout() {
     }
   }
 
-  // Handle keyboard navigation in search results (Arrow keys, Enter, Shift+Enter)
+  // Handle keyboard navigation in search results (Arrow keys, Enter, Shift+Enter, Escape)
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Handle Escape key to blur input and clear selection (works even without search query)
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      setSelectedItemIndex(-1)
+      // Blur the input to allow other keyboard shortcuts to work
+      searchInputRef.current?.blur()
+      return
+    }
+    
     // Only handle navigation when there are search results
     if (!localSearchQuery.trim()) return
     
@@ -318,9 +327,6 @@ export default function RetailPOSLayout() {
           }
         }
       }
-    } else if (e.key === 'Escape') {
-      // Clear selection on Escape
-      setSelectedItemIndex(-1)
     }
   }
 
