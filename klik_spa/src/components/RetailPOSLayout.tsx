@@ -265,10 +265,46 @@ export default function RetailPOSLayout() {
     }
   }
 
-  // Handle Enter key for barcode processing
+  // Handle Enter key for barcode processing and single-result quick add
   const handleSearchKeyPress = async (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && localSearchQuery.trim()) {
       e.preventDefault()
+
+      // Quick add: If exactly one item matches the search, add it to cart
+      // This must be checked AFTER filteredItems is computed, so we use a callback pattern
+      // We'll compute filtered items inline here for the check
+      const currentFilteredItems = menuItems.filter((item) => {
+        if (hideUnavailableItems && item.available <= 0) return false
+        if (serverSearchQuery) return true
+        const matchesCategory = selectedCategory === "all" || item.category === selectedCategory
+        const isScaleTyping = !!scalePrefix &&
+          localSearchQuery &&
+          /^[0-9]+$/.test(localSearchQuery) &&
+          localSearchQuery.startsWith(scalePrefix) &&
+          localSearchQuery.length >= 7
+        const queryForFilter = pinnedItemId && isScaleTyping ? localSearchQuery.substring(0, 7) : (isScaleTyping ? localSearchQuery.substring(0, 7) : '')
+        const matchesSearch =
+          queryForFilter === "" ||
+          item.name.toLowerCase().includes(queryForFilter.toLowerCase()) ||
+          item.category.toLowerCase().includes(queryForFilter.toLowerCase()) ||
+          item.id.toLowerCase().includes(queryForFilter.toLowerCase()) ||
+          item.description?.toLowerCase().includes(queryForFilter.toLowerCase()) ||
+          (item.barcode && item.barcode.toLowerCase().includes(queryForFilter.toLowerCase()))
+        const passes = matchesCategory && matchesSearch
+        if (pinnedItemId && isScaleTyping) return passes || item.id === pinnedItemId
+        if (identifierItemId) return passes || item.id === identifierItemId
+        return passes
+      })
+
+      // If exactly one item in results and it's available, add it to cart
+      if (currentFilteredItems.length === 1 && currentFilteredItems[0]) {
+        const singleItem = currentFilteredItems[0]
+        if (singleItem.available > 0) {
+          addItemToCart(singleItem)
+          // Don't clear search - allow user to keep pressing Enter to add more
+          return
+        }
+      }
 
       // First: handle scale barcodes regardless of scanner-only setting
       if (/^[0-9]+$/.test(localSearchQuery) && scalePrefix && localSearchQuery.startsWith(scalePrefix)) {
