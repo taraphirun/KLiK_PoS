@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, forwardRef } from "react"
 import { Link } from "react-router-dom"
 import { useAuth } from "../hooks/useAuth"
 import { useTheme } from "../hooks/useTheme"
@@ -28,7 +28,7 @@ interface MenuGridProps {
   isSearching?: boolean
 }
 
-export default function MenuGrid({
+const MenuGrid = forwardRef<HTMLInputElement, MenuGridProps>(function MenuGrid({
   items,
   selectedCategory,
   onCategoryChange,
@@ -43,7 +43,7 @@ export default function MenuGrid({
   onLoadMore,
   totalCount = 0,
   isSearching = false,
-}: MenuGridProps) {
+}, ref) {
   const { user, logout } = useAuth()
   const { theme, toggleTheme } = useTheme()
   const { posDetails, loading: posLoading } = usePOSDetails()
@@ -112,6 +112,7 @@ export default function MenuGrid({
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center space-x-3 flex-1 max-w-md">
             <SearchBar
+              ref={ref}
               searchQuery={searchQuery}
               onSearchChange={onSearchChange}
               onSearchKeyPress={onSearchKeyPress}
@@ -274,4 +275,6 @@ export default function MenuGrid({
       </div>
     </div>
   )
-}
+})
+
+export default MenuGrid

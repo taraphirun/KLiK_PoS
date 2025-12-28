@@ -25,6 +25,9 @@ export default function RetailPOSLayout() {
 
   // Debounce timer ref for search
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  
+  // Ref for search input to enable Cmd+F / Ctrl+F focus
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   // Use cart store instead of local state
   const { cartItems, addToCart, updateQuantity, removeItem, clearCart } = useCartStore()
@@ -53,6 +56,23 @@ export default function RetailPOSLayout() {
 
   // Use media query to detect mobile/tablet screens
   const isMobile = useMediaQuery("(max-width: 1024px)")
+
+  // Keyboard shortcut: Cmd+F (Mac) or Ctrl+F (Windows/Linux) to focus search
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Check for Cmd+F (Mac) or Ctrl+F (Windows/Linux)
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault() // Prevent default browser find
+        searchInputRef.current?.focus()
+        searchInputRef.current?.select() // Select existing text for easy replacement
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [])
 
   const handleAddToCart = (item: MenuItem) => {
     // Don't add if item is not available
@@ -575,6 +595,7 @@ export default function RetailPOSLayout() {
         {/* Menu Section - Takes remaining space minus cart width */}
         <div className="flex-1 overflow-hidden ml-20">
           <MenuGrid
+            ref={searchInputRef}
             items={filteredItems}
             selectedCategory={selectedCategory}
             onCategoryChange={setSelectedCategory}
