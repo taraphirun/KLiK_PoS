@@ -698,6 +698,10 @@ export default function OrderSummary({
   
   // Ref for customer search input to enable Cmd+V focus
   const customerSearchInputRef = useRef<HTMLInputElement>(null);
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+  
+  // Keyboard navigation for customer dropdown
+  const [selectedCustomerIndex, setSelectedCustomerIndex] = useState(-1);
   
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
   const { customers, isLoading, refetch: refetchCustomers } = useCustomers(customerSearchQuery);
@@ -992,68 +996,141 @@ export default function OrderSummary({
 
   // Calculate final total
   const total = Math.max(0, subtotal - couponDiscount);
+  
   const handleCustomerSearchKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>
   ) => {
-    if (e.key === "Enter" && customerSearchQuery.trim() !== "") {
-      // Check if there are no matching customers
-      if (filteredCustomers.length === 0) {
-        // This is a new customer - detect input type and set prefilled data
-        const trimmedValue = customerSearchQuery.trim();
-        let prefilledData = {};
-
-        // Check if it's an email
-        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedValue)) {
-          prefilledData = { email: trimmedValue };
-        }
-        // Check if it's a phone number (contains mostly digits with some special characters)
-        else if (
-          /^[\d\s+()-]+$/.test(trimmedValue) &&
-          trimmedValue.replace(/[\s+()-]/g, "").length >= 7
-        ) {
-          // Format phone number with Cambodia country code if it doesn't already have one
-          let formattedPhone = trimmedValue;
-          const cleanNumber = trimmedValue.replace(/[\s+()-]/g, "");
-
-          // If the number doesn't start with +855 (Cambodia code), add it
-          if (
-            !cleanNumber.startsWith("855") &&
-            !cleanNumber.startsWith("+855")
-          ) {
-            // If it starts with 0, replace with +855
-            if (cleanNumber.startsWith("0")) {
-              formattedPhone = "+855" + cleanNumber.substring(1);
-            } else {
-              // Otherwise just add +855
-              formattedPhone = "+855" + cleanNumber;
+    // Arrow key navigation
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (showCustomerDropdown && visibleCustomers.length > 0) {
+        setSelectedCustomerIndex(prev => {
+          const nextIndex = prev + 1;
+          const newIndex = nextIndex >= visibleCustomers.length ? 0 : nextIndex;
+          // Scroll the selected item into view
+          setTimeout(() => {
+            const dropdown = customerDropdownRef.current;
+            if (dropdown) {
+              const selectedItem = dropdown.children[newIndex] as HTMLElement;
+              if (selectedItem) {
+                selectedItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+              }
             }
-          } else if (
-            cleanNumber.startsWith("855") &&
-            !cleanNumber.startsWith("+855")
+          }, 0);
+          return newIndex;
+        });
+      }
+      return;
+    }
+    
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (showCustomerDropdown && visibleCustomers.length > 0) {
+        setSelectedCustomerIndex(prev => {
+          const nextIndex = prev - 1;
+          const newIndex = nextIndex < 0 ? visibleCustomers.length - 1 : nextIndex;
+          // Scroll the selected item into view
+          setTimeout(() => {
+            const dropdown = customerDropdownRef.current;
+            if (dropdown) {
+              const selectedItem = dropdown.children[newIndex] as HTMLElement;
+              if (selectedItem) {
+                selectedItem.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+              }
+            }
+          }, 0);
+          return newIndex;
+        });
+      }
+      return;
+    }
+    
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setShowCustomerDropdown(false);
+      setSelectedCustomerIndex(-1);
+      return;
+    }
+    
+    if (e.key === "Enter") {
+      e.preventDefault();
+      
+      // If a customer is selected via arrow keys, select them
+      if (selectedCustomerIndex >= 0 && selectedCustomerIndex < visibleCustomers.length) {
+        const selectedCustomerFromList = visibleCustomers[selectedCustomerIndex];
+        if (selectedCustomerFromList) {
+          handleCustomerSelect(selectedCustomerFromList);
+          setSelectedCustomerIndex(-1);
+          return;
+        }
+      }
+      
+      // Original Enter logic for when no customer is selected via arrows
+      if (customerSearchQuery.trim() !== "") {
+        // Check if there are no matching customers
+        if (filteredCustomers.length === 0) {
+          // This is a new customer - detect input type and set prefilled data
+          const trimmedValue = customerSearchQuery.trim();
+          let prefilledData = {};
+
+          // Check if it's an email
+          if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedValue)) {
+            prefilledData = { email: trimmedValue };
+          }
+          // Check if it's a phone number (contains mostly digits with some special characters)
+          else if (
+            /^[\d\s+()-]+$/.test(trimmedValue) &&
+            trimmedValue.replace(/[\s+()-]/g, "").length >= 7
           ) {
-            // If it starts with 855 but no +, add the +
-            formattedPhone = "+" + cleanNumber;
+            // Format phone number with Cambodia country code if it doesn't already have one
+            let formattedPhone = trimmedValue;
+            const cleanNumber = trimmedValue.replace(/[\s+()-]/g, "");
+
+            // If the number doesn't start with +855 (Cambodia code), add it
+            if (
+              !cleanNumber.startsWith("855") &&
+              !cleanNumber.startsWith("+855")
+            ) {
+              // If it starts with 0, replace with +855
+              if (cleanNumber.startsWith("0")) {
+                formattedPhone = "+855" + cleanNumber.substring(1);
+              } else {
+                // Otherwise just add +855
+                formattedPhone = "+855" + cleanNumber;
+              }
+            } else if (
+              cleanNumber.startsWith("855") &&
+              !cleanNumber.startsWith("+855")
+            ) {
+              // If it starts with 855 but no +, add the +
+              formattedPhone = "+" + cleanNumber;
+            }
+
+
+            prefilledData = { phone: formattedPhone };
+          }
+          // Otherwise treat as name
+          else {
+            console.log("Detected name:", trimmedValue);
+            prefilledData = { name: trimmedValue };
           }
 
-
-          prefilledData = { phone: formattedPhone };
+          // Set the prefilled data and open the modal
+          setPrefilledData(prefilledData);
+          setPrefilledCustomerName(trimmedValue);
+          setShowAddCustomerModal(true);
+          setShowCustomerDropdown(false);
+        } else if (filteredCustomers.length === 1 && !userRemovedDefaultCustomer && filteredCustomers[0]) {
+          handleCustomerSelect(filteredCustomers[0]);
         }
-        // Otherwise treat as name
-        else {
-          console.log("Detected name:", trimmedValue);
-          prefilledData = { name: trimmedValue };
-        }
-
-        // Set the prefilled data and open the modal
-        setPrefilledData(prefilledData);
-        setPrefilledCustomerName(trimmedValue);
-        setShowAddCustomerModal(true);
-        setShowCustomerDropdown(false);
-      } else if (filteredCustomers.length === 1 && !userRemovedDefaultCustomer && filteredCustomers[0]) {
-        handleCustomerSelect(filteredCustomers[0]);
       }
     }
   };
+  
+  // Reset selected index when search query changes
+  useEffect(() => {
+    setSelectedCustomerIndex(-1);
+  }, [customerSearchQuery]);
 
   // Function to update item discount
   const updateItemDiscount = (
@@ -1093,6 +1170,9 @@ export default function OrderSummary({
               tag.toLowerCase().includes(customerSearchQuery.toLowerCase())
             )
         );
+
+  // Get the visible customers (limited to 8 as shown in dropdown)
+  const visibleCustomers = filteredCustomers.slice(0, 8);
 
   const validateCustomer = () => {
     if (!selectedCustomer) {
@@ -1665,6 +1745,7 @@ export default function OrderSummary({
                   onChange={(e) => {
                     setCustomerSearchQuery(e.target.value);
                     setShowCustomerDropdown(e.target.value.length > 0);
+                    setSelectedCustomerIndex(-1); // Reset selection when query changes
                   }}
                   onKeyDown={handleCustomerSearchKeyDown} // Add this line
                   onFocus={() => setShowCustomerDropdown(true)}
@@ -1673,12 +1754,19 @@ export default function OrderSummary({
 
                 {/* Customer Dropdown */}
                 {showCustomerDropdown && filteredCustomers.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
-                    {filteredCustomers.slice(0, 8).map((customer) => (
+                  <div 
+                    ref={customerDropdownRef}
+                    className="absolute top-full left-0 right-0 mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto"
+                  >
+                    {filteredCustomers.slice(0, 8).map((customer, index) => (
                       <button
                         key={customer.id}
                         onClick={() => handleCustomerSelect(customer)}
-                        className="w-full px-3 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0"
+                        className={`w-full px-3 py-2 text-left border-b border-gray-100 dark:border-gray-700 last:border-b-0 ${
+                          selectedCustomerIndex === index
+                            ? 'bg-beveren-100 dark:bg-beveren-900'
+                            : 'hover:bg-gray-50 dark:hover:bg-gray-700'
+                        }`}
                       >
                         <div className="flex items-center space-x-2">
                           {getCustomerTypeIcon(customer)}
