@@ -28,6 +28,9 @@ export default function RetailPOSLayout() {
   const [selectedItemIndex, setSelectedItemIndex] = useState(-1)
   const [showQuantityDialog, setShowQuantityDialog] = useState(false)
   const [quantityDialogItem, setQuantityDialogItem] = useState<MenuItem | null>(null)
+  
+  // Grid columns count for 2D navigation (based on breakpoints)
+  const [gridColumns, setGridColumns] = useState(6)
 
   // Debounce timer ref for search
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
@@ -62,6 +65,30 @@ export default function RetailPOSLayout() {
 
   // Use media query to detect mobile/tablet screens
   const isMobile = useMediaQuery("(max-width: 1024px)")
+
+  // Calculate grid columns based on screen width for 2D navigation
+  useEffect(() => {
+    const updateGridColumns = () => {
+      const width = window.innerWidth
+      // Match the responsive breakpoints in ProductGrid.tsx
+      // Mobile: grid-cols-2 sm:grid-cols-3
+      // Desktop: grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6
+      if (isMobile) {
+        if (width >= 640) setGridColumns(3)      // sm
+        else setGridColumns(2)
+      } else {
+        if (width >= 1280) setGridColumns(6)     // xl
+        else if (width >= 1024) setGridColumns(5) // lg
+        else if (width >= 768) setGridColumns(4)  // md
+        else if (width >= 640) setGridColumns(3)  // sm
+        else setGridColumns(2)
+      }
+    }
+
+    updateGridColumns()
+    window.addEventListener('resize', updateGridColumns)
+    return () => window.removeEventListener('resize', updateGridColumns)
+  }, [isMobile])
 
   // Keyboard shortcut: Cmd+F (Mac) or Ctrl+F (Windows/Linux) to focus search
   useEffect(() => {
@@ -163,7 +190,7 @@ export default function RetailPOSLayout() {
   }, [cartItems, updateQuantity, addToCart])
 
   // Separate function for adding items to cart (used by both click and barcode)
-  const addItemToCart = (item: MenuItem) => {
+  const addItemToCart = useCallback((item: MenuItem) => {
     const existingItem = cartItems.find((cartItem) => cartItem.id === item.id)
     if (existingItem) {
       updateQuantity(item.id, existingItem.quantity + 1)
@@ -179,12 +206,7 @@ export default function RetailPOSLayout() {
         item_code: item.id, // item.id is the item_code from the API
       })
     }
-
-    // Show success message for barcode scanning
-    if (useScannerOnly) {
-      // Barcode scanning success handled silently
-    }
-  }
+  }, [cartItems, updateQuantity, addToCart])
 
   const handleUpdateQuantity = (id: string, quantity: number) => {
     if (quantity <= 0) {
@@ -285,7 +307,7 @@ export default function RetailPOSLayout() {
       return
     }
     
-    // Only handle navigation when there are search results
+    // Only handle Enter when there are search results and an item is selected
     if (!localSearchQuery.trim()) return
     
     // Get current filtered items for navigation
@@ -298,19 +320,7 @@ export default function RetailPOSLayout() {
     
     if (currentFilteredItems.length === 0) return
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setSelectedItemIndex(prev => {
-        const nextIndex = prev + 1
-        return nextIndex >= currentFilteredItems.length ? 0 : nextIndex
-      })
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault()
-      setSelectedItemIndex(prev => {
-        const nextIndex = prev - 1
-        return nextIndex < 0 ? currentFilteredItems.length - 1 : nextIndex
-      })
-    } else if (e.key === 'Enter') {
+    if (e.key === 'Enter') {
       // Handle Enter and Shift+Enter for selected item
       if (selectedItemIndex >= 0 && selectedItemIndex < currentFilteredItems.length) {
         e.preventDefault()
@@ -329,6 +339,129 @@ export default function RetailPOSLayout() {
       }
     }
   }
+  
+  // Global keyboard navigation for product grid (Arrow keys for 2D navigation)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Skip if focus is on an input element (except for arrow keys which we want to capture)
+      const target = e.target as HTMLElement
+      const isInputFocused = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
+      
+      // Only process arrow keys when NOT in an input, or when search has results
+      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Enter'].includes(e.key)) return
+      
+      // If in search input, allow arrow navigation but prevent cursor movement
+      if (isInputFocused && !localSearchQuery.trim()) return
+      
+      // Get current filtered items for navigation
+      const currentFilteredItems = menuItems.filter((item) => {
+        if (hideUnavailableItems && item.available <= 0) return false
+        if (serverSearchQuery) return true
+        const matchesCategory = selectedCategory === "all" || item.category === selectedCategory
+        return matchesCategory
+      })
+      
+      if (currentFilteredItems.length === 0) return
+      
+      const totalItems = currentFilteredItems.length
+      
+      // Calculate current row and column
+      const currentRow = selectedItemIndex >= 0 ? Math.floor(selectedItemIndex / gridColumns) : -1
+      const currentCol = selectedItemIndex >= 0 ? selectedItemIndex % gridColumns : 0
+      const totalRows = Math.ceil(totalItems / gridColumns)
+      
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        if (selectedItemIndex === -1) {
+          // Start from first item
+          setSelectedItemIndex(0)
+        } else {
+          // Move down one row
+          const nextRow = currentRow + 1
+          if (nextRow >= totalRows) {
+            // Wrap to first row
+            const newIndex = currentCol < totalItems ? currentCol : 0
+            setSelectedItemIndex(newIndex)
+          } else {
+            const newIndex = nextRow * gridColumns + currentCol
+            // If new index exceeds total, go to last item in column or wrap
+            if (newIndex >= totalItems) {
+              setSelectedItemIndex(currentCol < totalItems ? currentCol : 0)
+            } else {
+              setSelectedItemIndex(newIndex)
+            }
+          }
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (selectedItemIndex === -1) {
+          // Start from last item
+          setSelectedItemIndex(totalItems - 1)
+        } else {
+          // Move up one row
+          const nextRow = currentRow - 1
+          if (nextRow < 0) {
+            // Wrap to last row
+            const lastRowStartIndex = (totalRows - 1) * gridColumns
+            const newIndex = lastRowStartIndex + currentCol
+            setSelectedItemIndex(newIndex < totalItems ? newIndex : totalItems - 1)
+          } else {
+            setSelectedItemIndex(nextRow * gridColumns + currentCol)
+          }
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault()
+        if (selectedItemIndex === -1) {
+          setSelectedItemIndex(0)
+        } else {
+          // Move right one column
+          const nextIndex = selectedItemIndex + 1
+          if (nextIndex >= totalItems) {
+            // Wrap to first item
+            setSelectedItemIndex(0)
+          } else {
+            setSelectedItemIndex(nextIndex)
+          }
+        }
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault()
+        if (selectedItemIndex === -1) {
+          setSelectedItemIndex(totalItems - 1)
+        } else {
+          // Move left one column
+          const nextIndex = selectedItemIndex - 1
+          if (nextIndex < 0) {
+            // Wrap to last item
+            setSelectedItemIndex(totalItems - 1)
+          } else {
+            setSelectedItemIndex(nextIndex)
+          }
+        }
+      } else if (e.key === 'Enter' && !isInputFocused) {
+        // Handle Enter for adding item when not in input
+        if (selectedItemIndex >= 0 && selectedItemIndex < currentFilteredItems.length) {
+          e.preventDefault()
+          const selectedItem = currentFilteredItems[selectedItemIndex]
+          
+          if (selectedItem && selectedItem.available > 0) {
+            if (e.shiftKey) {
+              // Shift+Enter: Open quantity dialog
+              setQuantityDialogItem(selectedItem)
+              setShowQuantityDialog(true)
+            } else {
+              // Enter: Add single item to cart
+              addItemToCart(selectedItem)
+            }
+          }
+        }
+      }
+    }
+    
+    document.addEventListener('keydown', handleGlobalKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleGlobalKeyDown)
+    }
+  }, [localSearchQuery, menuItems, hideUnavailableItems, serverSearchQuery, selectedCategory, selectedItemIndex, gridColumns, addItemToCart])
 
   // Handle quantity dialog confirm
   const handleQuantityDialogConfirm = (item: MenuItem, quantity: number) => {
