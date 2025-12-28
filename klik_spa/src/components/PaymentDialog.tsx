@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
 
   subtractCurrency,
@@ -222,6 +222,63 @@ export default function PaymentDialog({
       document.body.removeAttribute('data-payment-dialog-open');
     };
   }, [isOpen]);
+
+  // Ref for focusing the first payment amount input
+  const paymentInputRef = useRef<HTMLInputElement>(null);
+
+  // Keyboard shortcuts for PaymentDialog
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle if Cmd (Mac) or Ctrl (Windows/Linux) is pressed
+      if (!(e.metaKey || e.ctrlKey)) return;
+
+      if (e.key === 'f') {
+        // Cmd+F: Focus the payment amount input
+        e.preventDefault();
+        paymentInputRef.current?.focus();
+        paymentInputRef.current?.select();
+      } else if (e.key === 'Enter') {
+        // Cmd+Enter: Submit the invoice
+        e.preventDefault();
+        // Dispatch custom event to trigger submit
+        window.dispatchEvent(new CustomEvent('payment-dialog-submit'));
+      } else if (e.key === 'x') {
+        // Cmd+X: Hold the order
+        e.preventDefault();
+        // Dispatch custom event to trigger hold
+        window.dispatchEvent(new CustomEvent('payment-dialog-hold'));
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
+
+  // Handle keyboard shortcut events
+  useEffect(() => {
+    const handleSubmit = () => {
+      if (!invoiceSubmitted && !isProcessingPayment && !isHoldingOrder) {
+        handleCompletePayment();
+      }
+    };
+
+    const handleHold = () => {
+      if (!invoiceSubmitted && !isProcessingPayment && !isHoldingOrder) {
+        handleHoldOrder();
+      }
+    };
+
+    window.addEventListener('payment-dialog-submit', handleSubmit);
+    window.addEventListener('payment-dialog-hold', handleHold);
+    return () => {
+      window.removeEventListener('payment-dialog-submit', handleSubmit);
+      window.removeEventListener('payment-dialog-hold', handleHold);
+    };
+  });
 
   // Determine if this is B2B business type
   const isB2B = posDetails?.business_type === "B2B";
@@ -612,9 +669,9 @@ export default function PaymentDialog({
     if (isOpen && modes.length > 0) {
       const defaultMode = modes.find((mode) => mode.default === 1);
       if (defaultMode && Object.keys(paymentAmounts).length === 0) {
-        const defaultAmount = parseFloat(calculations.grandTotal.toFixed(2));
+        // Default to 0 - user will enter amount manually or use Cmd+F to focus
         setLastModifiedMethodId(defaultMode.mode_of_payment); // Track the auto-filled method
-        setPaymentAmounts({ [defaultMode.mode_of_payment]: defaultAmount });
+        setPaymentAmounts({ [defaultMode.mode_of_payment]: 0 });
       }
     }
   }, [isOpen, modes, calculations.grandTotal, isB2B, isB2C]);
@@ -2320,7 +2377,7 @@ export default function PaymentDialog({
                     Payment Methods
                   </h3>
                   <div className="flex space-x-4 overflow-x-auto pb-2">
-                    {paymentMethods.map((method) => (
+                    {paymentMethods.map((method, index) => (
                       <div
                         key={method.id}
                         className={`${
@@ -2367,6 +2424,7 @@ export default function PaymentDialog({
                             </div>
                           </div>
                           <input
+                            ref={index === 0 ? paymentInputRef : undefined}
                             type="number"
                             step="0.01"
                             value={method.amount || ""}
