@@ -596,6 +596,9 @@ def validate_before_submit(data):
 	"""
 	Validate invoice data before submission.
 	Returns validation results without creating any document.
+	
+	Credit limit check is based on the OUTSTANDING amount (unpaid portion),
+	not the grand total. If invoice is fully paid, it won't affect credit limit.
 	"""
 	try:
 		if isinstance(data, str):
@@ -603,12 +606,17 @@ def validate_before_submit(data):
 
 		customer = data.get("customer", {}).get("id")
 		grand_total = flt(data.get("grandTotal", 0))
+		outstanding_amount = flt(data.get("outstandingAmount", grand_total))
 
 		if not customer:
 			return {"success": False, "message": "Customer is required"}
 
-		# Check credit limit
-		credit_check = check_customer_credit_limit(customer, grand_total)
+		# If invoice is fully paid (outstanding = 0), skip credit limit check
+		if outstanding_amount <= 0:
+			return {"success": True, "message": "Invoice is fully paid, credit limit check skipped"}
+
+		# Check credit limit using outstanding amount (unpaid portion only)
+		credit_check = check_customer_credit_limit(customer, outstanding_amount)
 
 		if not credit_check["allowed"]:
 			return {
