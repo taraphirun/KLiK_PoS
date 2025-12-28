@@ -367,7 +367,14 @@ export default function RetailPOSLayout() {
       if (currentFilteredItems.length === 1 && currentFilteredItems[0]) {
         const singleItem = currentFilteredItems[0]
         if (singleItem.available > 0) {
-          addItemToCart(singleItem)
+          if (e.shiftKey) {
+            // Shift+Enter: Open quantity dialog for single result
+            setQuantityDialogItem(singleItem)
+            setShowQuantityDialog(true)
+          } else {
+            // Enter: Add single item to cart
+            addItemToCart(singleItem)
+          }
           // Don't clear search - allow user to keep pressing Enter to add more
           return
         }
