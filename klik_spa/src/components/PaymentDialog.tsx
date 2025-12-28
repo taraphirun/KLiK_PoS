@@ -258,10 +258,25 @@ export default function PaymentDialog({
     };
   }, [isOpen]);
 
+  // Auto-focus the payment input when dialog opens and modes are loaded
+  useEffect(() => {
+    if (isOpen && modes.length > 0 && !isLoading) {
+      // Longer delay to ensure the input is rendered after modes load
+      const timer = setTimeout(() => {
+        paymentInputRef.current?.focus();
+        paymentInputRef.current?.select();
+      }, 300);
+      return () => clearTimeout(timer);
+    }
+  }, [isOpen, modes.length, isLoading]);
+
   // Handle keyboard shortcut events
   useEffect(() => {
     const handleSubmit = () => {
-      if (!invoiceSubmitted && !isProcessingPayment && !isHoldingOrder) {
+      if (invoiceSubmitted) {
+        // After submission, Cmd+Enter clicks New Order
+        onClose(true);
+      } else if (!isProcessingPayment && !isHoldingOrder) {
         handleCompletePayment();
       }
     };
