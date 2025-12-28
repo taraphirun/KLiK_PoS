@@ -27,7 +27,8 @@ import {
   Loader2,
   Pencil,
   CheckCircle,
-  Send
+  Send,
+  AlertTriangle
 } from "lucide-react";
 import type { CartItem, GiftCoupon } from "../../types";
 import type { Customer } from "../types/customer";
@@ -35,7 +36,7 @@ import { toast } from "react-toastify";
 import { usePaymentModes } from "../hooks/usePaymentModes";
 import { useSalesTaxCharges } from "../hooks/useSalesTaxCharges";
 import { usePOSDetails } from "../hooks/usePOSProfile";
-import { createDraftSalesInvoice } from "../services/salesInvoice";
+import { createDraftSalesInvoice, validateBeforeSubmit } from "../services/salesInvoice";
 import { createSalesInvoice } from "../services/salesInvoice";
 import { useNavigate } from "react-router-dom";
 import DisplayPrintPreview from "../utils/invoicePrint";
@@ -192,6 +193,17 @@ export default function PaymentDialog({
   const [emailMessage, setEmailMessage] = useState("");
   const [isLoadingEmailTemplates, setIsLoadingEmailTemplates] = useState(false);
   const [isEditingEmail, setIsEditingEmail] = useState(false);
+
+  // Credit limit dialog states
+  const [showCreditLimitDialog, setShowCreditLimitDialog] = useState(false);
+  const [creditLimitInfo, setCreditLimitInfo] = useState<{
+    credit_limit: number;
+    current_outstanding: number;
+    new_total: number;
+    exceeded_by: number;
+  } | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [pendingPaymentData, setPendingPaymentData] = useState<any>(null);
 
   // Hooks
   const { posDetails, loading: posLoading } = usePOSDetails();
@@ -1049,6 +1061,23 @@ export default function PaymentDialog({
     };
 
     try {
+      // Validate credit limit before submitting
+      const validation = await validateBeforeSubmit(paymentData);
+      
+      if (!validation.success && validation.error_type === 'CREDIT_LIMIT_EXCEEDED') {
+        // Store payment data and show credit limit dialog
+        setPendingPaymentData(paymentData);
+        setCreditLimitInfo({
+          credit_limit: validation.credit_limit || 0,
+          current_outstanding: validation.current_outstanding || 0,
+          new_total: validation.new_total || 0,
+          exceeded_by: validation.exceeded_by || 0,
+        });
+        setShowCreditLimitDialog(true);
+        setIsProcessingPayment(false);
+        return;
+      }
+
       console.log("DS - 📦 API Call: createSalesInvoice", paymentData);
       const response = await createSalesInvoice(paymentData);
       setInvoiceSubmitted(true);
@@ -1109,6 +1138,57 @@ export default function PaymentDialog({
       setIsProcessingPayment(false);
     }
   };
+
+  // Handle creating draft after credit limit exceeded
+  const handleCreateDraftAfterCreditLimit = async () => {
+    if (!pendingPaymentData) return;
+
+    setIsProcessingPayment(true);
+
+    try {
+      const orderData = {
+        items: cartItems,
+        customer: selectedCustomer,
+        subtotal: calculations.subtotal,
+        SalesTaxCharges: selectedSalesTaxCharges,
+        taxAmount: calculations.taxAmount,
+        taxType: calculations.isInclusive ? "inclusive" : "exclusive",
+        couponDiscount: calculations.couponDiscount,
+        roundOffAmount,
+        grandTotal: calculations.grandTotal,
+        appliedCoupons,
+        status: "draft",
+        businessType: posDetails?.business_type,
+        applyAdditionalDiscountOn,
+        additionalDiscountPercentage,
+        additionalDiscountAmount,
+        ...pendingPaymentData,
+      };
+
+      const result = await createDraftSalesInvoice(orderData);
+      toast.success(`Draft invoice ${result.invoice_name || ""} created successfully!`);
+      
+      // Clear states
+      setShowCreditLimitDialog(false);
+      setCreditLimitInfo(null);
+      setPendingPaymentData(null);
+      clearDraftInvoiceCache();
+      onClose(true); // Close with paymentCompleted flag to trigger cart clear in parent
+      //eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      const errorMessage = extractErrorFromException(err, "Failed to create draft invoice");
+      toast.error(errorMessage);
+    } finally {
+      setIsProcessingPayment(false);
+    }
+  };
+
+  const handleCancelCreditLimitDialog = () => {
+    setShowCreditLimitDialog(false);
+    setCreditLimitInfo(null);
+    setPendingPaymentData(null);
+  };
+
 //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleViewInvoice = (invoice: any) => {
     navigate(`/invoice/${invoice.name}`);
@@ -2959,6 +3039,85 @@ export default function PaymentDialog({
           </div>
         )}
       </div>
+
+      {/* Credit Limit Exceeded Dialog */}
+      {showCreditLimitDialog && creditLimitInfo && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[60]">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="p-2 bg-red-100 dark:bg-red-900/30 rounded-full">
+                <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+                Credit Limit Exceeded
+              </h3>
+            </div>
+
+            <div className="space-y-3 mb-6">
+              <p className="text-gray-600 dark:text-gray-300">
+                This invoice will exceed the customer's credit limit.
+              </p>
+              
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 space-y-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500 dark:text-gray-400">Credit Limit:</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    {Number(creditLimitInfo.credit_limit || 0).toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500 dark:text-gray-400">Current Outstanding:</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    {Number(creditLimitInfo.current_outstanding || 0).toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500 dark:text-gray-400">New Invoice Amount:</span>
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    {calculations.grandTotal.toLocaleString()}
+                  </span>
+                </div>
+                <hr className="border-gray-200 dark:border-gray-600" />
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500 dark:text-gray-400">Total After Invoice:</span>
+                  <span className="font-bold text-red-600 dark:text-red-400">
+                    {Number(creditLimitInfo.new_total || 0).toLocaleString()}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500 dark:text-gray-400">Over Limit By:</span>
+                  <span className="font-bold text-red-600 dark:text-red-400">
+                    {Number(creditLimitInfo.exceeded_by || 0).toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={handleCancelCreditLimitDialog}
+                className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-lg font-medium hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateDraftAfterCreditLimit}
+                disabled={isProcessingPayment}
+                className="flex-1 px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
+              >
+                {isProcessingPayment ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    <span>Creating...</span>
+                  </>
+                ) : (
+                  <span>Create Draft Instead</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

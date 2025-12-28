@@ -1,6 +1,43 @@
 
 import { extractErrorMessage } from "../utils/errorExtraction";
 
+// Credit limit validation response type
+export interface CreditLimitValidation {
+  success: boolean;
+  error_type?: string;
+  message?: string;
+  credit_limit?: number;
+  current_outstanding?: number;
+  new_total?: number;
+  exceeded_by?: number;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function validateBeforeSubmit(data: any): Promise<CreditLimitValidation> {
+  const csrfToken = window.csrf_token;
+  
+  const response = await fetch('/api/method/klik_pos.api.sales_invoice.validate_before_submit', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Frappe-CSRF-Token': csrfToken
+    },
+    body: JSON.stringify({ data }),
+    credentials: 'include'
+  });
+
+  const result = await response.json();
+  
+  if (!response.ok) {
+    return {
+      success: false,
+      message: 'Failed to validate invoice'
+    };
+  }
+
+  return result.message;
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function createDraftSalesInvoice(data: any) {
 const csrfToken = window.csrf_token;
