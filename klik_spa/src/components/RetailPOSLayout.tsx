@@ -9,6 +9,7 @@ import OrderSummary from "./OrderSummary"
 import MobilePOSLayout from "./MobilePOSLayout"
 import LoadingSpinner from "./LoadingSpinner"
 import BarcodeScannerModal from "./BarcodeScanner"
+import QuantityInputDialog from "./QuantityInputDialog"
 import { useBarcodeScanner } from "../hooks/useBarcodeScanner"
 import type { MenuItem, GiftCoupon } from "../../types"
 import { useMediaQuery } from "../hooks/useMediaQuery"
@@ -22,6 +23,11 @@ export default function RetailPOSLayout() {
   const [showScanner, setShowScanner] = useState(false)
   const [pinnedItemId, setPinnedItemId] = useState<string | null>(null)
   const [identifierItemId, setIdentifierItemId] = useState<string | null>(null)
+  
+  // Keyboard navigation state for search results
+  const [selectedItemIndex, setSelectedItemIndex] = useState(-1)
+  const [showQuantityDialog, setShowQuantityDialog] = useState(false)
+  const [quantityDialogItem, setQuantityDialogItem] = useState<MenuItem | null>(null)
 
   // Debounce timer ref for search
   const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
@@ -220,6 +226,9 @@ export default function RetailPOSLayout() {
   // Handle search input for both product search and barcode scanning
   const handleSearchInput = (query: string) => {
     setLocalSearchQuery(query)
+    
+    // Reset keyboard selection when search changes
+    setSelectedItemIndex(-1)
 
     // If input looks like a barcode (numeric-only, 8+ digits),
     // it might be from a hardware scanner (reduced false positives)
@@ -263,6 +272,64 @@ export default function RetailPOSLayout() {
       // Clear search when query is empty
       searchProducts('')
     }
+  }
+
+  // Handle keyboard navigation in search results (Arrow keys, Enter, Shift+Enter)
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Only handle navigation when there are search results
+    if (!localSearchQuery.trim()) return
+    
+    // Get current filtered items for navigation
+    const currentFilteredItems = menuItems.filter((item) => {
+      if (hideUnavailableItems && item.available <= 0) return false
+      if (serverSearchQuery) return true
+      const matchesCategory = selectedCategory === "all" || item.category === selectedCategory
+      return matchesCategory
+    })
+    
+    if (currentFilteredItems.length === 0) return
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setSelectedItemIndex(prev => {
+        const nextIndex = prev + 1
+        return nextIndex >= currentFilteredItems.length ? 0 : nextIndex
+      })
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setSelectedItemIndex(prev => {
+        const nextIndex = prev - 1
+        return nextIndex < 0 ? currentFilteredItems.length - 1 : nextIndex
+      })
+    } else if (e.key === 'Enter') {
+      // Handle Enter and Shift+Enter for selected item
+      if (selectedItemIndex >= 0 && selectedItemIndex < currentFilteredItems.length) {
+        e.preventDefault()
+        const selectedItem = currentFilteredItems[selectedItemIndex]
+        
+        if (selectedItem && selectedItem.available > 0) {
+          if (e.shiftKey) {
+            // Shift+Enter: Open quantity dialog
+            setQuantityDialogItem(selectedItem)
+            setShowQuantityDialog(true)
+          } else {
+            // Enter: Add single item to cart
+            addItemToCart(selectedItem)
+          }
+        }
+      }
+    } else if (e.key === 'Escape') {
+      // Clear selection on Escape
+      setSelectedItemIndex(-1)
+    }
+  }
+
+  // Handle quantity dialog confirm
+  const handleQuantityDialogConfirm = (item: MenuItem, quantity: number) => {
+    addOrIncreaseWithQuantity(item, quantity)
+    setSelectedItemIndex(-1)
+    setLocalSearchQuery('')
+    searchProducts('')
   }
 
   // Handle Enter key for barcode processing and single-result quick add
@@ -638,6 +705,7 @@ export default function RetailPOSLayout() {
             searchQuery={localSearchQuery}
             onSearchChange={handleSearchInput}
             onSearchKeyPress={handleSearchKeyPress}
+            onSearchKeyDown={handleSearchKeyDown}
             onAddToCart={handleAddToCart}
             onScanBarcode={() => setShowScanner(true)}
             scannerOnly={useScannerOnly}
@@ -646,6 +714,7 @@ export default function RetailPOSLayout() {
             onLoadMore={loadMoreProducts}
             totalCount={totalCount}
             isSearching={isSearching}
+            selectedItemIndex={selectedItemIndex}
           />
         </div>
 
@@ -668,6 +737,17 @@ export default function RetailPOSLayout() {
         isOpen={showScanner}
         onClose={() => setShowScanner(false)}
         onBarcodeDetected={handleBarcodeDetected}
+      />
+
+      {/* Quantity Input Dialog for Shift+Enter */}
+      <QuantityInputDialog
+        isOpen={showQuantityDialog}
+        onClose={() => {
+          setShowQuantityDialog(false)
+          setQuantityDialogItem(null)
+        }}
+        item={quantityDialogItem}
+        onConfirm={handleQuantityDialogConfirm}
       />
     </>
   )

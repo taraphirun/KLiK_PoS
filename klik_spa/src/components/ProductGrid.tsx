@@ -16,6 +16,8 @@ interface ProductGridProps {
   isLoadingMore?: boolean
   onLoadMore?: () => void
   totalCount?: number
+  // Keyboard navigation
+  selectedItemIndex?: number
 }
 
 export default function ProductGrid({
@@ -28,6 +30,7 @@ export default function ProductGrid({
   isLoadingMore = false,
   onLoadMore,
   totalCount = 0,
+  selectedItemIndex = -1,
 }: ProductGridProps) {
   const loadMoreRef = useRef<HTMLDivElement>(null)
 
@@ -112,8 +115,15 @@ export default function ProductGrid({
             : "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6"
         }`}
       >
-        {items.map((item) => (
-          <ProductCard key={item.id} item={item} onAddToCart={onAddToCart} isMobile={isMobile} scannerOnly={scannerOnly} />
+        {items.map((item, index) => (
+          <ProductCard 
+            key={item.id} 
+            item={item} 
+            onAddToCart={onAddToCart} 
+            isMobile={isMobile} 
+            scannerOnly={scannerOnly}
+            isSelected={index === selectedItemIndex}
+          />
         ))}
       </div>
 

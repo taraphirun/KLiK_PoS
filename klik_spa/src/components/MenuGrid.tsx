@@ -17,6 +17,7 @@ interface MenuGridProps {
   searchQuery: string
   onSearchChange: (query: string) => void
   onSearchKeyPress?: (e: React.KeyboardEvent<HTMLInputElement>) => void
+  onSearchKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void
   onAddToCart: (item: MenuItem) => void
   onScanBarcode?: () => void
   scannerOnly?: boolean
@@ -26,6 +27,8 @@ interface MenuGridProps {
   onLoadMore?: () => void
   totalCount?: number
   isSearching?: boolean
+  // Keyboard navigation props
+  selectedItemIndex?: number
 }
 
 const MenuGrid = forwardRef<HTMLInputElement, MenuGridProps>(function MenuGrid({
@@ -35,6 +38,7 @@ const MenuGrid = forwardRef<HTMLInputElement, MenuGridProps>(function MenuGrid({
   searchQuery,
   onSearchChange,
   onSearchKeyPress,
+  onSearchKeyDown,
   onAddToCart,
   onScanBarcode,
   scannerOnly = false,
@@ -43,6 +47,7 @@ const MenuGrid = forwardRef<HTMLInputElement, MenuGridProps>(function MenuGrid({
   onLoadMore,
   totalCount = 0,
   isSearching = false,
+  selectedItemIndex = -1,
 }, ref) {
   const { user, logout } = useAuth()
   const { theme, toggleTheme } = useTheme()
@@ -116,6 +121,7 @@ const MenuGrid = forwardRef<HTMLInputElement, MenuGridProps>(function MenuGrid({
               searchQuery={searchQuery}
               onSearchChange={onSearchChange}
               onSearchKeyPress={onSearchKeyPress}
+              onSearchKeyDown={onSearchKeyDown}
               onScanBarcode={onScanBarcode}
             />
             {/* View Toggle Button */}
@@ -270,6 +276,7 @@ const MenuGrid = forwardRef<HTMLInputElement, MenuGridProps>(function MenuGrid({
             isLoadingMore={isLoadingMore}
             onLoadMore={onLoadMore}
             totalCount={totalCount}
+            selectedItemIndex={selectedItemIndex}
           />
         )}
       </div>

@@ -8,9 +8,10 @@ interface ProductCardProps {
   onAddToCart: (item: MenuItem) => void
   isMobile?: boolean
   scannerOnly?: boolean
+  isSelected?: boolean
 }
 
-export default function ProductCard({ item, onAddToCart, isMobile = false, scannerOnly = false }: ProductCardProps) {
+export default function ProductCard({ item, onAddToCart, isMobile = false, scannerOnly = false, isSelected = false }: ProductCardProps) {
   // const { t } = useI18n()
   const isOutOfStock = item.available <= 0
   const isDisabled = isOutOfStock || scannerOnly
@@ -20,7 +21,11 @@ export default function ProductCard({ item, onAddToCart, isMobile = false, scann
 
 return (
     <div
-      className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden transition-all duration-200 ${
+      className={`bg-white dark:bg-gray-800 rounded-xl border overflow-hidden transition-all duration-200 ${
+        isSelected
+          ? "border-beveren-500 ring-2 ring-beveren-500 shadow-lg scale-105"
+          : "border-gray-200 dark:border-gray-700"
+      } ${
         isDisabled
           ? "opacity-70 cursor-not-allowed"
           : "hover:shadow-lg hover:scale-105 cursor-pointer active:scale-95"
