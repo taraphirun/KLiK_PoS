@@ -695,6 +695,7 @@ export default function OrderSummary({
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  const [invoiceRef, setInvoiceRef] = useState<number | null>(null);
   
   // Ref for customer search input to enable Cmd+V focus
   const customerSearchInputRef = useRef<HTMLInputElement>(null);
@@ -1860,6 +1861,20 @@ export default function OrderSummary({
                 </div>
               </div>
             )}
+
+            {/* Invoice Ref Input */}
+            <div className="mt-3">
+              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                Invoice Ref (Optional)
+              </label>
+              <input
+                type="number"
+                value={invoiceRef || ''}
+                onChange={(e) => setInvoiceRef(e.target.value ? parseInt(e.target.value, 10) : null)}
+                placeholder="Enter hard copy invoice number"
+                className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+              />
+            </div>
           </div>
         </div>
       )}
@@ -2478,6 +2493,7 @@ export default function OrderSummary({
           isMobile={isMobile}
           itemDiscounts={itemDiscounts}
           totalItemDiscount={totalItemDiscount}
+          invoiceRef={invoiceRef}
         />
       )}
     </div>

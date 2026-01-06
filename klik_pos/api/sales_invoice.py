@@ -658,6 +658,7 @@ def create_and_submit_invoice(data):
 			additional_discount_percentage,
 			additional_discount_amount,
 			apply_additional_discount_on,
+			invoice_ref,
 		) = parse_invoice_data(data)
 
 		# Validate required fields
@@ -679,6 +680,7 @@ def create_and_submit_invoice(data):
 			additional_discount_percentage=additional_discount_percentage,
 			additional_discount_amount=additional_discount_amount,
 			apply_additional_discount_on=apply_additional_discount_on,
+			invoice_ref=invoice_ref,
 		)
 
 		doc.base_paid_amount = amount_paid
@@ -754,6 +756,7 @@ def create_draft_invoice(data):
 			additional_discount_percentage,
 			additional_discount_amount,
 			apply_additional_discount_on,
+			invoice_ref,
 		) = parse_invoice_data(data)
 		doc = build_sales_invoice_doc(
 			customer,
@@ -767,6 +770,7 @@ def create_draft_invoice(data):
 			additional_discount_percentage=additional_discount_percentage,
 			additional_discount_amount=additional_discount_amount,
 			apply_additional_discount_on=apply_additional_discount_on,
+			invoice_ref=invoice_ref,
 		)
 		doc.insert(ignore_permissions=True)
 
@@ -802,6 +806,9 @@ def parse_invoice_data(data):
 	additional_discount_amount = data.get("additionalDiscountAmount", 0.0)
 	apply_additional_discount_on = data.get("applyAdditionalDiscountOn", "Grand Total")
 
+	# Extract invoice reference from hardcopy invoice
+	invoice_ref = data.get("invoiceRef")
+
 	if data.get("amountPaid"):
 		amount_paid = data.get("amountPaid")
 
@@ -825,6 +832,7 @@ def parse_invoice_data(data):
 		additional_discount_percentage,
 		additional_discount_amount,
 		apply_additional_discount_on,
+		invoice_ref,
 	)
 
 
@@ -840,6 +848,7 @@ def build_sales_invoice_doc(
 	additional_discount_percentage=0.0,
 	additional_discount_amount=0.0,
 	apply_additional_discount_on="Grand Total",
+	invoice_ref=None,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -847,6 +856,10 @@ def build_sales_invoice_doc(
 	# TODO: MAIN FEATURE - Set due based on customer payment terms 
 	doc.due_date = frappe.utils.nowdate()
 	doc.custom_delivery_date = frappe.utils.nowdate()
+
+	# Set invoice reference from hardcopy invoice
+	if invoice_ref:
+		doc.custom_invoice_ref = invoice_ref
 
 	# Configure POS profile and company settings
 	pos_profile = _get_active_pos_profile()

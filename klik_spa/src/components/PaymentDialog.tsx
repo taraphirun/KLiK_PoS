@@ -77,6 +77,7 @@ interface PaymentDialogProps {
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
   itemDiscounts?: any; // Batch and discount information
   totalItemDiscount?: number;
+  invoiceRef?: number | null; // Hard copy invoice reference number
 }
 
 interface PaymentMethod {
@@ -134,6 +135,7 @@ export default function PaymentDialog({
   initialSharingMode = null,
   externalInvoiceData = null,
   itemDiscounts = {},
+  invoiceRef = null,
 
 }: PaymentDialogProps) {
   const [selectedSalesTaxCharges, setSelectedSalesTaxCharges] = useState("");
@@ -1142,6 +1144,7 @@ export default function PaymentDialog({
       outstandingAmount: outstandingAmount,
       appliedCoupons,
       businessType: posDetails?.business_type,
+      invoiceRef: invoiceRef, // Hard copy invoice reference number
     };
 
     try {
