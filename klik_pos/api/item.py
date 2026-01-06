@@ -12,17 +12,29 @@ def get_price_list_with_customer_priority(customer=None):
 	"""
 	Get price list with customer-first priority:
 	1. Customer's default price list (if customer provided and has one)
-	2. POS Profile's selling price list
-	3. None (fallback to latest price)
+	2. Customer Group's default price list (if customer belongs to a group with one)
+	3. POS Profile's selling price list
+	4. None (fallback to latest price)
 	"""
 	try:
-		# First priority: Check customer's default price list
 		if customer:
-			customer_price_list = frappe.db.get_value("Customer", customer, "default_price_list")
-			if customer_price_list:
-				return customer_price_list
+			# First priority: Check customer's default price list
+			customer_doc = frappe.db.get_value(
+				"Customer", customer, ["default_price_list", "customer_group"], as_dict=True
+			)
+			if customer_doc:
+				if customer_doc.default_price_list:
+					return customer_doc.default_price_list
 
-		# Second priority: POS Profile's selling price list
+				# Second priority: Check customer group's default price list
+				if customer_doc.customer_group:
+					group_price_list = frappe.db.get_value(
+						"Customer Group", customer_doc.customer_group, "default_price_list"
+					)
+					if group_price_list:
+						return group_price_list
+
+		# Third priority: POS Profile's selling price list
 		pos_doc = get_current_pos_profile()
 		pos_price_list = getattr(pos_doc, "selling_price_list", None)
 		if pos_price_list:
