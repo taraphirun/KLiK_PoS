@@ -685,12 +685,13 @@ export default function OrderSummary({
     }
   }, [cartItems]);
 
-  // Update prices when customer changes (but not on initial load to preserve restored prices)
+  // Update cart prices when customer changes (but not on initial load to preserve restored prices)
   useEffect(() => {
     if (!isInitialLoad && selectedCustomer && cartItems.length > 0) {
       updatePricesForCustomer(selectedCustomer.id);
     }
   }, [selectedCustomer?.id, cartItems.length, isInitialLoad, updatePricesForCustomer]);
+
   const [customerSearchQuery, setCustomerSearchQuery] = useState("");
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
   const [showAddCustomerModal, setShowAddCustomerModal] = useState(false);
@@ -706,12 +707,17 @@ export default function OrderSummary({
   
   // const couponButtonRef = useRef<HTMLButtonElement>(null);
   const { customers, isLoading, refetch: refetchCustomers } = useCustomers(customerSearchQuery);
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { refetch: _refetchProducts, refreshStockOnly, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems } = useProducts();
+  const { refetch: _refetchProducts, refreshStockOnly, refreshPricesForCustomer, updateStockForItems: _updateStockForItems, updateBatchQuantitiesForItems } = useProducts();
   // const navigate = useNavigate();
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { posDetails, loading: _posLoading } = usePOSDetails();
   const { checkCustomerPermission } = useCustomerPermission();
+
+  // Update product grid prices when customer changes
+  useEffect(() => {
+    // Refresh product grid prices when customer changes
+    refreshPricesForCustomer(selectedCustomer?.id || null);
+  }, [selectedCustomer?.id, refreshPricesForCustomer]);
 
   // Get customer statistics for the selected customer
   const { statistics: customerStats } = useCustomerStatistics(selectedCustomer?.id || null);

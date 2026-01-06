@@ -43,6 +43,7 @@ export interface MenuItem {
   discount?: number
   description?: string
   uom?: string
+  currency?: string
   currency_symbol?: string
   barcode?: string
 }

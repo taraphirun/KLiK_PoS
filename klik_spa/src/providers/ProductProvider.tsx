@@ -8,10 +8,12 @@ interface ProductContextType {
   isLoading: boolean;
   isLoadingMore: boolean;
   isRefreshingStock: boolean;
+  isRefreshingPrices: boolean;
   isSearching: boolean;
   error: string | null;
   refetchProducts: () => Promise<void>;
   refreshStockOnly: () => Promise<boolean>;
+  refreshPricesForCustomer: (customerId: string | null) => Promise<boolean>;
   updateStockOnly: (itemCode: string, newStock: number) => void;
   updateStockForItems: (itemCodes: string[]) => Promise<void>;
   updateBatchQuantitiesForItems: (itemCodes: string[]) => Promise<void>;
@@ -23,6 +25,7 @@ interface ProductContextType {
   hasMore: boolean;
   lastUpdated: Date | null;
   searchQuery: string;
+  currentCustomerId: string | null;
 }
 
 const ProductContext = createContext<ProductContextType | undefined>(undefined);
@@ -41,9 +44,11 @@ export function ProductProvider({ children }: ProductProviderProps) {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [isRefreshingStock, setIsRefreshingStock] = useState<boolean>(false);
+  const [isRefreshingPrices, setIsRefreshingPrices] = useState<boolean>(false);
   const [isSearching, setIsSearching] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [currentCustomerId, setCurrentCustomerId] = useState<string | null>(null);
 
   // Pagination state
   const [totalCount, setTotalCount] = useState<number>(0);
@@ -553,6 +558,73 @@ export function ProductProvider({ children }: ProductProviderProps) {
     }
   };
 
+  // Refresh prices for a specific customer - updates product grid prices
+  const refreshPricesForCustomer = useCallback(async (customerId: string | null) => {
+    // Skip if same customer
+    if (customerId === currentCustomerId) {
+      return false;
+    }
+
+    setCurrentCustomerId(customerId);
+    setIsRefreshingPrices(true);
+
+    try {
+      const itemCodes = products.map(p => p.id).join(',');
+      if (!itemCodes) {
+        return false;
+      }
+
+      const params = new URLSearchParams({
+        item_codes: itemCodes,
+      });
+      if (customerId) {
+        params.append('customer', customerId);
+      }
+
+      const response = await fetch(
+        `/api/method/klik_pos.api.item.get_items_prices_for_customer?${params.toString()}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const resData = await response.json();
+      const result = resData?.message;
+
+      if (result?.success && result?.prices) {
+        const priceUpdates = result.prices;
+
+        setProducts(prevProducts =>
+          prevProducts.map(product => {
+            const priceInfo = priceUpdates[product.id];
+            if (priceInfo) {
+              return {
+                ...product,
+                price: priceInfo.price ?? product.price,
+                currency: priceInfo.currency ?? product.currency,
+                currency_symbol: priceInfo.currency_symbol ?? product.currency_symbol,
+              };
+            }
+            return product;
+          })
+        );
+
+        console.log(`✅ Prices refreshed for ${Object.keys(priceUpdates).length} items for customer: ${customerId || 'default'}`);
+        setLastUpdated(new Date());
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('❌ Price refresh failed:', error);
+      return false;
+    } finally {
+      setIsRefreshingPrices(false);
+    }
+  }, [products, currentCustomerId]);
+
+
   useEffect(() => {
     // Don't fetch products until authentication is complete
     if (authLoading) {
@@ -582,10 +654,12 @@ export function ProductProvider({ children }: ProductProviderProps) {
     isLoading,
     isLoadingMore,
     isRefreshingStock,
+    isRefreshingPrices,
     isSearching,
     error,
     refetchProducts,
     refreshStockOnly,
+    refreshPricesForCustomer,
     updateStockOnly,
     updateStockForItems,
     updateBatchQuantitiesForItems,
@@ -597,6 +671,7 @@ export function ProductProvider({ children }: ProductProviderProps) {
     hasMore,
     lastUpdated,
     searchQuery,
+    currentCustomerId,
   };
 
   return (

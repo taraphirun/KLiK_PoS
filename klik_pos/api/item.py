@@ -979,6 +979,70 @@ def get_items_stock_batch(item_codes: str):
 
 
 @frappe.whitelist(allow_guest=True)
+def get_items_prices_for_customer(item_codes: str, customer: str | None = None):
+	"""
+	Get prices for multiple items based on customer's price list priority.
+	Returns a dict mapping item_code to price info.
+
+	Priority:
+	1. Customer's default_price_list
+	2. Customer Group's default_price_list
+	3. POS Profile's selling_price_list
+	"""
+	try:
+		item_codes_list = [code.strip() for code in item_codes.split(",") if code.strip()]
+
+		if not item_codes_list:
+			return {}
+
+		# Get the price list with customer-first priority
+		price_list = get_price_list_with_customer_priority(customer)
+
+		# Get default currency
+		default_currency = (
+			frappe.get_value(
+				"Company",
+				frappe.defaults.get_user_default("Company"),
+				"default_currency",
+			)
+			or "USD"
+		)
+		default_symbol = frappe.db.get_value("Currency", default_currency, "symbol") or default_currency
+
+		price_updates = {}
+
+		for item_code in item_codes_list:
+			try:
+				# Get stock UOM for this item
+				stock_uom = frappe.get_cached_value("Item", item_code, "stock_uom") or "Nos"
+
+				# Fetch price using the customer-priority price list
+				price_info = fetch_item_price(item_code, price_list=price_list, customer=customer, uom=stock_uom)
+
+				price_updates[item_code] = {
+					"price": price_info.get("price", 0),
+					"currency": price_info.get("currency", default_currency),
+					"currency_symbol": price_info.get("currency_symbol", default_symbol),
+				}
+			except Exception:
+				# If individual item fails, use default values
+				price_updates[item_code] = {
+					"price": 0,
+					"currency": default_currency,
+					"currency_symbol": default_symbol,
+				}
+
+		return {
+			"success": True,
+			"prices": price_updates,
+			"price_list_used": price_list,
+		}
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"Get Items Prices For Customer Error for {item_codes}")
+		return {"success": False, "prices": {}, "price_list_used": None}
+
+
+@frappe.whitelist(allow_guest=True)
 def get_item_groups_for_pos():
 	try:
 		pos_profile = get_current_pos_profile()

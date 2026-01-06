@@ -9,10 +9,12 @@ interface UseProductsReturn {
   isLoading: boolean;
   isLoadingMore: boolean;
   isRefreshingStock: boolean;
+  isRefreshingPrices: boolean;
   isSearching: boolean;
   error: string | null;
   refetch: () => Promise<void>;
   refreshStockOnly: () => Promise<boolean>;
+  refreshPricesForCustomer: (customerId: string | null) => Promise<boolean>;
   updateStockOnly: (itemCode: string, newStock: number) => void;
   updateStockForItems: (itemCodes: string[]) => Promise<void>;
   updateBatchQuantitiesForItems: (itemCodes: string[]) => Promise<void>;
@@ -24,6 +26,7 @@ interface UseProductsReturn {
   hasMore: boolean;
   lastUpdated: Date | null;
   searchQuery: string;
+  currentCustomerId: string | null;
 }
 
 type Batch = {
@@ -48,10 +51,12 @@ export function useProducts(): UseProductsReturn {
     isLoading: context.isLoading,
     isLoadingMore: context.isLoadingMore,
     isRefreshingStock: context.isRefreshingStock,
+    isRefreshingPrices: context.isRefreshingPrices,
     isSearching: context.isSearching,
     error: context.error,
     refetch: context.refetchProducts,
     refreshStockOnly: context.refreshStockOnly,
+    refreshPricesForCustomer: context.refreshPricesForCustomer,
     updateStockOnly: context.updateStockOnly,
     updateStockForItems: context.updateStockForItems,
     updateBatchQuantitiesForItems: context.updateBatchQuantitiesForItems,
@@ -63,6 +68,7 @@ export function useProducts(): UseProductsReturn {
     hasMore: context.hasMore,
     lastUpdated: context.lastUpdated,
     searchQuery: context.searchQuery,
+    currentCustomerId: context.currentCustomerId,
   };
 }
 
