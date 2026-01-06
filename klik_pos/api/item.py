@@ -984,10 +984,10 @@ def get_items_prices_for_customer(item_codes: str, customer: str | None = None):
 	Get prices for multiple items based on customer's price list priority.
 	Returns a dict mapping item_code to price info.
 
-	Priority:
-	1. Customer's default_price_list
-	2. Customer Group's default_price_list
-	3. POS Profile's selling_price_list
+	Priority for each item:
+	1. Customer's default_price_list (if item has price there)
+	2. Customer Group's default_price_list (if item has price there)
+	3. POS Profile's selling_price_list (fallback - always use this if no special price)
 	"""
 	try:
 		item_codes_list = [code.strip() for code in item_codes.split(",") if code.strip()]
@@ -995,8 +995,12 @@ def get_items_prices_for_customer(item_codes: str, customer: str | None = None):
 		if not item_codes_list:
 			return {}
 
-		# Get the price list with customer-first priority
-		price_list = get_price_list_with_customer_priority(customer)
+		# Get the customer-specific price list
+		customer_price_list = get_price_list_with_customer_priority(customer)
+
+		# Get the default POS price list as fallback
+		pos_doc = get_current_pos_profile()
+		default_price_list = getattr(pos_doc, "selling_price_list", None)
 
 		# Get default currency
 		default_currency = (
@@ -1016,13 +1020,76 @@ def get_items_prices_for_customer(item_codes: str, customer: str | None = None):
 				# Get stock UOM for this item
 				stock_uom = frappe.get_cached_value("Item", item_code, "stock_uom") or "Nos"
 
-				# Fetch price using the customer-priority price list
-				price_info = fetch_item_price(item_code, price_list=price_list, customer=customer, uom=stock_uom)
+				price_found = None
+				price_currency = default_currency
+				price_symbol = default_symbol
+
+				# First try customer's price list if different from default
+				if customer_price_list:
+					# Check if item has a price in customer's price list
+					customer_price_doc = frappe.db.get_value(
+						"Item Price",
+						{
+							"item_code": item_code,
+							"price_list": customer_price_list,
+							"uom": stock_uom,
+							"selling": 1,
+						},
+						["price_list_rate", "currency"],
+						as_dict=True,
+					)
+
+					if customer_price_doc and customer_price_doc.price_list_rate:
+						price_found = customer_price_doc.price_list_rate
+						price_currency = customer_price_doc.currency or default_currency
+						price_symbol = frappe.db.get_value("Currency", price_currency, "symbol") or price_currency
+
+				# If no price found in customer's price list, fall back to default price list
+				if price_found is None and default_price_list:
+					default_price_doc = frappe.db.get_value(
+						"Item Price",
+						{
+							"item_code": item_code,
+							"price_list": default_price_list,
+							"uom": stock_uom,
+							"selling": 1,
+						},
+						["price_list_rate", "currency"],
+						as_dict=True,
+					)
+
+					if default_price_doc and default_price_doc.price_list_rate:
+						price_found = default_price_doc.price_list_rate
+						price_currency = default_price_doc.currency or default_currency
+						price_symbol = frappe.db.get_value("Currency", price_currency, "symbol") or price_currency
+
+				# If still no price, try any selling price for this item
+				if price_found is None:
+					any_price_doc = frappe.db.get_value(
+						"Item Price",
+						{
+							"item_code": item_code,
+							"uom": stock_uom,
+							"selling": 1,
+						},
+						["price_list_rate", "currency"],
+						as_dict=True,
+						order_by="modified desc",
+					)
+
+					if any_price_doc and any_price_doc.price_list_rate:
+						price_found = any_price_doc.price_list_rate
+						price_currency = any_price_doc.currency or default_currency
+						price_symbol = frappe.db.get_value("Currency", price_currency, "symbol") or price_currency
+
+				# Use 0 as last resort (better than valuation rate for display)
+				if price_found is None:
+					price_found = 0
 
 				price_updates[item_code] = {
-					"price": price_info.get("price", 0),
-					"currency": price_info.get("currency", default_currency),
-					"currency_symbol": price_info.get("currency_symbol", default_symbol),
+					"price": price_found,
+					"currency": price_currency,
+					"currency_symbol": price_symbol,
 				}
 			except Exception:
 				# If individual item fails, use default values
@@ -1035,7 +1102,7 @@ def get_items_prices_for_customer(item_codes: str, customer: str | None = None):
 		return {
 			"success": True,
 			"prices": price_updates,
-			"price_list_used": price_list,
+			"price_list_used": customer_price_list,
 		}
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), f"Get Items Prices For Customer Error for {item_codes}")
