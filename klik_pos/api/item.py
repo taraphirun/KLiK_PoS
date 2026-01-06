@@ -427,6 +427,21 @@ def get_item_by_identifier(code: str):
 				matched_type = "serial"
 				matched_value = code
 
+		# 4) Try direct Item Code lookup
+		if not item_row:
+			item_row = frappe.db.sql(
+				"""
+                SELECT name as item_code
+                FROM `tabItem`
+                WHERE name = %s AND disabled = 0
+                """,
+				code,
+				as_dict=True,
+			)
+			if item_row:
+				matched_type = "item_code"
+				matched_value = code
+
 		if not item_row:
 			frappe.throw(_("Item not found for identifier: {0}").format(code))
 
@@ -1024,52 +1039,61 @@ def get_items_prices_for_customer(item_codes: str, customer: str | None = None):
 				price_currency = default_currency
 				price_symbol = default_symbol
 
-				# First try customer's price list if different from default
+				# Helper function to get price from a price list
+				def get_price_from_list(price_list_name, with_uom=True):
+					"""Try to get price from a price list, optionally filtering by UOM."""
+					if not price_list_name:
+						return None
+
+					filters = {
+						"item_code": item_code,
+						"price_list": price_list_name,
+						"selling": 1,
+					}
+					if with_uom:
+						filters["uom"] = stock_uom
+
+					price_doc = frappe.db.get_value(
+						"Item Price",
+						filters,
+						["price_list_rate", "currency"],
+						as_dict=True,
+					)
+
+					if price_doc and price_doc.price_list_rate:
+						return price_doc
+					return None
+
+				# 1. Try customer's price list with UOM
 				if customer_price_list:
-					# Check if item has a price in customer's price list
-					customer_price_doc = frappe.db.get_value(
-						"Item Price",
-						{
-							"item_code": item_code,
-							"price_list": customer_price_list,
-							"uom": stock_uom,
-							"selling": 1,
-						},
-						["price_list_rate", "currency"],
-						as_dict=True,
-					)
+					price_doc = get_price_from_list(customer_price_list, with_uom=True)
+					if not price_doc:
+						# Try without UOM filter
+						price_doc = get_price_from_list(customer_price_list, with_uom=False)
 
-					if customer_price_doc and customer_price_doc.price_list_rate:
-						price_found = customer_price_doc.price_list_rate
-						price_currency = customer_price_doc.currency or default_currency
+					if price_doc:
+						price_found = price_doc.price_list_rate
+						price_currency = price_doc.currency or default_currency
 						price_symbol = frappe.db.get_value("Currency", price_currency, "symbol") or price_currency
 
-				# If no price found in customer's price list, fall back to default price list
+				# 2. Fall back to default price list
 				if price_found is None and default_price_list:
-					default_price_doc = frappe.db.get_value(
-						"Item Price",
-						{
-							"item_code": item_code,
-							"price_list": default_price_list,
-							"uom": stock_uom,
-							"selling": 1,
-						},
-						["price_list_rate", "currency"],
-						as_dict=True,
-					)
+					price_doc = get_price_from_list(default_price_list, with_uom=True)
+					if not price_doc:
+						# Try without UOM filter
+						price_doc = get_price_from_list(default_price_list, with_uom=False)
 
-					if default_price_doc and default_price_doc.price_list_rate:
-						price_found = default_price_doc.price_list_rate
-						price_currency = default_price_doc.currency or default_currency
+					if price_doc:
+						price_found = price_doc.price_list_rate
+						price_currency = price_doc.currency or default_currency
 						price_symbol = frappe.db.get_value("Currency", price_currency, "symbol") or price_currency
 
-				# If still no price, try any selling price for this item
+				# 3. Try any selling price for this item (last resort before 0)
 				if price_found is None:
 					any_price_doc = frappe.db.get_value(
 						"Item Price",
 						{
 							"item_code": item_code,
-							"uom": stock_uom,
 							"selling": 1,
 						},
 						["price_list_rate", "currency"],
