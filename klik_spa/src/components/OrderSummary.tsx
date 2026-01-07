@@ -700,6 +700,7 @@ export default function OrderSummary({
   
   // Ref for customer search input to enable Cmd+V focus
   const customerSearchInputRef = useRef<HTMLInputElement>(null);
+  const mobileCustomerSearchInputRef = useRef<HTMLInputElement>(null);
   const customerDropdownRef = useRef<HTMLDivElement>(null);
   
   // Keyboard navigation for customer dropdown
@@ -1192,7 +1193,7 @@ export default function OrderSummary({
   const handleCustomerSelect = (customer: Customer) => {
 
     setSelectedCustomer(customer);
-    setCustomerSearchQuery(customer.name);
+    setCustomerSearchQuery(""); // Don't store customer name in search query - just clear it
     setShowCustomerDropdown(false);
     setUserRemovedDefaultCustomer(false); // Reset flag when user explicitly selects a customer
   };
@@ -1754,6 +1755,12 @@ export default function OrderSummary({
                   ref={customerSearchInputRef}
                   type="text"
                   placeholder="Search customers... (name, email, or phone)"
+                  autoComplete="new-password"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  data-form-type="other"
+                  data-lpignore="true"
                   value={customerSearchQuery}
                   onChange={(e) => {
                     setCustomerSearchQuery(e.target.value);
@@ -1862,6 +1869,11 @@ export default function OrderSummary({
                       setSelectedCustomer(null);
                       setCustomerSearchQuery("");
                       setUserRemovedDefaultCustomer(true);
+                      // Focus the search input and show dropdown after clearing
+                      setTimeout(() => {
+                        customerSearchInputRef.current?.focus();
+                        setShowCustomerDropdown(true);
+                      }, 50);
                     }}
                     className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                   >
@@ -1896,8 +1908,15 @@ export default function OrderSummary({
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
               <input
+                ref={mobileCustomerSearchInputRef}
                 type="text"
                 placeholder="Search customers... (name, email, or phone)"
+                autoComplete="new-password"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
+                  data-form-type="other"
+                  data-lpignore="true"
                 value={customerSearchQuery}
                 onChange={(e) => {
                   setCustomerSearchQuery(e.target.value);
@@ -1995,8 +2014,13 @@ export default function OrderSummary({
                     setSelectedCustomer(null);
                     setCustomerSearchQuery("");
                     setUserRemovedDefaultCustomer(true);
+                    // Focus the search input and show dropdown after clearing
+                    setTimeout(() => {
+                      mobileCustomerSearchInputRef.current?.focus();
+                      setShowCustomerDropdown(true);
+                    }, 50);
                   }}
-                  className="text-gray-400 hover:text-gray-600"
+                  className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                 >
                   <X size={14} />
                 </button>
