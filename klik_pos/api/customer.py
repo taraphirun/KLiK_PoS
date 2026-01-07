@@ -474,11 +474,9 @@ def create_or_update_customer(customer_data):
 def get_or_create_customer(name, email, phone, country, name_arabic="", data=None):
 	"""Create or update a Customer (Individual or Company)."""
 	try:
-		cust_type = (
-			"Company"
-			if data and (data.get("customer_type") == "company" or data.get("type") == "company")
-			else "Individual"
-		)
+		# Normalize customer_type check to be case-insensitive
+		raw_cust_type = data.get("customer_type", data.get("type", "individual")) if data else "individual"
+		cust_type = "Company" if raw_cust_type.lower() == "company" else "Individual"
 
 		# Get customer_group and territory from data, with defaults
 		customer_group = data.get("customer_group", "All Customer Groups") if data else "All Customer Groups"
