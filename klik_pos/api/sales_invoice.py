@@ -676,52 +676,44 @@ def create_and_submit_invoice(data):
 			mode_of_payment,
 			business_type,
 			roundoff_amount,
-			include_payments=True,
+			include_payments=(amount_paid > 0),  # Only include payments if there's an amount
 			additional_discount_percentage=additional_discount_percentage,
 			additional_discount_amount=additional_discount_amount,
 			apply_additional_discount_on=apply_additional_discount_on,
 			invoice_ref=invoice_ref,
 		)
 
+		# Set paid amount fields
 		doc.base_paid_amount = amount_paid
 		doc.paid_amount = amount_paid
-		doc.outstanding_amount = 0
+		
+		# For is_pos=0 (credit/pay later), ERPNext will calculate outstanding_amount automatically
+		# For is_pos=1 (POS payment), we can set it but ERPNext will recalculate on save
+		# Don't manually set outstanding_amount - let ERPNext handle it
 
 		# Save and submit in one transaction
 		doc.save(ignore_permissions=True)
 		doc.submit()
 
 		payment_entry = None
-		should_create_payment_entry = False
-
-		if business_type == "B2B":
-			should_create_payment_entry = True
-		elif business_type == "B2B & B2C":
-			# For B2B & B2C, create payment entry for ALL customers with payments
-			# This ensures payment is properly recorded regardless of customer type
-			# Previously only Company customers got payment entries, leaving Individual
-			# customers' invoices unpaid even when payment was made
-			should_create_payment_entry = True
-		# Note: For pure B2C, POS payment flow handles it via the payments child table
-
-		if should_create_payment_entry and mode_of_payment and amount_paid > 0:
-			try:
-				payment_entry = create_payment_entry(doc, mode_of_payment, amount_paid)
-			except Exception as pe_error:
-				frappe.log_error(
-					frappe.get_traceback(),
-					f"Payment Entry Error for {doc.name}: {pe_error!s}"
-				)
-				# Log details for debugging
-				frappe.log_error(
-					f"Invoice: {doc.name}, Customer: {customer}, Amount: {amount_paid}, "
-					f"Payment Methods: {mode_of_payment}, Business Type: {business_type}",
-					f"Payment Entry Debug Info for {doc.name}"
-				)
-				payment_entry = None
+		
+		# Transaction-based payment handling (Option 5):
+		# - When is_pos=1 (payment made at POS): Payment is already in Sales Invoice Payment
+		#   child table, which will be picked up by POS Closing Entry
+		# - When is_pos=0 (no payment/pure credit): No Payment Entry needed since no payment was made
+		# 
+		# Note: We no longer create separate Payment Entry documents for POS transactions
+		# because the Sales Invoice Payment child table handles it when is_pos=1.
+		# This ensures all POS payments (regardless of customer type) appear in the closing.
+		
+		# Only create Payment Entry for special cases (future use if needed)
+		# Currently, with transaction-based approach, Payment Entries are not needed
+		# because:
+		# - Paid invoices (is_pos=1) use the payments child table → shows in POS closing
+		# - Unpaid invoices (is_pos=0) have no payment to record
 
 		processing_time = time.time() - start_time
-		frappe.logger().info(f"Invoice {doc.name} processed in {processing_time:.2f} seconds")
+		frappe.logger().info(f"Invoice {doc.name} processed in {processing_time:.2f} seconds (is_pos={doc.is_pos})")
 
 		# Return minimal invoice data for frontend performance
 		return {
@@ -796,7 +788,6 @@ def parse_invoice_data(data):
 	customer = data.get("customer", {}).get("id")
 	items = data.get("items", [])
 
-	amount_paid = 0.0
 	sales_and_tax_charges = get_current_pos_profile().taxes_and_charges
 	business_type = data.get("businessType")
 	mode_of_payment = None
@@ -816,11 +807,23 @@ def parse_invoice_data(data):
 	# Extract invoice reference from hardcopy invoice
 	invoice_ref = data.get("invoiceRef")
 
-	if data.get("amountPaid"):
-		amount_paid = data.get("amountPaid")
-
+	# Extract payment methods
 	if data.get("paymentMethods"):
 		mode_of_payment = data.get("paymentMethods")
+
+	# Calculate actual paid amount from payment methods
+	# This is more reliable than trusting amountPaid from frontend
+	# because amountPaid might be set to grandTotal even when no payment is made
+	amount_paid = 0.0
+	if mode_of_payment and isinstance(mode_of_payment, list):
+		for payment in mode_of_payment:
+			payment_amount = payment.get("amount", 0) if isinstance(payment, dict) else 0
+			amount_paid += flt(payment_amount)
+	
+	# Fallback to amountPaid only if we have payment methods but couldn't calculate
+	# (This handles edge cases where payment structure might be different)
+	if amount_paid == 0 and mode_of_payment and len(mode_of_payment) > 0:
+		amount_paid = flt(data.get("amountPaid", 0))
 
 	if data.get("SalesTaxCharges"):
 		sales_and_tax_charges = data.get("SalesTaxCharges")
@@ -869,8 +872,9 @@ def build_sales_invoice_doc(
 		doc.custom_invoice_ref = invoice_ref
 
 	# Configure POS profile and company settings
+	# Pass amount_paid for transaction-based is_pos determination
 	pos_profile = _get_active_pos_profile()
-	_set_pos_profile_fields(doc, pos_profile, customer, business_type)
+	_set_pos_profile_fields(doc, pos_profile, customer, business_type, amount_paid)
 
 	# Set posting details
 	_set_posting_fields(doc)
@@ -895,8 +899,12 @@ def build_sales_invoice_doc(
 	# Populate tax details
 	_populate_tax_details(doc)
 
-	# Add payment information
-	if include_payments:
+	# Add payment information to Sales Invoice Payment child table
+	# Only add payments when:
+	# 1. is_pos=1 (payment made at POS) AND
+	# 2. There's actually an amount to record
+	# This ensures credit invoices (is_pos=0) don't have empty payment entries
+	if doc.is_pos == 1 and amount_paid > 0 and include_payments:
 		_add_payment_entries(doc, mode_of_payment)
 
 	return doc
@@ -928,33 +936,58 @@ def _get_active_pos_profile():
 		raise
 
 
-def _set_pos_profile_fields(doc, pos_profile, customer, business_type):
+def _set_pos_profile_fields(doc, pos_profile, customer, business_type, amount_paid=0):
 	"""Set POS profile, company, currency and POS-specific fields."""
-	doc.pos_profile = pos_profile.name
 	doc.company = pos_profile.company
 	doc.currency = get_customer_billing_currency(customer)
 	doc.conversion_rate = 1.0
 	doc.update_stock = 1
 	doc.warehouse = pos_profile.warehouse
 
-	# Determine if this is a POS invoice
-	doc.is_pos = _determine_is_pos(customer, business_type)
-
-
-def _determine_is_pos(customer, business_type):
-	"""Determine if the invoice should be marked as POS based on business type."""
-	if business_type == "B2C":
-		return 1
-	elif business_type == "B2B":
-		return 0
-	elif business_type == "B2B & B2C":
-		return _check_customer_type_for_pos(customer)
+	# Determine if this is a POS invoice based on payment amount (transaction-based)
+	is_pos = _determine_is_pos(customer, business_type, amount_paid)
+	doc.is_pos = is_pos
+	
+	# Only set pos_profile when is_pos=1 (payment made at POS)
+	# For is_pos=0 (credit/pay later), treat as regular Sales Invoice
+	if is_pos == 1:
+		doc.pos_profile = pos_profile.name
 	else:
+		# For credit invoices, don't set pos_profile
+		# This allows them to be submitted as regular invoices
+		doc.pos_profile = None
+
+
+def _determine_is_pos(customer, business_type, amount_paid=0):
+	"""
+	Determine if the invoice should be marked as POS based on payment amount.
+	
+	Transaction-based logic (Option 5):
+	- If any payment is made at POS (amount_paid > 0) -> is_pos = 1
+	  This ensures the payment shows up in POS Closing Entry
+	- If no payment is made (pure credit/pay later) -> is_pos = 0
+	  This allows proper Accounts Receivable tracking
+	
+	This approach allows ANY customer (individual or company) to:
+	- Pay fully at POS (shows in closing)
+	- Pay partially at POS (shows in closing)
+	- Pay later / credit (doesn't affect closing, tracked in AR)
+	"""
+	if amount_paid > 0:
+		# Payment made at POS - mark as POS so it shows in closing
+		return 1
+	else:
+		# No payment (credit/pay later) - mark as non-POS for AR tracking
 		return 0
 
 
 def _check_customer_type_for_pos(customer):
-	"""Check if customer is an individual for B2B & B2C business type."""
+	"""
+	Check if customer is an individual for B2B & B2C business type.
+	NOTE: This function is kept for backward compatibility but is no longer
+	the primary determinant for is_pos. The transaction-based approach
+	(_determine_is_pos with amount_paid) takes precedence.
+	"""
 	global _cached_customer_data
 	if customer not in _cached_customer_data:
 		_cached_customer_data[customer] = frappe.get_doc("Customer", customer)

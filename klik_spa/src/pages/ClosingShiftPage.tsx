@@ -144,8 +144,15 @@ export default function ClosingShiftPage() {
       const matchesStatus = statusFilter === "all" || invoice.status === statusFilter;
       const matchesPayment = paymentFilter === "all" || invoice.paymentMethod === paymentFilter;
       const matchesDate = filterInvoiceByDate(invoice.date);
-      // Filter by POS profile - only show invoices for the current POS profile
-      const matchesPOSProfile = !posDetails?.name || invoice.posProfile === posDetails.name;
+      
+      // Filter by POS profile - include invoices that either:
+      // 1. Match the POS profile (for is_pos=1 invoices with payments)
+      // 2. Have no pos_profile but have matching opening entry (for is_pos=0 credit invoices)
+      // This ensures "Pay Later" invoices (pos_profile=null) still show in closing shift
+      const matchesPOSProfile = !posDetails?.name || 
+        invoice.posProfile === posDetails.name ||
+        (!invoice.posProfile && invoice.custom_pos_opening_entry === posDetails.current_opening_entry);
+      
       // Filter by POS opening entry - only show invoices for the current opening entry
       const matchesOpeningEntry = !posDetails?.current_opening_entry ||
         (invoice.custom_pos_opening_entry && invoice.custom_pos_opening_entry === posDetails.current_opening_entry);
