@@ -697,20 +697,27 @@ def create_and_submit_invoice(data):
 		if business_type == "B2B":
 			should_create_payment_entry = True
 		elif business_type == "B2B & B2C":
-			# For B2B & B2C, only create payment entry for company customers
-			global _cached_customer_data
-			if customer not in _cached_customer_data:
-				_cached_customer_data[customer] = frappe.get_doc("Customer", customer)
-
-			customer_doc = _cached_customer_data[customer]
-			if customer_doc.customer_type == "Company":
-				should_create_payment_entry = True
+			# For B2B & B2C, create payment entry for ALL customers with payments
+			# This ensures payment is properly recorded regardless of customer type
+			# Previously only Company customers got payment entries, leaving Individual
+			# customers' invoices unpaid even when payment was made
+			should_create_payment_entry = True
+		# Note: For pure B2C, POS payment flow handles it via the payments child table
 
 		if should_create_payment_entry and mode_of_payment and amount_paid > 0:
 			try:
 				payment_entry = create_payment_entry(doc, mode_of_payment, amount_paid)
-			except Exception:
-				frappe.log_error(frappe.get_traceback(), f"Payment Entry Error for {doc.name}")
+			except Exception as pe_error:
+				frappe.log_error(
+					frappe.get_traceback(),
+					f"Payment Entry Error for {doc.name}: {pe_error!s}"
+				)
+				# Log details for debugging
+				frappe.log_error(
+					f"Invoice: {doc.name}, Customer: {customer}, Amount: {amount_paid}, "
+					f"Payment Methods: {mode_of_payment}, Business Type: {business_type}",
+					f"Payment Entry Debug Info for {doc.name}"
+				)
 				payment_entry = None
 
 		processing_time = time.time() - start_time
