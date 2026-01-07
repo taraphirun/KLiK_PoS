@@ -1380,6 +1380,9 @@ export default function OrderSummary({
     // Reset customer selection
     setSelectedCustomer(null);
     setCustomerSearchQuery("");
+    
+    // Clear invoice reference
+    setInvoiceRef(null);
   }, [cartItems, onClearCart, onRemoveItem, appliedCoupons, onRemoveCoupon]);
 
   // Alias for backward compatibility
