@@ -274,19 +274,34 @@ def _calculate_closing_entry_totals(opening_entry_name):
 	"""
 	Calculate total_quantity, net_total, and grand_total from all Sales Invoices
 	linked to the opening entry. This matches standard Frappe POS behavior.
+	
+	Note: We use separate queries for invoice totals and item quantities to avoid
+	row duplication caused by LEFT JOIN when invoices have multiple items.
 	"""
 	from frappe.utils import flt
 
 	try:
-		# Aggregate all totals in a single efficient SQL query
-		aggregated = frappe.db.sql(
+		# Query 1: Get net_total and grand_total from Sales Invoice (no JOIN)
+		# This avoids duplication when an invoice has multiple items
+		invoice_totals = frappe.db.sql(
 			"""
 			SELECT
-				COALESCE(SUM(si.net_total), 0) as net_total,
-				COALESCE(SUM(si.grand_total), 0) as grand_total,
-				COALESCE(SUM(sii.qty), 0) as total_quantity
-			FROM `tabSales Invoice` si
-			LEFT JOIN `tabSales Invoice Item` sii ON si.name = sii.parent
+				COALESCE(SUM(net_total), 0) as net_total,
+				COALESCE(SUM(grand_total), 0) as grand_total
+			FROM `tabSales Invoice`
+			WHERE custom_pos_opening_entry = %s
+			  AND docstatus = 1
+			""",
+			(opening_entry_name,),
+			as_dict=True,
+		)
+
+		# Query 2: Get total_quantity from Sales Invoice Item
+		item_totals = frappe.db.sql(
+			"""
+			SELECT COALESCE(SUM(sii.qty), 0) as total_quantity
+			FROM `tabSales Invoice Item` sii
+			INNER JOIN `tabSales Invoice` si ON si.name = sii.parent
 			WHERE si.custom_pos_opening_entry = %s
 			  AND si.docstatus = 1
 			""",
@@ -294,12 +309,9 @@ def _calculate_closing_entry_totals(opening_entry_name):
 			as_dict=True,
 		)
 
-		if aggregated and len(aggregated) > 0:
-			net_total = flt(aggregated[0].net_total or 0)
-			grand_total = flt(aggregated[0].grand_total or 0)
-			total_quantity = flt(aggregated[0].total_quantity or 0)
-		else:
-			net_total = grand_total = total_quantity = 0.0
+		net_total = flt(invoice_totals[0].net_total if invoice_totals else 0)
+		grand_total = flt(invoice_totals[0].grand_total if invoice_totals else 0)
+		total_quantity = flt(item_totals[0].total_quantity if item_totals else 0)
 
 		return {
 			"total_quantity": total_quantity,
