@@ -105,12 +105,6 @@ export default function CustomerDetailsPage() {
     });
   }, [invoices, searchQuery, statusFilter, dateFilter, isLoading, error, customer]);
 
-  // Debug log for filtered results
-  console.log('CustomerPageDetails: Filtered customer invoices:', {
-    customerInvoicesCount: customerInvoices.length,
-    customerInvoices: customerInvoices
-  });
-
 
 
   const getStatusBadge = (status: string) => {
@@ -154,7 +148,6 @@ export default function CustomerDetailsPage() {
   // Helper function to check if invoice has items that can still be returned
   const hasReturnableItems = (invoice: SalesInvoice) => {
     if (!invoice || !invoice.items) {
-      console.log("No invoice or items found for:", invoice?.id);
       return false;
     }
 
@@ -259,7 +252,6 @@ export default function CustomerDetailsPage() {
 
   //eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleSaveCustomer = (customer: any) => {
-    console.log('Saving customer:', customer);
     setShowAddModal(false);
     setSelectedCustomer(null);
   };
@@ -360,7 +352,6 @@ export default function CustomerDetailsPage() {
               </div>
               <button
                 onClick={() => {
-                  console.log('Customer data being passed to modal:', customer);
                   setSelectedCustomer(customer);
                   setShowAddModal(true);
                 }}
@@ -636,7 +627,6 @@ export default function CustomerDetailsPage() {
           onClose={() => setShowInvoiceModal(false)}
           onRefund={handleRefund}
           onCancel={(invoiceId) => {
-            console.log("Invoice cancelled:", invoiceId);
             setShowInvoiceModal(false);
           }}
         />
@@ -697,7 +687,6 @@ export default function CustomerDetailsPage() {
               </div>
               <button
                 onClick={() => {
-                  console.log('Customer data being passed to modal:', customer);
                   setSelectedCustomer(customer);
                   setShowAddModal(true);
                 }}
@@ -1031,7 +1020,6 @@ export default function CustomerDetailsPage() {
           onClose={() => setShowInvoiceModal(false)}
           onRefund={handleRefund}
           onCancel={(invoiceId) => {
-            console.log("Invoice cancelled:", invoiceId);
             setShowInvoiceModal(false);
           }}
         />

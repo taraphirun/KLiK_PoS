@@ -166,36 +166,6 @@ export default function ClosingShiftPage() {
 
   }, [invoices, searchQuery, statusFilter, dateFilter, paymentFilter, isLoading, error, posDetails]);
 
-  // DEBUG: Log filtered invoices breakdown
-  console.log("====== CLOSING SHIFT DEBUG ======");
-  console.log("Total invoices before filter:", invoices.length);
-  console.log("Filtered invoices count:", filteredInvoices.length);
-  console.log("Current POS Profile:", posDetails?.name);
-  console.log("Current Opening Entry:", posDetails?.current_opening_entry);
-  console.log("\nFiltered Invoices Breakdown:");
-  filteredInvoices.forEach((inv, idx) => {
-    console.log(`  ${idx + 1}. ${inv.id}`, {
-      status: inv.status,
-      totalAmount: inv.totalAmount,
-      paidAmount: inv.paidAmount,
-      grandTotal: inv.grandTotal,
-      posProfile: inv.posProfile,
-      customPosOpeningEntry: inv.custom_pos_opening_entry,
-      paymentMethod: inv.paymentMethod,
-      // @ts-expect-error just ignore
-      payment_methods: inv.payment_methods,
-    });
-  });
-  const debugTotalAmount = filteredInvoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
-  const debugGrandTotal = filteredInvoices.reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
-  const debugPaidAmount = filteredInvoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
-  console.log("\nTotals Summary:");
-  console.log("  Sum of totalAmount:", debugTotalAmount);
-  console.log("  Sum of grandTotal:", debugGrandTotal);
-  console.log("  Sum of paidAmount:", debugPaidAmount);
-  console.log("================================");
-
-
   // Payment Stats Calculation - Calculate from filtered invoices
   const paymentStats = useMemo(() => {
     if (!modes || modes.length === 0) {
@@ -257,16 +227,6 @@ export default function ClosingShiftPage() {
   }, [modes, filteredInvoices]);
       // @ts-expect-error just ignore for now
   const total = Object.values(paymentStats).reduce((sum, stat) => sum + stat.amount, 0);
-
-  // DEBUG: Log payment stats
-  console.log("====== PAYMENT STATS DEBUG ======");
-  console.log("Payment Stats:", paymentStats);
-  console.log("Total (sum of all payment methods):", total);
-  Object.entries(paymentStats).forEach(([name, stat]) => {
-    // @ts-expect-error just ignore
-    console.log(`  ${name}: amount=${stat.amount}, opening=${stat.openingAmount}, transactions=${stat.transactions}`);
-  });
-  console.log("================================");
 
   // Loading state
   if (isLoading || modesLoading) {
@@ -360,7 +320,6 @@ export default function ClosingShiftPage() {
   // Helper function to check if invoice has items that can still be returned
   const hasReturnableItems = (invoice: SalesInvoice) => {
     if (!invoice || !invoice.items) {
-      console.log("No invoice or items found for:", invoice?.id);
       return false;
     }
 
@@ -388,7 +347,6 @@ export default function ClosingShiftPage() {
   };
 
   const handleCancel = (invoiceId: string) => {
-    console.log("Cancelling invoice:", invoiceId);
     setShowInvoiceModal(false);
   };
 

@@ -77,7 +77,6 @@ export default function InvoiceViewPage() {
   // Delete invoice handlers
   const handleDeleteClick = () => {
     if (!invoice) return;
-    console.log("Invoice object in detail page:", invoice);
     if (invoice.status !== "Pending") {
       toast.error("Only draft invoices can be deleted");
       return;
@@ -89,7 +88,6 @@ export default function InvoiceViewPage() {
     if (!invoice) return;
 
     try {
-      console.log("Attempting to delete invoice:", invoice.name || invoice.id, "Status:", invoice.status);
       await deleteDraftInvoice(invoice.name || invoice.id);
       toast.success(`Draft invoice ${invoice.name || invoice.id} deleted successfully`);
       setShowDeleteConfirm(false);
@@ -207,7 +205,6 @@ export default function InvoiceViewPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleSaveCustomer = (updatedCustomer: any) => {
-    console.log('Saving customer:', updatedCustomer);
     setShowCustomerEditModal(false);
     setCustomerData(null);
     toast.success('Customer updated successfully!');

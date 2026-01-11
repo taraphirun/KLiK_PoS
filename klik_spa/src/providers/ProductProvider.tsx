@@ -90,7 +90,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
       const resData = await response.json();
-      console.log('[Products] Raw response payload', resData);
 
       const message = resData?.message ?? resData;
 
@@ -104,13 +103,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
 
         if (maybeItems !== undefined) {
           const itemsArray = Array.isArray(maybeItems) ? maybeItems : Object.values(maybeItems);
-          console.log('[Products] Parsed items array length', itemsArray.length, {
-            total_count: (message as any).total_count,
-            has_more: (message as any).has_more,
-            offset,
-            limit,
-            search,
-          });
           return {
             items: itemsArray,
             total_count: (message as any).total_count ?? itemsArray.length ?? 0,
@@ -150,13 +142,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
         const innerItems = inner.items ?? inner.data ?? inner.results;
         if (innerItems !== undefined) {
           const itemsArray = Array.isArray(innerItems) ? innerItems : Object.values(innerItems);
-          console.log('[Products] Parsed inner items array length', itemsArray.length, {
-            total_count: inner.total_count,
-            has_more: inner.has_more,
-            offset,
-            limit,
-            search,
-          });
           return {
             items: itemsArray,
             total_count: inner.total_count ?? itemsArray.length ?? 0,
@@ -235,8 +220,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
       setHasMore(result.has_more);
       setCurrentOffset(result.items.length);
       setLastUpdated(new Date());
-
-      console.log(`Products loaded: ${result.items.length} of ${result.total_count} items`);
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       console.error("Error fetching products:", error);
@@ -283,7 +266,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
               break;
             }
 
-            console.log(`[Background] Loading more items from offset ${offset}...`);
             const result = await fetchProductsFromAPI(LOAD_MORE_SIZE, offset);
 
             if (result.items.length === 0) {
@@ -307,8 +289,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
               targetTotal = result.total_count;
             }
 
-            console.log(`[Background] Loaded ${result.items.length} more items. Total: ${offset} of ${targetTotal}`);
-
             // Small delay between batches to avoid overwhelming the server
             await new Promise(resolve => setTimeout(resolve, 100));
           } catch (error) {
@@ -317,7 +297,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
           }
         }
 
-        console.log(`[Background] Finished loading all items. Total: ${offset}`);
       };
 
       loadRemaining();
@@ -353,11 +332,8 @@ export function ProductProvider({ children }: ProductProviderProps) {
 
       setCurrentOffset(prev => prev + result.items.length);
       setHasMore(result.has_more);
-
-      console.log(`Loaded ${result.items.length} more products. Total: ${currentOffset + result.items.length}`);
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
-      console.error("Error loading more products:", error);
     } finally {
       setIsLoadingMore(false);
     }
@@ -391,8 +367,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
       setTotalCount(result.total_count);
       setHasMore(false); // Disable infinite scroll during search
       setCurrentOffset(result.items.length);
-
-      console.log(`Search "${trimmedQuery}" found ${result.items.length} items`);
       //eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       if (error.name !== 'AbortError') {
@@ -436,7 +410,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
           : product
       )
     );
-    console.log(`Updated stock for ${itemCode} to ${newStock}`);
   }, []);
 
   // Update stock for multiple specific items (efficient for post-payment updates)
@@ -495,10 +468,8 @@ export function ProductProvider({ children }: ProductProviderProps) {
           // console.log(`Batch API response for ${itemCode}:`, resData);
 
           if (resData?.message && Array.isArray(resData.message)) {
-            // console.log(`Valid batch data for ${itemCode}:`, resData.message);
             return { itemCode, batches: resData.message };
           }
-          console.log(`No valid batch data for ${itemCode}`);
           return null;
         } catch (error) {
           console.error(`Failed to update batch quantities for ${itemCode}:`, error);
@@ -510,14 +481,10 @@ export function ProductProvider({ children }: ProductProviderProps) {
       const validResults = batchResults.filter(result => result !== null);
 
       if (validResults.length > 0) {
-        // console.log(`Updated batch quantities for ${validResults.length} items`);
-        // console.log('Dispatching batchQuantitiesUpdated event with data:', validResults);
         // Trigger a custom event to notify components about batch updates
         window.dispatchEvent(new CustomEvent('batchQuantitiesUpdated', {
           detail: { updatedItems: validResults }
         }));
-      } else {
-        console.log('No valid batch results to dispatch');
       }
     } catch (error) {
       console.error('Failed to update batch quantities for items:', error);
@@ -546,12 +513,10 @@ export function ProductProvider({ children }: ProductProviderProps) {
         setLastUpdated(new Date());
         return true; // Success
       }
-      console.log("No stock updates needed - all items are current");
       return false; // No updates
     } catch (error) {
       console.error('❌ Stock-only refresh failed:', error);
       // Don't fallback to full refresh automatically - let the user decide
-      console.log("Stock refresh failed - user can manually refresh if needed");
       return false; // Failed
     } finally {
       setIsRefreshingStock(false);
@@ -610,7 +575,6 @@ export function ProductProvider({ children }: ProductProviderProps) {
           })
         );
 
-        console.log(`✅ Prices refreshed for ${Object.keys(priceUpdates).length} items for customer: ${customerId || 'default'}`);
         setLastUpdated(new Date());
         return true;
       }
