@@ -133,6 +133,9 @@ export default function ClosingShiftPage() {
   const filteredInvoices = useMemo(() => {
     if (isLoading) return [];
     if (error) return [];
+    
+    // Don't filter until posDetails is loaded - prevents incorrect totals on first render
+    if (!posDetails?.name || !posDetails?.current_opening_entry) return [];
 
     return invoices.filter((invoice) => {
       const matchesSearch =
@@ -149,19 +152,48 @@ export default function ClosingShiftPage() {
       // 1. Match the POS profile (for is_pos=1 invoices with payments)
       // 2. Have no pos_profile but have matching opening entry (for is_pos=0 credit invoices)
       // This ensures "Pay Later" invoices (pos_profile=null) still show in closing shift
-      const matchesPOSProfile = !posDetails?.name || 
+      const matchesPOSProfile = 
         invoice.posProfile === posDetails.name ||
         (!invoice.posProfile && invoice.custom_pos_opening_entry === posDetails.current_opening_entry);
       
       // Filter by POS opening entry - only show invoices for the current opening entry
-      const matchesOpeningEntry = !posDetails?.current_opening_entry ||
-        (invoice.custom_pos_opening_entry && invoice.custom_pos_opening_entry === posDetails.current_opening_entry);
+      const matchesOpeningEntry = 
+        invoice.custom_pos_opening_entry && invoice.custom_pos_opening_entry === posDetails.current_opening_entry;
 
 
       return matchesSearch && matchesPayment && matchesStatus && matchesDate && matchesPOSProfile && matchesOpeningEntry;
     });
 
   }, [invoices, searchQuery, statusFilter, dateFilter, paymentFilter, isLoading, error, posDetails]);
+
+  // DEBUG: Log filtered invoices breakdown
+  console.log("====== CLOSING SHIFT DEBUG ======");
+  console.log("Total invoices before filter:", invoices.length);
+  console.log("Filtered invoices count:", filteredInvoices.length);
+  console.log("Current POS Profile:", posDetails?.name);
+  console.log("Current Opening Entry:", posDetails?.current_opening_entry);
+  console.log("\nFiltered Invoices Breakdown:");
+  filteredInvoices.forEach((inv, idx) => {
+    console.log(`  ${idx + 1}. ${inv.id}`, {
+      status: inv.status,
+      totalAmount: inv.totalAmount,
+      paidAmount: inv.paidAmount,
+      grandTotal: inv.grandTotal,
+      posProfile: inv.posProfile,
+      customPosOpeningEntry: inv.custom_pos_opening_entry,
+      paymentMethod: inv.paymentMethod,
+      // @ts-expect-error just ignore
+      payment_methods: inv.payment_methods,
+    });
+  });
+  const debugTotalAmount = filteredInvoices.reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+  const debugGrandTotal = filteredInvoices.reduce((sum, inv) => sum + (inv.grandTotal || 0), 0);
+  const debugPaidAmount = filteredInvoices.reduce((sum, inv) => sum + (inv.paidAmount || 0), 0);
+  console.log("\nTotals Summary:");
+  console.log("  Sum of totalAmount:", debugTotalAmount);
+  console.log("  Sum of grandTotal:", debugGrandTotal);
+  console.log("  Sum of paidAmount:", debugPaidAmount);
+  console.log("================================");
 
 
   // Payment Stats Calculation - Calculate from filtered invoices
@@ -225,6 +257,16 @@ export default function ClosingShiftPage() {
   }, [modes, filteredInvoices]);
       // @ts-expect-error just ignore for now
   const total = Object.values(paymentStats).reduce((sum, stat) => sum + stat.amount, 0);
+
+  // DEBUG: Log payment stats
+  console.log("====== PAYMENT STATS DEBUG ======");
+  console.log("Payment Stats:", paymentStats);
+  console.log("Total (sum of all payment methods):", total);
+  Object.entries(paymentStats).forEach(([name, stat]) => {
+    // @ts-expect-error just ignore
+    console.log(`  ${name}: amount=${stat.amount}, opening=${stat.openingAmount}, transactions=${stat.transactions}`);
+  });
+  console.log("================================");
 
   // Loading state
   if (isLoading || modesLoading) {

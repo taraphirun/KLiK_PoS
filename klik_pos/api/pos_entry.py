@@ -211,7 +211,7 @@ def _calculate_payment_reconciliation(opening_entry, data):
 	)
 	opening_balance_map = {row.mode_of_payment: row.opening_amount for row in opening_modes}
 
-	# Aggregate sales by payment mode
+	# Aggregate sales by payment mode - filter by exact opening entry to avoid including invoices from other shifts
 	sales_data = frappe.db.sql(
 		"""
 		SELECT sip.mode_of_payment,
@@ -221,13 +221,10 @@ def _calculate_payment_reconciliation(opening_entry, data):
 		JOIN `tabSales Invoice Payment` sip ON si.name = sip.parent
 		WHERE si.pos_profile = %s
 		  AND si.docstatus = 1
-		  AND si.posting_date = %s
-		  AND si.posting_time >= %s
-		  AND si.custom_pos_opening_entry IS NOT NULL
-		  AND si.custom_pos_opening_entry != ''
+		  AND si.custom_pos_opening_entry = %s
 		GROUP BY sip.mode_of_payment
 		""",
-		(opening_entry.pos_profile, opening_date, opening_time),
+		(opening_entry.pos_profile, opening_entry_name),
 		as_dict=True,
 	)
 	sales_map = {row.mode_of_payment: row.total_amount for row in sales_data}
