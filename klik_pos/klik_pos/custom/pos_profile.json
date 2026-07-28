@@ -2972,12 +2972,13 @@
   },
   {
    "fieldname": "custom_az_coil_item_groups",
-   "fieldtype": "Small Text",
+   "fieldtype": "Table MultiSelect",
    "label": "AZ Coil Item Groups",
    "dt": "POS Profile",
    "insert_after": "custom_business_type",
    "module": "KLiK PoS",
-   "owner": "Administrator"
+   "owner": "Administrator",
+   "options": "POS Profile Item Group"
   }
  ],
  "custom_perms": [],

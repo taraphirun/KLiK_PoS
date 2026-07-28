@@ -391,8 +391,16 @@ export const CartItemRow = ({
   const showNoStockWarning = availableStock === 0;
 
   const isAZCoilItem = (() => {
-    const azGroups = posDetails?.custom_az_coil_item_groups || "zn";
-    const groups = azGroups.split(',').map((g: string) => g.trim().toLowerCase());
+    const azGroups = posDetails?.custom_az_coil_item_groups || [];
+    let groups: string[] = [];
+    if (typeof azGroups === 'string') {
+        groups = (azGroups as string).split(',').map((g: string) => g.trim().toLowerCase());
+    } else if (Array.isArray(azGroups)) {
+        groups = azGroups.map((g: any) => g.item_group?.toLowerCase()).filter(Boolean);
+    }
+    
+    if (groups.length === 0) groups = ["zn"];
+
     return groups.includes(item.item_group?.toLowerCase() || "") || groups.includes(item.category?.toLowerCase() || "");
   })();
 

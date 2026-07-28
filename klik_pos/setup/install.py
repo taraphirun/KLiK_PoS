@@ -47,7 +47,8 @@ def ensure_az_coil_custom_fields():
         {
             "fieldname": "custom_az_coil_item_groups",
             "label": "AZ Coil Item Groups",
-            "fieldtype": "Small Text",
+            "fieldtype": "Table MultiSelect",
+            "options": "POS Profile Item Group",
             "insert_after": "custom_business_type",
             "module": "KLiK PoS",
         },
