@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useCartStore } from "../../stores/cartStore";
 import { useProductStore } from "../../stores/productStore";
 import { toast } from "react-toastify";
@@ -416,6 +416,17 @@ export default function OrderSummary({
       return new Set([itemId]);
     });
   };
+  const paymentDialogCartItems = useMemo(() => {
+    return cartItems.map((item) => ({
+      ...item,
+      discountedPriceExcl: getDiscountedPrice(item),
+      discountedPriceIncl: getDisplayPriceInclusive(item),
+      discountedPrice: getDisplayPriceInclusive(item),
+      itemDiscount: itemDiscounts[item.id] || {},
+      originalPrice: roundCurrency(item.price),
+      finalAmount: getLineTotalInclusive(item),
+    }));
+  }, [cartItems, itemDiscounts, isTaxIncludedInBasicRate]);
 
   return (
     <div
@@ -519,15 +530,7 @@ export default function OrderSummary({
         <PaymentDialog
           isOpen={showPaymentDialog}
           onClose={handleClosePaymentDialog}
-          cartItems={cartItems.map((item) => ({
-            ...item,
-            discountedPriceExcl: getDiscountedPrice(item),
-            discountedPriceIncl: getDisplayPriceInclusive(item),
-            discountedPrice: getDisplayPriceInclusive(item),
-            itemDiscount: itemDiscounts[item.id] || {},
-            originalPrice: roundCurrency(item.price),
-            finalAmount: getLineTotalInclusive(item),
-          }))}
+          cartItems={paymentDialogCartItems}
           appliedCoupons={[]}
           selectedCustomer={selectedCustomer}
           onCompletePayment={handleCompletePayment}

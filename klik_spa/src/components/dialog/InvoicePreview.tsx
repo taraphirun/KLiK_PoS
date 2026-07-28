@@ -74,6 +74,11 @@ export default function InvoicePreview({
             <div key={index} className="flex justify-between text-sm">
               <div className="flex-1">
                 <p className="font-medium text-gray-900 dark:text-white">{item.name}</p>
+                {(item as any).custom_description && (
+                  <p className="text-xs text-beveren-600 dark:text-beveren-400 mt-0.5 whitespace-pre-wrap">
+                    {(item as any).custom_description.replace("Generated Note:\n", "")}
+                  </p>
+                )}
                 <p className="text-gray-600 dark:text-gray-400">
                   {item.quantity} x {formatCurrencyWithSymbol(item.price, displayCurrencySymbol)}
                 </p>
