@@ -375,9 +375,8 @@ def create_or_update_customer(customer_data):
         customer_name = customer_data.get("name")
         email = customer_data.get("email")
         phone = customer_data.get("phone")
-        cust_type = customer_data.get(
-            "customer_type", customer_data.get("type", "individual")
-        ).lower()
+        raw_type = (customer_data.get("customer_type") or customer_data.get("type") or "individual")
+        cust_type = str(raw_type).lower()
         country = customer_data.get("address", {}).get("country", "Kenya")
         name_arabic = customer_data.get("name_arabic", "")
         address = customer_data.get("address", {})
@@ -451,8 +450,8 @@ def get_or_create_customer(name, email, phone, country, tax_id, name_arabic="", 
     """Create or update a Customer (Individual or Company)."""
     try:
         # Normalize customer_type check to be case-insensitive
-        raw_cust_type = data.get("customer_type", data.get("type", "individual")) if data else "individual"
-        cust_type = "Company" if raw_cust_type.lower() == "company" else "Individual"
+        raw_cust_type = (data.get("customer_type") or data.get("type") or "individual") if data else "individual"
+        cust_type = "Company" if str(raw_cust_type).lower() == "company" else "Individual"
 
         # Get customer_group and territory from data, with defaults
         customer_group = (

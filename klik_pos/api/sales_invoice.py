@@ -927,6 +927,10 @@ def validate_checkout_invoice(data):
 			tax_id,
 			enable_background_submission,
 			loyalty_redemption,
+			additional_discount_percentage,
+			additional_discount_amount,
+			apply_additional_discount_on,
+			invoice_ref,
 		) = parse_invoice_data(data)
 
 		preview_doc = build_sales_invoice_doc(
@@ -947,6 +951,10 @@ def validate_checkout_invoice(data):
 			create_batch_and_serial_bundle=False,
 			enable_background_submission=enable_background_submission,
 			loyalty_redemption=loyalty_redemption,
+			additional_discount_percentage=additional_discount_percentage,
+			additional_discount_amount=additional_discount_amount,
+			apply_additional_discount_on=apply_additional_discount_on,
+			invoice_ref=invoice_ref,
 		)
 
 		validate_required_salesperson(preview_doc)
@@ -1265,6 +1273,10 @@ def queue_sales_invoice(data):
 			tax_id,
 			enable_background_submission,
 			loyalty_redemption,
+			additional_discount_percentage,
+			additional_discount_amount,
+			apply_additional_discount_on,
+			invoice_ref,
 		) = parse_invoice_data(data)
 
 		if not customer:
@@ -1290,6 +1302,10 @@ def queue_sales_invoice(data):
 			tax_id=tax_id,
 			enable_background_submission=enable_background_submission,
 			loyalty_redemption=loyalty_redemption,
+			additional_discount_percentage=additional_discount_percentage,
+			additional_discount_amount=additional_discount_amount,
+			apply_additional_discount_on=apply_additional_discount_on,
+			invoice_ref=invoice_ref,
 		)
 
 		validate_required_salesperson(doc)
@@ -1494,6 +1510,10 @@ def create_draft_invoice(data):
 			tax_id,
 			enable_background_submission,
 			loyalty_redemption,
+			additional_discount_percentage,
+			additional_discount_amount,
+			apply_additional_discount_on,
+			invoice_ref,
 		) = parse_invoice_data(data)
 
 		if target_draft_invoice_id:
@@ -1523,6 +1543,10 @@ def create_draft_invoice(data):
 				tax_id=tax_id,
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
+				additional_discount_percentage=additional_discount_percentage,
+				additional_discount_amount=additional_discount_amount,
+				apply_additional_discount_on=apply_additional_discount_on,
+				invoice_ref=invoice_ref,
 			)
 		else:
 			doc = build_sales_invoice_doc(
@@ -1543,6 +1567,10 @@ def create_draft_invoice(data):
 				tax_id=tax_id,
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
+				additional_discount_percentage=additional_discount_percentage,
+				additional_discount_amount=additional_discount_amount,
+				apply_additional_discount_on=apply_additional_discount_on,
+				invoice_ref=invoice_ref,
 			)
 
 			validate_required_salesperson(doc)
@@ -1950,6 +1978,10 @@ def _update_existing_draft_invoice(
 	tax_id=None,
 	enable_background_submission=False,
 	loyalty_redemption=None,
+	additional_discount_percentage=0.0,
+	additional_discount_amount=0.0,
+	apply_additional_discount_on="Grand Total",
+	invoice_ref=None,
 ):
 	rebuilt_doc = build_sales_invoice_doc(
 		customer,
@@ -1970,6 +2002,10 @@ def _update_existing_draft_invoice(
 		create_batch_and_serial_bundle=False,
 		enable_background_submission=enable_background_submission,
 		loyalty_redemption=loyalty_redemption,
+		additional_discount_percentage=additional_discount_percentage,
+		additional_discount_amount=additional_discount_amount,
+		apply_additional_discount_on=apply_additional_discount_on,
+		invoice_ref=invoice_ref,
 	)
 
 	invoice_doc.customer = rebuilt_doc.customer
@@ -3861,6 +3897,10 @@ def submit_draft_invoice(invoice_id, data=None):
 				tax_id,
 				enable_background_submission,
 				loyalty_redemption,
+				additional_discount_percentage,
+				additional_discount_amount,
+				apply_additional_discount_on,
+				invoice_ref,
 			) = parse_invoice_data(data)
 
 			rebuilt_doc = build_sales_invoice_doc(
@@ -3882,6 +3922,10 @@ def submit_draft_invoice(invoice_id, data=None):
 				create_batch_and_serial_bundle=False,
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
+				additional_discount_percentage=additional_discount_percentage,
+				additional_discount_amount=additional_discount_amount,
+				apply_additional_discount_on=apply_additional_discount_on,
+				invoice_ref=invoice_ref,
 			)
 
 			invoice_doc.customer = rebuilt_doc.customer
