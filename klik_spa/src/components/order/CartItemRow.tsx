@@ -472,7 +472,7 @@ export const CartItemRow = ({
               </p>
             </div>
 
-            <div className={`flex items-center border border-gray-200 dark:border-gray-600 rounded-full overflow-hidden ${isAZCoilItem ? 'opacity-50 pointer-events-none' : ''}`}>
+            <div className={`flex items-center border border-gray-200 dark:border-gray-600 rounded-full overflow-hidden ${isAZCoilItem ? 'bg-gray-100 dark:bg-gray-800 pointer-events-none' : ''}`}>
               <button
                 onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
                 disabled={isAZCoilItem}
@@ -500,7 +500,7 @@ export const CartItemRow = ({
                 }}
                 onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); } }}
                 onClick={(e) => (e.target as HTMLInputElement).select()}
-                className={`${isMobile ? "w-9" : "w-8"} text-center font-semibold text-gray-900 dark:text-white text-sm border-x border-gray-200 dark:border-gray-600 py-0.5 bg-transparent focus:outline-none focus:bg-gray-50 dark:focus:bg-gray-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
+                className={`${isMobile ? "w-9" : "w-8"} text-center font-semibold text-gray-900 dark:text-white disabled:opacity-100 disabled:text-gray-900 dark:disabled:text-white text-sm border-x border-gray-200 dark:border-gray-600 py-0.5 bg-transparent focus:outline-none focus:bg-gray-50 dark:focus:bg-gray-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
               />
               <button
                 onClick={() => {
@@ -869,20 +869,11 @@ export const CartItemRow = ({
               <></>
             )}
 
-              <div className="grid grid-cols-2 gap-3 my-3">
-                <button
-                  type="button"
-                  onClick={() => onDuplicateItem(item)}
-                  className="flex items-center justify-center gap-2 px-3 py-4 rounded-md border border-dashed border-beveren-400 dark:border-beveren-500 text-beveren-600 dark:text-beveren-400 bg-beveren-50 dark:bg-beveren-900/20 hover:bg-beveren-100 dark:hover:bg-beveren-900/40 transition-colors text-sm font-medium"
-                  title="Add another line for the same product with a different batch, serial or UOM"
-                >
-                  <Copy size={isMobile ? 15 : 13} />
-                  Duplicate Line
-                </button>
+              <div className="my-3">
                 <button
                   type="button"
                   onClick={() => setShowProductModal(true)}
-                  className="flex items-center justify-center gap-2 px-3 py-4 rounded-md border border-purple-300 dark:border-purple-700 bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors text-sm font-medium"
+                  className="w-full flex items-center justify-center gap-2 px-3 py-4 rounded-md border border-purple-300 dark:border-purple-700 bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors text-sm font-medium"
                 >
                   <Eye size={isMobile ? 15 : 13} />
                   View Full Details

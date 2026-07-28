@@ -229,12 +229,27 @@ export const useCartStore = create<CartState>()(
           .filter((cartItem) => (cartItem.item_code || cartItem.id) === incomingCode)
           .reduce((sum, cartItem) => sum + cartItem.quantity, 0);
 
+        const posDetails = usePOSProfileStore.getState().posDetails;
+        const azGroups = posDetails?.custom_az_coil_item_groups || [];
+        let groups: string[] = [];
+        if (typeof azGroups === 'string') {
+            groups = (azGroups as string).split(',').map((g: string) => g.trim().toLowerCase());
+        } else if (Array.isArray(azGroups)) {
+            groups = azGroups.map((g: any) => g.item_group?.toLowerCase()).filter(Boolean);
+        }
+        if (groups.length === 0) groups = ["zn"];
+        const isAZCoilItem = groups.includes((item as any).item_group?.toLowerCase() || "") || groups.includes(item.category?.toLowerCase() || "");
+
         if (hasFiniteAvailableStock(item) && item.available <= 0) {
           toast.error(`${item.name} is out of stock`);
           return;
         }
 
         if (existingItem) {
+          if (isAZCoilItem) {
+            toast.info(`Item already in cart. Expand it to adjust specifications.`);
+            return;
+          }
           if (hasFiniteAvailableStock(item) && totalMatchingQty >= item.available) {
             toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
             return;
@@ -264,16 +279,17 @@ export const useCartStore = create<CartState>()(
             )
           }));
         } else {
+          const initialQty = isAZCoilItem ? 0 : 1;
           const taxDetails = await fetchItemTaxDetails(
             incomingCode,
             customerId,
-            1,
+            initialQty || 1,
             item.uom,
           );
 
           const newItem = {
             ...item, 
-            quantity: 1,
+            quantity: initialQty,
             bundle_entries: [],
             item_tax_template: taxDetails.item_tax_template,
             item_tax_rate: taxDetails.item_tax_rate,
@@ -300,12 +316,27 @@ export const useCartStore = create<CartState>()(
           .filter((cartItem) => (cartItem.item_code || cartItem.id) === incomingCode)
           .reduce((sum, cartItem) => sum + cartItem.quantity, 0);
 
+        const posDetails = usePOSProfileStore.getState().posDetails;
+        const azGroups = posDetails?.custom_az_coil_item_groups || [];
+        let groups: string[] = [];
+        if (typeof azGroups === 'string') {
+            groups = (azGroups as string).split(',').map((g: string) => g.trim().toLowerCase());
+        } else if (Array.isArray(azGroups)) {
+            groups = azGroups.map((g: any) => g.item_group?.toLowerCase()).filter(Boolean);
+        }
+        if (groups.length === 0) groups = ["zn"];
+        const isAZCoilItem = groups.includes((item as any).item_group?.toLowerCase() || "") || groups.includes(item.category?.toLowerCase() || "");
+
         if (hasFiniteAvailableStock(item) && item.available < quantity) {
           toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
           return;
         }
 
         if (existingItem) {
+          if (isAZCoilItem) {
+            toast.info(`Item already in cart. Expand it to adjust specifications.`);
+            return;
+          }
           if (hasFiniteAvailableStock(item) && (totalMatchingQty + quantity) > item.available) {
             toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
             return;
@@ -335,16 +366,17 @@ export const useCartStore = create<CartState>()(
             )
           }));
         } else {
+          const initialQty = isAZCoilItem ? 0 : quantity;
           const taxDetails = await fetchItemTaxDetails(
             incomingCode,
             customerId,
-            quantity,
+            initialQty || 1,
             item.uom,
           );
 
           const newItem = {
             ...item, 
-            quantity,
+            quantity: initialQty,
             bundle_entries: [],
             item_tax_template: taxDetails.item_tax_template,
             item_tax_rate: taxDetails.item_tax_rate,
