@@ -467,7 +467,7 @@ export const CartItemRow = ({
           {/* Row 2: rate | qty pill | total */}
           <div className="flex items-center gap-2 mt-1.5 pl-4">
             <div className="text-right">
-              <p className="text-gray-500 dark:text-gray-400 capitalize font-medium text-xs whitespace-nowrap">
+              <p className="text-gray-900 dark:text-white font-semibold text-sm whitespace-nowrap">
                 {formatCurrencyWithSymbol(displayRateInclTax, currency_symbol)}
               </p>
             </div>

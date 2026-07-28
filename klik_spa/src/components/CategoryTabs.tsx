@@ -19,7 +19,7 @@ export default function CategoryTabs({
   const searchProducts = useProductStore((state) => state.searchProducts);
   const searchQuery = useProductStore((state) => state.searchQuery);
 
-  const isValidating = isLoading && !isSearching;
+  const isValidating = isLoading && !isSearching && itemGroups.length === 0;
 
   if (isValidating) {
     return (
