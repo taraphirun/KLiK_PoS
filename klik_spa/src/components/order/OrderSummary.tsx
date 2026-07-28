@@ -157,41 +157,7 @@ export default function OrderSummary({
     }
   }, [posDetails?.custom_sales_person_pin_required, ensureInitialized]);
 
-  useEffect(() => {
-    const handleDocumentClick = (event: MouseEvent) => {
-      setExpandedItems((prev) => {
-        if (prev.size === 0) return prev;
 
-        const target = event.target as HTMLElement | null;
-        if (!target) return prev;
-
-        const clickedRow = target.closest("[data-cart-item-id]") as HTMLElement | null;
-        const clickedItemId = clickedRow?.dataset.cartItemId;
-        const activeElement = document.activeElement as HTMLElement | null;
-        const activeRow = activeElement?.closest("[data-cart-item-id]") as HTMLElement | null;
-        const activeItemId = activeRow?.dataset.cartItemId;
-        const itemToKeepOpen =
-          (clickedItemId && prev.has(clickedItemId) && clickedItemId) ||
-          (activeItemId && prev.has(activeItemId) && activeItemId) ||
-          null;
-
-        if (!itemToKeepOpen) {
-          return new Set();
-        }
-
-        if (prev.size === 1) {
-          return prev;
-        }
-
-        return new Set([itemToKeepOpen]);
-      });
-    };
-
-    document.addEventListener("click", handleDocumentClick, true);
-    return () => {
-      document.removeEventListener("click", handleDocumentClick, true);
-    };
-  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
