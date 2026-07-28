@@ -4,6 +4,7 @@ import frappe
 from erpnext.setup.utils import get_exchange_rate
 from erpnext.accounts.party import get_party_details
 from frappe import _
+from contextlib import contextmanager
 
 from klik_pos.klik_pos.utils import get_current_pos_profile
 from klik_pos.api.loyalty import get_customer_loyalty_summary
@@ -269,7 +270,27 @@ def get_customer_info(customer_name: str):
 
         customer_name = urllib.parse.unquote(customer_name)
         pos_profile = get_current_pos_profile()
-        party_details = get_party_details(party=customer_name, party_type="Customer", pos_profile=pos_profile.name)  # This will raise if customer doesn't exist
+        
+        @contextmanager
+        def patch_get_default_contact():
+            import erpnext.accounts.party
+            original = erpnext.accounts.party.get_default_contact
+            def safe_get_default_contact(party_type, party):
+                try:
+                    return original(party_type, party)
+                except Exception as e:
+                    if "is_billing_contact" in str(e):
+                        return None
+                    raise
+            erpnext.accounts.party.get_default_contact = safe_get_default_contact
+            try:
+                yield
+            finally:
+                erpnext.accounts.party.get_default_contact = original
+
+        with patch_get_default_contact():
+            party_details = get_party_details(party=customer_name, party_type="Customer", pos_profile=pos_profile.name)  # This will raise if customer doesn't exist
+            
         # First try to find by customer_name
         customers = frappe.get_all(
             "Customer", filters={"customer_name": customer_name}, fields=["name"]
@@ -401,6 +422,13 @@ def create_or_update_customer(customer_data):
                 contact_doc = create_or_update_contact(
                     customer_doc.name, customer_name, email, phone
                 )
+                if contact_doc:
+                    frappe.db.set_value(
+                        "Customer",
+                        customer_doc.name,
+                        "customer_primary_contact",
+                        contact_doc.name,
+                    )
 
             # Create address for individual customers if address data is provided
             if address and any(
@@ -433,6 +461,13 @@ def create_or_update_customer(customer_data):
                     customer_doc.name,
                     "customer_primary_address",
                     addr_doc.name,
+                )
+            if contact_doc:
+                frappe.db.set_value(
+                    "Customer",
+                    customer_doc.name,
+                    "customer_primary_contact",
+                    contact_doc.name,
                 )
 
         return {

@@ -1,4 +1,5 @@
 import json
+from contextlib import contextmanager
 
 import erpnext
 import frappe
@@ -1776,7 +1777,27 @@ def build_sales_invoice_doc(
 	_upsert_delivery_charge_service_item(doc, pos_profile, delivery_charge)
 
 	doc.set_taxes()
-	doc.set_missing_values()
+	
+	@contextmanager
+	def patch_get_default_contact():
+		import erpnext.accounts.party
+		original = erpnext.accounts.party.get_default_contact
+		def safe_get_default_contact(party_type, party):
+			try:
+				return original(party_type, party)
+			except Exception as e:
+				if "is_billing_contact" in str(e):
+					return None
+				raise
+		erpnext.accounts.party.get_default_contact = safe_get_default_contact
+		try:
+			yield
+		finally:
+			erpnext.accounts.party.get_default_contact = original
+
+	with patch_get_default_contact():
+		doc.set_missing_values()
+		
 	doc.calculate_taxes_and_totals()
 	apply_loyalty_redemption(doc, loyalty_redemption)
 	if loyalty_redemption:
@@ -1873,7 +1894,27 @@ def _update_existing_draft_invoice(
 		_create_batch_and_serial_bundle(items, invoice_doc)
 
 	invoice_doc.set_taxes()
-	invoice_doc.set_missing_values()
+
+	@contextmanager
+	def patch_get_default_contact():
+		import erpnext.accounts.party
+		original = erpnext.accounts.party.get_default_contact
+		def safe_get_default_contact(party_type, party):
+			try:
+				return original(party_type, party)
+			except Exception as e:
+				if "is_billing_contact" in str(e):
+					return None
+				raise
+		erpnext.accounts.party.get_default_contact = safe_get_default_contact
+		try:
+			yield
+		finally:
+			erpnext.accounts.party.get_default_contact = original
+
+	with patch_get_default_contact():
+		invoice_doc.set_missing_values()
+		
 	invoice_doc.calculate_taxes_and_totals()
 
 	# Payments must be applied after the first totals pass, then totals are recalculated
@@ -3777,7 +3818,27 @@ def submit_draft_invoice(invoice_id, data=None):
 				_create_batch_and_serial_bundle(items, invoice_doc)
 
 			invoice_doc.set_taxes()
-			invoice_doc.set_missing_values()
+
+			@contextmanager
+			def patch_get_default_contact():
+				import erpnext.accounts.party
+				original = erpnext.accounts.party.get_default_contact
+				def safe_get_default_contact(party_type, party):
+					try:
+						return original(party_type, party)
+					except Exception as e:
+						if "is_billing_contact" in str(e):
+							return None
+						raise
+				erpnext.accounts.party.get_default_contact = safe_get_default_contact
+				try:
+					yield
+				finally:
+					erpnext.accounts.party.get_default_contact = original
+
+			with patch_get_default_contact():
+				invoice_doc.set_missing_values()
+				
 			invoice_doc.calculate_taxes_and_totals()
 
 			# Payments must be applied after the first totals pass, then totals are recalculated
