@@ -2972,7 +2972,7 @@
   },
   {
    "fieldname": "custom_az_coil_item_groups",
-   "fieldtype": "Table MultiSelect",
+   "fieldtype": "Table",
    "label": "AZ Coil Item Groups",
    "dt": "POS Profile",
    "insert_after": "custom_business_type",
