@@ -630,7 +630,8 @@ def get_sales_invoices(limit=100, start=0, search="", skip_opening_entry_filter=
 		select_fields = """name, posting_date, posting_time, owner, customer, customer_name,
 			base_grand_total, base_rounded_total, status, discount_amount,
 			total_taxes_and_charges, custom_pos_opening_entry, queue_status,
-			queue_error, queue_attempts, queue_last_attempt_at, pos_profile, currency, custom_is_printed"""
+			queue_error, queue_attempts, queue_last_attempt_at, pos_profile, currency, custom_is_printed,
+			outstanding_amount"""
 		if has_zatca_status:
 			select_fields += ", custom_zatca_submit_status"
 		if has_custom_is_held:
@@ -957,6 +958,7 @@ def validate_checkout_invoice(data):
 			tax_id,
 			enable_background_submission,
 			loyalty_redemption,
+			custom_invoice_ref,
 		) = parse_invoice_data(data)
 
 		preview_doc = build_sales_invoice_doc(
@@ -977,6 +979,7 @@ def validate_checkout_invoice(data):
 			create_batch_and_serial_bundle=False,
 			enable_background_submission=enable_background_submission,
 			loyalty_redemption=loyalty_redemption,
+			custom_invoice_ref=custom_invoice_ref,
 		)
 
 		validate_required_salesperson(preview_doc)
@@ -1195,6 +1198,7 @@ def queue_sales_invoice(data):
 			tax_id,
 			enable_background_submission,
 			loyalty_redemption,
+			custom_invoice_ref,
 		) = parse_invoice_data(data)
 
 		if not customer:
@@ -1220,6 +1224,7 @@ def queue_sales_invoice(data):
 			tax_id=tax_id,
 			enable_background_submission=enable_background_submission,
 			loyalty_redemption=loyalty_redemption,
+			custom_invoice_ref=custom_invoice_ref,
 		)
 
 		validate_required_salesperson(doc)
@@ -1228,6 +1233,8 @@ def queue_sales_invoice(data):
 		doc.base_paid_amount = paid_credit
 		doc.paid_amount = paid_credit
 		doc.outstanding_amount = max(flt(doc.grand_total) - paid_credit, 0)
+		if 0 < paid_credit < flt(doc.grand_total):
+			_set_checkbox_field_value(doc, "allow_partial_payment", 1)
 		doc.reserve_stock = 1
 		_apply_klik_invoice_flags(doc, is_held=False, is_submitted=False)
 
@@ -1424,6 +1431,7 @@ def create_draft_invoice(data):
 			tax_id,
 			enable_background_submission,
 			loyalty_redemption,
+			custom_invoice_ref,
 		) = parse_invoice_data(data)
 
 		if target_draft_invoice_id:
@@ -1453,6 +1461,7 @@ def create_draft_invoice(data):
 				tax_id=tax_id,
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
+				custom_invoice_ref=custom_invoice_ref,
 			)
 		else:
 			doc = build_sales_invoice_doc(
@@ -1473,6 +1482,7 @@ def create_draft_invoice(data):
 				tax_id=tax_id,
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
+				custom_invoice_ref=custom_invoice_ref,
 			)
 
 			validate_required_salesperson(doc)
@@ -1716,6 +1726,7 @@ def parse_invoice_data(data):
 	delivery_personnel = data.get("deliveryPersonnel")
 	salesperson = data.get("salesperson")
 	tax_id = data.get("tax_id")
+	custom_invoice_ref = data.get("customInvoiceRef") or data.get("custom_invoice_ref")
 
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
@@ -1737,6 +1748,7 @@ def parse_invoice_data(data):
 		tax_id,
 		enable_background_submission,
 		loyalty_redemption,
+		custom_invoice_ref,
 	)
 
 
@@ -1759,6 +1771,7 @@ def build_sales_invoice_doc(
 	create_batch_and_serial_bundle=True,
 	enable_background_submission=False,
 	loyalty_redemption=None,
+	custom_invoice_ref=None,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -1775,6 +1788,10 @@ def build_sales_invoice_doc(
 	# Set tax ID if provided
 	if tax_id:
 		doc.tax_id = tax_id
+
+	# Set custom invoice reference if provided
+	if custom_invoice_ref and hasattr(doc, "custom_invoice_ref"):
+		doc.custom_invoice_ref = custom_invoice_ref
 
 	# Set salesperson in sales team
 	if salesperson:
@@ -1827,9 +1844,8 @@ def build_sales_invoice_doc(
 	if create_batch_and_serial_bundle:
 		_create_batch_and_serial_bundle(items, doc)
 
-	# Add payment information
+	# Add payment information (is_pos already set by _set_pos_profile_fields)
 	if include_payments:
-		doc.is_pos = 1
 		_add_payment_entries(doc, mode_of_payment)
 		doc.calculate_taxes_and_totals()
 
@@ -1857,6 +1873,7 @@ def _update_existing_draft_invoice(
 	tax_id=None,
 	enable_background_submission=False,
 	loyalty_redemption=None,
+	custom_invoice_ref=None,
 ):
 	rebuilt_doc = build_sales_invoice_doc(
 		customer,
@@ -1877,6 +1894,7 @@ def _update_existing_draft_invoice(
 		create_batch_and_serial_bundle=False,
 		enable_background_submission=enable_background_submission,
 		loyalty_redemption=loyalty_redemption,
+		custom_invoice_ref=custom_invoice_ref,
 	)
 
 	invoice_doc.customer = rebuilt_doc.customer
@@ -1885,6 +1903,8 @@ def _update_existing_draft_invoice(
 	invoice_doc.enable_background_invoice_submission = rebuilt_doc.enable_background_invoice_submission
 	invoice_doc.custom_delivery_personnel = rebuilt_doc.custom_delivery_personnel
 	invoice_doc.tax_id = rebuilt_doc.tax_id
+	if custom_invoice_ref and hasattr(invoice_doc, "custom_invoice_ref"):
+		invoice_doc.custom_invoice_ref = custom_invoice_ref
 	invoice_doc.pos_profile = rebuilt_doc.pos_profile
 	invoice_doc.company = rebuilt_doc.company
 	invoice_doc.currency = rebuilt_doc.currency
@@ -2091,8 +2111,11 @@ def _set_pos_profile_fields(doc, pos_profile, customer, business_type, amount_pa
 	doc.warehouse = pos_profile.warehouse
 	doc.cost_center = pos_profile.cost_center
 
-	# Determine if this is a POS invoice
-	doc.is_pos = 1 if allow_partial_payment or flt(amount_paid or 0) > 0 else _determine_is_pos(customer, business_type)
+	# Transaction-based: payment collected → POS invoice; unpaid/credit → AR invoice
+	if flt(amount_paid or 0) > 0:
+		doc.is_pos = 1
+	else:
+		doc.is_pos = 0
 
 
 def _validate_and_autofetch_batch_and_serial(items, pos_profile):
@@ -2356,7 +2379,7 @@ def _check_customer_type_for_pos(customer):
 		_cached_customer_data[customer] = frappe.get_doc("Customer", customer)
 
 	customer_doc = _cached_customer_data[customer]
-	return 1 if customer_doc.customer_type == "Individual" else 0
+	return 1 if (customer_doc.customer_type or "").strip().lower() == "individual" else 0
 
 
 def _set_posting_fields(doc):
@@ -3765,6 +3788,7 @@ def submit_draft_invoice(invoice_id, data=None):
 				tax_id,
 				enable_background_submission,
 				loyalty_redemption,
+				custom_invoice_ref,
 			) = parse_invoice_data(data)
 
 			rebuilt_doc = build_sales_invoice_doc(
@@ -3786,6 +3810,7 @@ def submit_draft_invoice(invoice_id, data=None):
 				create_batch_and_serial_bundle=False,
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
+				custom_invoice_ref=custom_invoice_ref,
 			)
 
 			invoice_doc.customer = rebuilt_doc.customer
@@ -3794,6 +3819,8 @@ def submit_draft_invoice(invoice_id, data=None):
 			invoice_doc.enable_background_invoice_submission = rebuilt_doc.enable_background_invoice_submission
 			invoice_doc.custom_delivery_personnel = rebuilt_doc.custom_delivery_personnel
 			invoice_doc.tax_id = rebuilt_doc.tax_id
+			if custom_invoice_ref and hasattr(invoice_doc, "custom_invoice_ref"):
+				invoice_doc.custom_invoice_ref = custom_invoice_ref
 			invoice_doc.pos_profile = rebuilt_doc.pos_profile
 			invoice_doc.company = rebuilt_doc.company
 			invoice_doc.currency = rebuilt_doc.currency

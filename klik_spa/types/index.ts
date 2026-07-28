@@ -243,7 +243,7 @@ export interface SalesInvoice {
   }>
   amountPaid: number
   changeGiven: number
-  status: "Draft" | "Completed" | "Pending" | "Cancelled" | "Refunded" | "Paid" | "Unpaid" | "Overdue" | "Return"
+  status: "Draft" | "Completed" | "Pending" | "Cancelled" | "Refunded" | "Paid" | "Unpaid" | "Partly Paid" | "Overdue" | "Return" | "Credit Note Issued"
   custom_zatca_submit_status?: string
   custom_is_printed?: boolean | number
   refundAmount: number
@@ -261,6 +261,7 @@ export interface SalesInvoice {
   customer_email: string
   customer_mobile_no: string
   outstanding_amount: number
+  outstandingAmount?: number
   paid_amount: number
   grand_total: number
   rounding_adjustment: number

@@ -212,7 +212,7 @@ def _calculate_payment_reconciliation(opening_entry, data):
 	)
 	opening_balance_map = {row.mode_of_payment: row.opening_amount for row in opening_modes}
 
-	# Aggregate sales by payment mode
+	# Aggregate sales by payment mode, strictly scoped to this shift
 	sales_data = frappe.db.sql(
 		"""
 		SELECT sip.mode_of_payment,
@@ -220,15 +220,11 @@ def _calculate_payment_reconciliation(opening_entry, data):
 		       COUNT(DISTINCT si.name) as transactions
 		FROM `tabSales Invoice` si
 		JOIN `tabSales Invoice Payment` sip ON si.name = sip.parent
-		WHERE si.pos_profile = %s
+		WHERE si.custom_pos_opening_entry = %s
 		  AND si.docstatus = 1
-		  AND si.posting_date = %s
-		  AND si.posting_time >= %s
-		  AND si.custom_pos_opening_entry IS NOT NULL
-		  AND si.custom_pos_opening_entry != ''
 		GROUP BY sip.mode_of_payment
 		""",
-		(opening_entry.pos_profile, opening_date, opening_time),
+		(opening_entry_name,),
 		as_dict=True,
 	)
 	sales_map = {row.mode_of_payment: row.total_amount for row in sales_data}
@@ -276,21 +272,35 @@ def _calculate_payment_reconciliation(opening_entry, data):
 
 def _calculate_closing_entry_totals(opening_entry_name):
 	"""
-	Calculate total_quantity, net_total, and grand_total from all Sales Invoices
-	linked to the opening entry. This matches standard Frappe POS behavior.
+	Calculate total_quantity, net_total, grand_total, and total_credit_sales from all
+	Sales Invoices linked to the opening entry.
+
+	Uses two separate queries to avoid double-counting invoice-level totals when
+	joining to the item table (one invoice with N items would multiply net/grand_total N×).
 	"""
 	from frappe.utils import flt
 
 	try:
-		# Aggregate all totals in a single efficient SQL query
-		aggregated = frappe.db.sql(
+		# Query 1: Invoice-level totals — no JOIN to avoid multiplication
+		invoice_totals = frappe.db.sql(
 			"""
 			SELECT
-				COALESCE(SUM(si.net_total), 0) as net_total,
-				COALESCE(SUM(si.grand_total), 0) as grand_total,
-				COALESCE(SUM(sii.qty), 0) as total_quantity
-			FROM `tabSales Invoice` si
-			LEFT JOIN `tabSales Invoice Item` sii ON si.name = sii.parent
+				COALESCE(SUM(net_total), 0) as net_total,
+				COALESCE(SUM(grand_total), 0) as grand_total
+			FROM `tabSales Invoice`
+			WHERE custom_pos_opening_entry = %s
+			  AND docstatus = 1
+			""",
+			(opening_entry_name,),
+			as_dict=True,
+		)
+
+		# Query 2: Item quantity totals — JOIN only for qty aggregation
+		qty_totals = frappe.db.sql(
+			"""
+			SELECT COALESCE(SUM(sii.qty), 0) as total_quantity
+			FROM `tabSales Invoice Item` sii
+			INNER JOIN `tabSales Invoice` si ON si.name = sii.parent
 			WHERE si.custom_pos_opening_entry = %s
 			  AND si.docstatus = 1
 			""",
@@ -298,17 +308,29 @@ def _calculate_closing_entry_totals(opening_entry_name):
 			as_dict=True,
 		)
 
-		if aggregated and len(aggregated) > 0:
-			net_total = flt(aggregated[0].net_total or 0)
-			grand_total = flt(aggregated[0].grand_total or 0)
-			total_quantity = flt(aggregated[0].total_quantity or 0)
-		else:
-			net_total = grand_total = total_quantity = 0.0
+		# Query 3: Credit/unpaid sales outstanding
+		credit_totals = frappe.db.sql(
+			"""
+			SELECT COALESCE(SUM(outstanding_amount), 0) as total_credit_sales
+			FROM `tabSales Invoice`
+			WHERE custom_pos_opening_entry = %s
+			  AND docstatus = 1
+			  AND outstanding_amount > 0
+			""",
+			(opening_entry_name,),
+			as_dict=True,
+		)
+
+		net_total = flt(invoice_totals[0].net_total or 0) if invoice_totals else 0.0
+		grand_total = flt(invoice_totals[0].grand_total or 0) if invoice_totals else 0.0
+		total_quantity = flt(qty_totals[0].total_quantity or 0) if qty_totals else 0.0
+		total_credit_sales = flt(credit_totals[0].total_credit_sales or 0) if credit_totals else 0.0
 
 		return {
 			"total_quantity": total_quantity,
 			"net_total": net_total,
 			"grand_total": grand_total,
+			"total_credit_sales": total_credit_sales,
 		}
 	except Exception as e:
 		frappe.logger().error(f"Error calculating closing entry totals: {frappe.get_traceback()}")
@@ -316,8 +338,7 @@ def _calculate_closing_entry_totals(opening_entry_name):
 			message=f"Error calculating totals: {e!s}\n{traceback.format_exc()}",
 			title="Closing Entry Totals Calculation Error",
 		)
-		# Return zeros on error to avoid blocking closing entry creation
-		return {"total_quantity": 0.0, "net_total": 0.0, "grand_total": 0.0}
+		return {"total_quantity": 0.0, "net_total": 0.0, "grand_total": 0.0, "total_credit_sales": 0.0}
 
 
 def _populate_sales_invoices_to_closing_entry(closing_doc, opening_entry_name):
@@ -382,6 +403,11 @@ def _create_and_submit_closing_doc(opening_entry, data, payment_data, user):
 	doc.net_total = totals.get("net_total") or data.get("net_total") or 0.0
 	doc.total_amount = totals.get("grand_total") or data.get("total_amount") or 0.0
 	doc.grand_total = totals.get("grand_total") or data.get("total_amount") or 0.0
+
+	# Set credit/unpaid sales total if the custom field exists on the closing entry doctype
+	total_credit_sales = totals.get("total_credit_sales", 0.0)
+	if total_credit_sales and hasattr(doc, "custom_total_credit_sales"):
+		doc.custom_total_credit_sales = total_credit_sales
 
 	# Append payment reconciliation
 	for payment in payment_data:

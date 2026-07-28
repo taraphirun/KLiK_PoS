@@ -1158,13 +1158,16 @@ export default function PaymentDialog(props: PaymentDialogProps) {
     if (!isCreditSale) {
       const totalPaid = calculateTotalPayments(Object.values(paymentAmounts));
       const orderTotal = checkoutPayableTotal;
-      
+
       if (totalPaid < orderTotal) {
-        const remainingAmount = orderTotal - totalPaid;
-        toast.error(`Insufficient payment. Total: ${formatCurrencyWithSymbol(orderTotal, displayCurrencySymbol)}, Paid: ${formatCurrencyWithSymbol(totalPaid, displayCurrencySymbol)}, Remaining: ${formatCurrencyWithSymbol(remainingAmount, displayCurrencySymbol)}`);
-        return;
+        if (allowPartialPayments && totalPaid > 0) {
+          // Partial payment — proceed; outstanding balance becomes Accounts Receivable
+        } else {
+          const remainingAmount = orderTotal - totalPaid;
+          toast.error(`Insufficient payment. Total: ${formatCurrencyWithSymbol(orderTotal, displayCurrencySymbol)}, Paid: ${formatCurrencyWithSymbol(totalPaid, displayCurrencySymbol)}, Remaining: ${formatCurrencyWithSymbol(remainingAmount, displayCurrencySymbol)}`);
+          return;
+        }
       }
-      
     }
     if (isCreditSale && !dueDate) {
       toast.error("Please select a due date for this credit sale");
@@ -1176,7 +1179,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
         toast.error("Please enter payment amounts");
         return;
       }
-      if (outstandingAmount > 0) {
+      if (outstandingAmount > 0 && !(allowPartialPayments && totalPaidAmount > 0)) {
         toast.error("Please complete the payment before proceeding");
         return;
       }
@@ -1400,7 +1403,10 @@ export default function PaymentDialog(props: PaymentDialogProps) {
   const isActionButtonDisabled = () => {
     if (invoiceSubmitted || isProcessingPayment) return true;
     if (isCreditSale && !dueDate) return true;
-    if (isB2C && !isCreditSale) return outstandingAmount > 0;
+    if (isB2C && !isCreditSale) {
+      if (allowPartialPayments && totalPaidAmount > 0) return false;
+      return outstandingAmount > 0;
+    }
     return false;
   };
 

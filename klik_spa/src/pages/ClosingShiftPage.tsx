@@ -229,6 +229,18 @@ export default function ClosingShiftPage() {
   const total = Object.values(paymentStats).reduce((sum, stat) => sum + stat.amount, 0);
   const hasPaymentStats = Object.keys(paymentStats).length > 0;
 
+  const totalCreditSales = useMemo(() => {
+    return filteredInvoices
+      .filter(inv => inv.status === "Unpaid" || inv.status === "Partly Paid")
+      .reduce((sum, inv) => sum + (inv.outstandingAmount || inv.outstanding_amount || 0), 0);
+  }, [filteredInvoices]);
+
+  const totalSales = useMemo(() => {
+    return filteredInvoices
+      .filter(inv => inv.status !== "Draft" && inv.status !== "Cancelled")
+      .reduce((sum, inv) => sum + (inv.totalAmount || 0), 0);
+  }, [filteredInvoices]);
+
   // Loading state
   if (isLoading || modesLoading) {
     return (
@@ -682,6 +694,24 @@ export default function ClosingShiftPage() {
               </div>
 
               <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
+                {/* Shift Sales Summary */}
+                <div className="grid grid-cols-2 gap-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <div>
+                    <div className="text-xs text-blue-600 dark:text-blue-400 font-medium">Total Sales</div>
+                    <div className="text-lg font-bold text-blue-900 dark:text-blue-100">
+                      {formatCurrencyWithSymbol(totalSales, posDetails?.currency || 'USD')}
+                    </div>
+                  </div>
+                  {totalCreditSales > 0 && (
+                    <div>
+                      <div className="text-xs text-orange-600 dark:text-orange-400 font-medium">Credit / Unpaid</div>
+                      <div className="text-lg font-bold text-orange-700 dark:text-orange-300">
+                        {formatCurrencyWithSymbol(totalCreditSales, posDetails?.currency || 'USD')}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {!hasPaymentStats && (
                   <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-200">
                     No payment modes were found for this session. Check that the POS Opening Entry has opening balance rows and that the POS Profile has payment methods configured.
@@ -1047,6 +1077,24 @@ export default function ClosingShiftPage() {
               </div>
 
               <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
+                {/* Shift Sales Summary */}
+                <div className="grid grid-cols-2 gap-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                  <div>
+                    <div className="text-xs text-blue-600 dark:text-blue-400 font-medium">Total Sales</div>
+                    <div className="text-lg font-bold text-blue-900 dark:text-blue-100">
+                      {formatCurrencyWithSymbol(totalSales, posDetails?.currency || 'USD')}
+                    </div>
+                  </div>
+                  {totalCreditSales > 0 && (
+                    <div>
+                      <div className="text-xs text-orange-600 dark:text-orange-400 font-medium">Credit / Unpaid</div>
+                      <div className="text-lg font-bold text-orange-700 dark:text-orange-300">
+                        {formatCurrencyWithSymbol(totalCreditSales, posDetails?.currency || 'USD')}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {!hasPaymentStats && (
                   <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-sm text-yellow-800 dark:border-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-200">
                     No payment modes were found for this session. Check that the POS Opening Entry has opening balance rows and that the POS Profile has payment methods configured.
