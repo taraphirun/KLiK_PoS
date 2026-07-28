@@ -13,7 +13,7 @@ import {
   Loader2,
   MessageCircle,
 } from "lucide-react";
-import { type Customer } from "../../types/customer";
+import { type Customer } from "../types/customer";
 
 // Extended customer type for form data
 type ExtendedCustomer = Customer & {
@@ -22,9 +22,9 @@ type ExtendedCustomer = Customer & {
     buildingNumber?: string;
   };
 };
-import { useCustomerActions, type TelegramContact } from "../../services/customerService";
+import { useCustomerActions, type TelegramContact } from "../services/customerService";
 import { toast } from "react-toastify";
-import { usePOSProfileStore } from "../../stores/posProfileStore";
+import { usePOSDetails } from "../hooks/usePOSProfile";
 import PhoneInput from "react-phone-number-input";
 import "react-phone-number-input/style.css";
 import countryList from "react-select-country-list";
@@ -50,7 +50,7 @@ export default function AddCustomerModal({
   const isEditing = !!customer;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const { posDetails } = usePOSProfileStore();
+  const { posDetails } = usePOSDetails();
 
   const countryOptions: CountryOption[] = countryList().getData();
 

@@ -1,4 +1,4 @@
-import { X, Printer, MailPlus, MessageCirclePlus, MessageSquarePlus, Eye, Loader2 } from "lucide-react";
+import { X, Printer, MailPlus, MessageCirclePlus, MessageSquarePlus, Eye, Loader2, Send } from "lucide-react";
 import { handlePrintInvoice } from "../../utils/printHandler";
 
 interface PaymentHeaderProps {
@@ -71,6 +71,13 @@ export default function PaymentHeader({
             style={{ display: posDetails?.custom_enable_sms ? "block" : "none" }}
           >
             <MessageSquarePlus size={20} />
+          </button>
+          <button
+            className={`p-2 rounded-lg ${sharingMode === "telegram" ? "bg-sky-100 text-sky-700" : "text-sky-600 hover:bg-sky-100"} dark:text-sky-400 dark:hover:bg-sky-900`}
+            title="Telegram"
+            onClick={() => setSharingMode(sharingMode === "telegram" ? null : "telegram")}
+          >
+            <Send size={20} />
           </button>
           <button
             className="p-2 text-purple-600 hover:bg-purple-100 dark:text-purple-400 dark:hover:bg-purple-900 rounded-lg"
