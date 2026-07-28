@@ -1930,7 +1930,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                     </p>
                   </div>
                 )}
-                <TaxSection
+                {/* <TaxSection
                   selectedCustomer={selectedCustomer}
                   invoiceSubmitted={invoiceSubmitted}
                   isProcessingPayment={isProcessingPayment}
@@ -1941,7 +1941,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                   backendTaxPreview={backendTaxPreview}
                   isTaxPreviewLoading={isTaxPreviewLoading}
                   taxPreviewError={taxPreviewError}
-                />
+                /> */}
 
                 <TotalsSection
                   calculations={calculations}
@@ -2154,7 +2154,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                   </div>
                 )}
 
-                <TaxSection
+                {/* <TaxSection
                   selectedCustomer={selectedCustomer}
                   invoiceSubmitted={invoiceSubmitted}
                   isProcessingPayment={isProcessingPayment}
@@ -2165,7 +2165,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                   backendTaxPreview={backendTaxPreview}
                   isTaxPreviewLoading={isTaxPreviewLoading}
                   taxPreviewError={taxPreviewError}
-                />
+                /> */}
 
                 <SalesPersonSection
                   requiresSalespersonPin={requiresSalespersonPin}

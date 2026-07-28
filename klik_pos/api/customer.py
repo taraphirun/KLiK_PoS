@@ -271,22 +271,6 @@ def get_customer_info(customer_name: str):
         customer_name = urllib.parse.unquote(customer_name)
         pos_profile = get_current_pos_profile()
         
-        @contextmanager
-        def patch_get_default_contact():
-            import erpnext.accounts.party
-            original = erpnext.accounts.party.get_default_contact
-            def safe_get_default_contact(party_type, party):
-                try:
-                    return original(party_type, party)
-                except Exception as e:
-                    if "is_billing_contact" in str(e):
-                        return None
-                    raise
-            erpnext.accounts.party.get_default_contact = safe_get_default_contact
-            try:
-                yield
-            finally:
-                erpnext.accounts.party.get_default_contact = original
 
         with patch_get_default_contact():
             party_details = get_party_details(party=customer_name, party_type="Customer", pos_profile=pos_profile.name)  # This will raise if customer doesn't exist

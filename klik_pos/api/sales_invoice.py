@@ -9,6 +9,20 @@ from frappe import _
 from frappe.exceptions import ValidationError
 from frappe.utils import cint, flt, nowdate
 
+
+import erpnext.accounts.party
+_original_get_default_contact = erpnext.accounts.party.get_default_contact
+
+def _safe_get_default_contact(party_type, party):
+	try:
+		if _original_get_default_contact:
+			return _original_get_default_contact(party_type, party)
+	except Exception as e:
+		if "is_billing_contact" in str(e):
+			return None
+		raise
+erpnext.accounts.party.get_default_contact = _safe_get_default_contact
+
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
 from .item.item_price import get_price_list_with_customer_priority
@@ -1778,26 +1792,8 @@ def build_sales_invoice_doc(
 
 	doc.set_taxes()
 	
-	@contextmanager
-	def patch_get_default_contact():
-		import erpnext.accounts.party
-		original = erpnext.accounts.party.get_default_contact
-		def safe_get_default_contact(party_type, party):
-			try:
-				return original(party_type, party)
-			except Exception as e:
-				if "is_billing_contact" in str(e):
-					return None
-				raise
-		erpnext.accounts.party.get_default_contact = safe_get_default_contact
-		try:
-			yield
-		finally:
-			erpnext.accounts.party.get_default_contact = original
 
-	with patch_get_default_contact():
-		doc.set_missing_values()
-		
+	doc.set_missing_values()
 	doc.calculate_taxes_and_totals()
 	apply_loyalty_redemption(doc, loyalty_redemption)
 	if loyalty_redemption:
@@ -1895,26 +1891,8 @@ def _update_existing_draft_invoice(
 
 	invoice_doc.set_taxes()
 
-	@contextmanager
-	def patch_get_default_contact():
-		import erpnext.accounts.party
-		original = erpnext.accounts.party.get_default_contact
-		def safe_get_default_contact(party_type, party):
-			try:
-				return original(party_type, party)
-			except Exception as e:
-				if "is_billing_contact" in str(e):
-					return None
-				raise
-		erpnext.accounts.party.get_default_contact = safe_get_default_contact
-		try:
-			yield
-		finally:
-			erpnext.accounts.party.get_default_contact = original
 
-	with patch_get_default_contact():
-		invoice_doc.set_missing_values()
-		
+	invoice_doc.set_missing_values()
 	invoice_doc.calculate_taxes_and_totals()
 
 	# Payments must be applied after the first totals pass, then totals are recalculated
@@ -3819,26 +3797,8 @@ def submit_draft_invoice(invoice_id, data=None):
 
 			invoice_doc.set_taxes()
 
-			@contextmanager
-			def patch_get_default_contact():
-				import erpnext.accounts.party
-				original = erpnext.accounts.party.get_default_contact
-				def safe_get_default_contact(party_type, party):
-					try:
-						return original(party_type, party)
-					except Exception as e:
-						if "is_billing_contact" in str(e):
-							return None
-						raise
-				erpnext.accounts.party.get_default_contact = safe_get_default_contact
-				try:
-					yield
-				finally:
-					erpnext.accounts.party.get_default_contact = original
 
-			with patch_get_default_contact():
-				invoice_doc.set_missing_values()
-				
+			invoice_doc.set_missing_values()
 			invoice_doc.calculate_taxes_and_totals()
 
 			# Payments must be applied after the first totals pass, then totals are recalculated
