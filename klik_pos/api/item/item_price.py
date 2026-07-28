@@ -512,3 +512,143 @@ def get_price_list_with_customer_priority(customer=None):
             "Error getting price list with customer priority",
         )
         return None
+
+
+@frappe.whitelist(allow_guest=True)
+def get_items_prices_for_customer(item_codes: str, customer: str | None = None):
+	"""
+	Get prices for multiple items based on customer's price list priority.
+	Returns a dict mapping item_code to price info.
+
+	Priority for each item:
+	1. Customer's default_price_list (if item has price there)
+	2. Customer Group's default_price_list (if item has price there)
+	3. POS Profile's selling_price_list (fallback - always use this if no special price)
+	"""
+	try:
+		item_codes_list = [code.strip() for code in item_codes.split(",") if code.strip()]
+
+		if not item_codes_list:
+			return {}
+
+		# Get the customer-specific price list
+		customer_price_list = get_price_list_with_customer_priority(customer)
+
+		# Get the default POS price list as fallback
+		pos_doc = get_current_pos_profile()
+		default_price_list = getattr(pos_doc, "selling_price_list", None)
+
+		# Get default currency
+		default_currency = (
+			frappe.get_value(
+				"Company",
+				frappe.defaults.get_user_default("Company"),
+				"default_currency",
+			)
+			or "USD"
+		)
+		default_symbol = frappe.db.get_value("Currency", default_currency, "symbol") or default_currency
+
+		price_updates = {}
+
+		for item_code in item_codes_list:
+			try:
+				# Get stock UOM for this item
+				stock_uom = frappe.get_cached_value("Item", item_code, "stock_uom") or "Nos"
+
+				price_found = None
+				price_currency = default_currency
+				price_symbol = default_symbol
+
+				# Helper function to get price from a price list
+				def get_price_from_list(price_list_name, with_uom=True):
+					"""Try to get price from a price list, optionally filtering by UOM."""
+					if not price_list_name:
+						return None
+
+					filters = {
+						"item_code": item_code,
+						"price_list": price_list_name,
+						"selling": 1,
+					}
+					if with_uom:
+						filters["uom"] = stock_uom
+
+					price_doc = frappe.db.get_value(
+						"Item Price",
+						filters,
+						["price_list_rate", "currency"],
+						as_dict=True,
+					)
+
+					if price_doc and price_doc.price_list_rate:
+						return price_doc
+					return None
+
+				# 1. Try customer's price list with UOM
+				if customer_price_list:
+					price_doc = get_price_from_list(customer_price_list, with_uom=True)
+					if not price_doc:
+						# Try without UOM filter
+						price_doc = get_price_from_list(customer_price_list, with_uom=False)
+
+					if price_doc:
+						price_found = price_doc.price_list_rate
+						price_currency = price_doc.currency or default_currency
+						price_symbol = frappe.db.get_value("Currency", price_currency, "symbol") or price_currency
+
+				# 2. Fall back to default price list
+				if price_found is None and default_price_list:
+					price_doc = get_price_from_list(default_price_list, with_uom=True)
+					if not price_doc:
+						# Try without UOM filter
+						price_doc = get_price_from_list(default_price_list, with_uom=False)
+
+					if price_doc:
+						price_found = price_doc.price_list_rate
+						price_currency = price_doc.currency or default_currency
+						price_symbol = frappe.db.get_value("Currency", price_currency, "symbol") or price_currency
+
+				# 3. Try any selling price for this item (last resort before 0)
+				if price_found is None:
+					any_price_doc = frappe.db.get_value(
+						"Item Price",
+						{
+							"item_code": item_code,
+							"selling": 1,
+						},
+						["price_list_rate", "currency"],
+						as_dict=True,
+						order_by="modified desc",
+					)
+
+					if any_price_doc and any_price_doc.price_list_rate:
+						price_found = any_price_doc.price_list_rate
+						price_currency = any_price_doc.currency or default_currency
+						price_symbol = frappe.db.get_value("Currency", price_currency, "symbol") or price_currency
+
+				# Use 0 as last resort (better than valuation rate for display)
+				if price_found is None:
+					price_found = 0
+
+				price_updates[item_code] = {
+					"price": price_found,
+					"currency": price_currency,
+					"currency_symbol": price_symbol,
+				}
+			except Exception:
+				# If individual item fails, use default values
+				price_updates[item_code] = {
+					"price": 0,
+					"currency": default_currency,
+					"currency_symbol": default_symbol,
+				}
+
+		return {
+			"success": True,
+			"prices": price_updates,
+			"price_list_used": customer_price_list,
+		}
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), f"Get Items Prices For Customer Error for {item_codes}")
+		return {"success": False, "prices": {}, "price_list_used": None}

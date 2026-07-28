@@ -300,3 +300,104 @@ export async function sendInvoiceWhatsApp(data: {
 
   return result.message;
 }
+
+// ============ TELEGRAM FUNCTIONS ============
+
+interface TelegramContactInfo {
+  telegram_contact_id: string;
+  telegram_display_name: string;
+}
+
+interface TelegramEnabledStatus {
+  enabled: boolean;
+  has_settings: boolean;
+  has_authenticated_user: boolean;
+  authenticated_user?: string;
+  error?: string;
+}
+
+// Check if Telegram integration is enabled
+export async function checkTelegramEnabled(): Promise<TelegramEnabledStatus> {
+  const csrfToken = window.csrf_token;
+
+  try {
+    const response = await fetch('/api/method/erpnext_telegram_integration.erpnext_telegram_integration.api.check_telegram_enabled', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Frappe-CSRF-Token': csrfToken,
+      },
+      credentials: 'include',
+    });
+
+    const result = await response.json();
+    return result.message || { enabled: false, has_settings: false, has_authenticated_user: false };
+  } catch (error) {
+    console.error("Error checking Telegram enabled:", error);
+    return { enabled: false, has_settings: false, has_authenticated_user: false };
+  }
+}
+
+// Get Telegram contact info for a customer
+export async function getTelegramContactInfo(customerName: string): Promise<TelegramContactInfo | null> {
+  const csrfToken = window.csrf_token;
+
+  try {
+    const response = await fetch(`/api/method/erpnext_telegram_integration.erpnext_telegram_integration.api.get_telegram_contact_info?customer_name=${encodeURIComponent(customerName)}`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Frappe-CSRF-Token': csrfToken,
+      },
+      credentials: 'include',
+    });
+
+    const result = await response.json();
+
+    if (result.message && result.message.telegram_contact_id) {
+      return result.message;
+    }
+    return null;
+  } catch (error) {
+    console.error("Error getting Telegram contact info:", error);
+    return null;
+  }
+}
+
+// Send invoice via Telegram
+export async function sendInvoiceTelegram(data: {
+  customer_name: string;
+  invoice_name: string;
+  message?: string;
+  attach_file?: boolean;
+  attachment_format?: 'PDF' | 'Image' | null;  // null = use user's setting
+}): Promise<{ status: string; message: string }> {
+  const csrfToken = window.csrf_token;
+
+  const response = await fetch('/api/method/erpnext_telegram_integration.erpnext_telegram_integration.api.send_invoice_telegram', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Frappe-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify({
+      customer_name: data.customer_name,
+      invoice_name: data.invoice_name,
+      message: data.message,
+      attach_file: data.attach_file !== false ? 1 : 0,
+      attachment_format: data.attachment_format || null  // null = use user's setting
+    }),
+    credentials: 'include',
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.message || result.message.status !== "success") {
+    const serverMsg = result.message?.message ||
+      (result._server_messages ? JSON.parse(result._server_messages)[0] : 'Failed to send invoice via Telegram');
+    throw new Error(serverMsg);
+  }
+
+  return result.message;
+}
+

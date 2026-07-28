@@ -1113,6 +1113,126 @@ def _get_address_and_customer_info(invoice):
 	}
 
 
+def check_customer_credit_limit(customer, new_invoice_amount, company=None):
+	"""
+	Check if creating a new invoice would exceed the customer's credit limit.
+
+	Returns:
+		dict: {
+			"allowed": True/False,
+			"credit_limit": float,
+			"current_outstanding": float,
+			"new_total": float,
+			"exceeded_by": float (only if not allowed)
+		}
+	"""
+	if not company:
+		pos_profile = get_current_pos_profile()
+		company = pos_profile.company if pos_profile else frappe.defaults.get_global_default("company")
+
+	# Get customer's credit limit
+	customer_doc = frappe.get_doc("Customer", customer)
+	credit_limit = 0
+
+	# Check customer-level credit limit first
+	if customer_doc.credit_limits:
+		for limit in customer_doc.credit_limits:
+			if limit.company == company:
+				credit_limit = flt(limit.credit_limit)
+				break
+
+	# If no customer-level limit, check customer group credit limit
+	if not credit_limit and customer_doc.customer_group:
+		customer_group_doc = frappe.get_doc("Customer Group", customer_doc.customer_group)
+		if customer_group_doc.credit_limits:
+			for limit in customer_group_doc.credit_limits:
+				if limit.company == company:
+					credit_limit = flt(limit.credit_limit)
+					break
+
+	# If no credit limit is set, allow the transaction
+	if not credit_limit:
+		return {
+			"allowed": True,
+			"credit_limit": 0,
+			"current_outstanding": 0,
+			"new_total": flt(new_invoice_amount),
+			"message": "No credit limit set for this customer",
+		}
+
+	# Get current outstanding amount for the customer
+	current_outstanding = flt(
+		frappe.db.sql(
+			"""
+			SELECT SUM(outstanding_amount)
+			FROM `tabSales Invoice`
+			WHERE customer = %s
+			AND company = %s
+			AND docstatus = 1
+			AND outstanding_amount > 0
+		""",
+			(customer, company),
+		)[0][0]
+		or 0
+	)
+
+	new_total = current_outstanding + flt(new_invoice_amount)
+
+	if new_total > credit_limit:
+		return {
+			"allowed": False,
+			"credit_limit": credit_limit,
+			"current_outstanding": current_outstanding,
+			"new_total": new_total,
+			"exceeded_by": new_total - credit_limit,
+			"message": f"Credit limit exceeded. Limit: {credit_limit}, Current Outstanding: {current_outstanding}, New Invoice: {new_invoice_amount}, Total: {new_total}",
+		}
+
+	return {
+		"allowed": True,
+		"credit_limit": credit_limit,
+		"current_outstanding": current_outstanding,
+		"new_total": new_total,
+	}
+
+
+@frappe.whitelist()
+def validate_before_submit(data):
+	"""
+	Validate invoice data before submission.
+	Returns validation results without creating any document.
+	"""
+	try:
+		if isinstance(data, str):
+			data = json.loads(data)
+
+		customer = data.get("customer", {}).get("id")
+		grand_total = flt(data.get("grandTotal", 0))
+
+		if not customer:
+			return {"success": False, "message": "Customer is required"}
+
+		# Check credit limit using outstanding amount
+		credit_check = check_customer_credit_limit(customer, grand_total)
+
+		if not credit_check["allowed"]:
+			return {
+				"success": False,
+				"error_type": "CREDIT_LIMIT_EXCEEDED",
+				"message": credit_check["message"],
+				"credit_limit": credit_check["credit_limit"],
+				"current_outstanding": credit_check["current_outstanding"],
+				"new_total": credit_check["new_total"],
+				"exceeded_by": credit_check["exceeded_by"],
+			}
+
+		return {"success": True, "message": "Validation passed"}
+
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "Validation Error")
+		return {"success": False, "message": str(e)}
+
+
 @frappe.whitelist()
 def create_and_submit_invoice(data):
 	return queue_sales_invoice(data)
@@ -1667,6 +1787,14 @@ def parse_invoice_data(data):
 	salesperson = data.get("salesperson")
 	tax_id = data.get("tax_id")
 
+	# Additional discount fields
+	additional_discount_percentage = flt(data.get("additionalDiscountPercentage") or data.get("additional_discount_percentage") or 0)
+	additional_discount_amount = flt(data.get("additionalDiscountAmount") or data.get("additional_discount_amount") or 0)
+	apply_additional_discount_on = data.get("applyAdditionalDiscountOn") or data.get("apply_additional_discount_on") or "Grand Total"
+
+	# Invoice reference (hardcopy invoice number)
+	invoice_ref = data.get("invoiceRef") or data.get("invoice_ref") or None
+
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
 
@@ -1687,6 +1815,10 @@ def parse_invoice_data(data):
 		tax_id,
 		enable_background_submission,
 		loyalty_redemption,
+		additional_discount_percentage,
+		additional_discount_amount,
+		apply_additional_discount_on,
+		invoice_ref,
 	)
 
 
@@ -1709,6 +1841,10 @@ def build_sales_invoice_doc(
 	create_batch_and_serial_bundle=True,
 	enable_background_submission=False,
 	loyalty_redemption=None,
+	additional_discount_percentage=0.0,
+	additional_discount_amount=0.0,
+	apply_additional_discount_on="Grand Total",
+	invoice_ref=None,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -1717,6 +1853,10 @@ def build_sales_invoice_doc(
 	doc.due_date = due_date or frappe.utils.nowdate()
 	doc.custom_delivery_date = frappe.utils.nowdate()
 	doc.enable_background_invoice_submission = 1 if enable_background_submission else 0
+
+	# Set invoice reference from hardcopy invoice
+	if invoice_ref:
+		doc.custom_invoice_ref = invoice_ref
 
 	# Set delivery personnel if provided
 	if delivery_personnel:
@@ -1750,6 +1890,11 @@ def build_sales_invoice_doc(
 
 	# Handle round-off
 	_set_roundoff_fields(doc, roundoff_amount)
+
+	# Handle additional discount
+	_set_additional_discount_fields(
+		doc, additional_discount_percentage, additional_discount_amount, apply_additional_discount_on
+	)
 
 	# Set taxes and charges
 	_set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile)
@@ -2322,6 +2467,27 @@ def _set_pos_opening_entry(doc):
 def _set_roundoff_fields(doc, roundoff_amount):
 	"""Legacy no-op: ERPNext handles invoice rounding natively."""
 	return
+
+def _set_additional_discount_fields(
+	doc, additional_discount_percentage, additional_discount_amount, apply_additional_discount_on
+):
+	"""Set additional discount fields on the Sales Invoice document.
+
+	ERPNext Sales Invoice has these standard fields:
+	- apply_discount_on: 'Grand Total' or 'Net Total'
+	- additional_discount_percentage: Percentage discount to apply
+	- discount_amount: Fixed discount amount (calculated from percentage or set directly)
+	"""
+	# Only set if there's a discount to apply
+	if additional_discount_percentage > 0 or additional_discount_amount > 0:
+		doc.apply_discount_on = apply_additional_discount_on
+
+		if additional_discount_percentage > 0:
+			# Use percentage - ERPNext will calculate the amount automatically
+			doc.additional_discount_percentage = flt(additional_discount_percentage)
+		else:
+			# Use fixed amount
+			doc.discount_amount = flt(additional_discount_amount)
 
 
 def _set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile):

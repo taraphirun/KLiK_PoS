@@ -401,5 +401,54 @@ export default function SharingInterface({
     );
   }
 
+  if (sharingMode === "telegram") {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize">Share via Telegram</h3>
+          <button onClick={() => setSharingMode(null)} className="text-gray-500 hover:text-gray-700">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Customer Name</label>
+            <input type="text" value={sharingData.name} onChange={(e) => setSharingData((prev: any) => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="Customer name" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Telegram Message Preview</label>
+            <div className="bg-sky-50 dark:bg-sky-900/20 rounded-lg p-4 border border-sky-200">
+              <div className="text-sm text-gray-900 dark:text-gray-100">
+                <p>Hello {sharingData.name || "Customer"}!</p>
+                <p className="mt-1">Please find attached the Sales Invoice {invoiceData?.name || ""}.</p>
+                <p className="mt-1">Invoice Total: {formatCurrencyWithSymbol(calculations.grandTotal, displayCurrencySymbol)}</p>
+                <p className="mt-1">Thank you!</p>
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              try {
+                const { sendInvoiceTelegram } = await import("../../services/useSharing");
+                await sendInvoiceTelegram({
+                  customer_name: sharingData.name,
+                  invoice_name: invoiceData?.name || "",
+                  attach_file: true
+                });
+                toast.success("Sent via Telegram successfully!");
+                setSharingMode(null);
+              } catch (error: any) {
+                toast.error(error.message || "Failed to send Telegram message");
+              }
+            }}
+            className="w-full py-3 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-gray-300 flex items-center justify-center gap-2"
+          >
+            Send Telegram
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return null;
 }
