@@ -1,0 +1,210 @@
+# Comprehensive Implementation Plan - Porting Custom Features to `upstream/version-16`
+
+This document details the exact technical changes (functions, state variables, API endpoints, and UI elements) required to port all custom features from `main` to a fresh `upstream/version-16` branch.
+
+---
+
+## Preparation
+
+- Check out a new branch `version-16.1` from `upstream/version-16` before applying the following modules.
+
+---
+
+## Top Priority Core Features Summary
+
+1. **Module 9 [TOP CORE 1]**: AZ Coil Sheet Order Custom Input inside `CartItemRow.tsx` (Option B formula, disabled quantity, Khmer text).
+2. **Module 6 [TOP CORE 2]**: Transaction-Based Invoice Payment Processing (Unpaid, Partial Paid with `allow_partial_payment`, Fully Paid) & POS Closing Shift Reconciliation.
+
+---
+
+## Detailed Module Specifications
+
+### Module 9 [TOP CORE 1]: AZ Coil Sheet Order Custom Input
+
+#### 1. Backend Custom Fields Fixtures
+- **[MODIFY] [klik_pos/klik_pos/custom/pos_profile.json](file:///home/phirun/dev/KLiK_PoS/klik_pos/klik_pos/custom/pos_profile.json)**:
+  - Add `custom_az_coil_item_groups` field (`Small Text` / `Data`) to configure item groups that trigger AZ Coil sheet inputs (e.g. `zn`).
+- **[MODIFY] [klik_pos/klik_pos/custom/sales_invoice.json](file:///home/phirun/dev/KLiK_PoS/klik_pos/klik_pos/custom/sales_invoice.json)**:
+  - Add `custom_ds_roofing_spec` (`JSON`) and `custom_description` (`Text`) fields to `Sales Invoice Item` doctype.
+- **[MODIFY] [klik_pos/install.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/install.py)**:
+  - Ensure `after_install()` registers `custom_ds_roofing_spec` and `custom_description` custom fields.
+
+#### 2. Backend Sales Invoice API
+- **[MODIFY] [klik_pos/api/sales_invoice.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/sales_invoice.py)**:
+  - Implement `_add_roofing_spec_to_item(item_data, item)`: JSON serializes `custom_ds_roofing_spec` when writing invoice items.
+  - Implement `_add_description_to_item(item_data, item)`: Sets line item `description` and `custom_description`.
+  - Update `_get_invoice_items_with_returns()`: Selects and parses `custom_ds_roofing_spec` and `custom_description`.
+
+#### 3. Frontend Types & Cart Item Specs
+- **[MODIFY] [klik_spa/types/index.ts](file:///home/phirun/dev/KLiK_PoS/klik_spa/types/index.ts)**:
+  - Add `custom_az_coil_item_groups?: string` to `POSProfile` interface.
+  - Add `custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number }>` to `CartItem` & `MenuItem` interfaces.
+  - Add `custom_description?: string` to `CartItem` interface.
+
+#### 4. Cart Item Row Input & Quantity Control
+- **[MODIFY] [klik_spa/src/components/order/CartItemRow.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/order/CartItemRow.tsx)**:
+  - **Item Group Detection**: Check if `item.item_group` or `item.category` is in `posDetails?.custom_az_coil_item_groups` (or fallback `"zn"`).
+  - **Quantity Control**: Set standard `QuantityInput` to **disabled / read-only**.
+  - **Roofing Spec Inputs**: Render `RoofingSpecTable` directly **below Quantity input**:
+    - Input fields: `straight` (req), `quantity` (req), `curve` (opt), `end` (opt).
+    - **Formula (Option B)**:
+      $$\text{sum} = (\text{straight} + \text{curve} + \text{end}) / 100$$
+      $$\text{Total Qty (Meters)} = \text{sum} \times \text{quantity}$$
+  - **Khmer Line Note Formatting**:
+    - Straight Sheet: `ត្រង់ 3.50m x 10 = 35.00m`
+    - Curved Sheet: `កោង (3.50m + 0.50m + 0.20m) x 10 = 42.00m`
+
+---
+
+### Module 6 [TOP CORE 2]: Transaction-Based Invoice Processing & POS Closing Shift Reconciliation
+
+#### 1. Transaction-Based Payment Determination & Partial Payment Handling
+- **[MODIFY] [klik_pos/api/sales_invoice.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/sales_invoice.py)**:
+  - **Transaction-Based `is_pos` Determination (`_determine_is_pos(customer, business_type, amount_paid)`)**:
+    - If `amount_paid > 0` (cash/card collected at POS) $\rightarrow$ Set `doc.is_pos = 1`, `doc.pos_profile = pos_profile.name`, and populate `Sales Invoice Payment` child table.
+    - If `amount_paid == 0` (Unpaid / Pay Later / Credit Sale) $\rightarrow$ Set `doc.is_pos = 0`, `doc.pos_profile = None`, creating a regular Accounts Receivable invoice without payment entries.
+  - **Shift Tagging**: Tag `doc.custom_pos_opening_entry = opening_entry_name` on ALL invoices (both paid and credit/unpaid) so every invoice generated during a shift is tracked in closing totals.
+  - **Partial Payment Safeguard**:
+    - For partial payments (`0 < amount_paid < grand_total`), set `doc.allow_partial_payment = 1` or explicitly record `paid_amount = amount_paid` and `outstanding_amount = grand_total - amount_paid`.
+  - **Case-Insensitive Customer Type Check**: Normalize `customer_type` handling in `_check_customer_type_for_pos`.
+  - **Invoice Ref Field Mapping**: Map `custom_invoice_ref` from payload into Sales Invoice document.
+
+#### 2. POS Closing Shift Reconciliation API (`pos_entry.py`)
+- **[MODIFY] [klik_pos/api/pos_entry.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/pos_entry.py)**:
+  - **Fix SQL Join Duplication in `_calculate_closing_entry_totals()`**:
+    - Query 1 (Invoice Totals): `SELECT SUM(net_total), SUM(grand_total) FROM tabSales Invoice WHERE custom_pos_opening_entry = %s AND docstatus = 1`.
+    - Query 2 (Quantity Totals): `SELECT SUM(sii.qty) FROM tabSales Invoice Item sii INNER JOIN tabSales Invoice si ON si.name = sii.parent WHERE si.custom_pos_opening_entry = %s AND si.docstatus = 1`.
+  - **Strict Shift Payment Reconciliation in `_calculate_payment_reconciliation()`**:
+    - Filter payments strictly by `si.custom_pos_opening_entry = %s`.
+  - **Credit / Unpaid Sales Summary**:
+    - Aggregate `total_credit_sales = SUM(outstanding_amount)` for invoices in the shift.
+
+#### 3. Payment Dialog & Closing Shift UI
+- **[MODIFY] [klik_spa/src/components/dialog/PaymentDialog.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/dialog/PaymentDialog.tsx)**
+- **[MODIFY] [klik_spa/src/pages/ClosingShiftPage.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/pages/ClosingShiftPage.tsx)**
+
+---
+
+### Module 2: Telegram Contact Search & Customer Link
+
+#### 1. Backend Telegram API Wrapper
+- **[MODIFY] [klik_pos/api/customer.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/customer.py)**:
+  - `@frappe.whitelist() def search_telegram_contact(search_query, search_type="all")`: Calls `erpnext_telegram_integration.telegram_api.search_telegram_contact`.
+  - `@frappe.whitelist() def link_telegram_to_customer(customer_name, telegram_user_id, ...)`: Calls `erpnext_telegram_integration.telegram_api.link_telegram_to_customer`.
+  - `@frappe.whitelist() def get_customer_telegram_link(customer_name)`: Returns linked Telegram user details for a customer.
+
+#### 2. Frontend Customer Service Layer
+- **[MODIFY] [klik_spa/src/services/customerService.ts](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/services/customerService.ts)**:
+  - Add TypeScript interfaces: `TelegramContact`, `TelegramLinkResult`, `CustomerTelegramLink`.
+  - Add functions `searchTelegramContact`, `linkTelegramToCustomer`, `getCustomerTelegramLink`.
+
+#### 3. Add Customer Modal UI
+- **[MODIFY] [klik_spa/src/components/customer/AddCustomerModal.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/customer/AddCustomerModal.tsx)**:
+  - Add Telegram contact search field with live autocomplete dropdown.
+  - Add "Quick Link Telegram" action button.
+  - Display green badge when customer has a linked Telegram account (`@username` or `ID`).
+
+---
+
+### Module 3: Telegram Invoice Sharing
+
+#### 1. Backend Invoice Sending Endpoint
+- **[MODIFY] [klik_pos/api/sales_invoice.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/sales_invoice.py)**:
+  - `@frappe.whitelist() def send_telegram_invoice(customer_name, invoice_name, attach_file=True)`:
+    - Generates invoice PDF via `frappe.get_print("Sales Invoice", invoice_name, print_format="DS POS Invoice KLiK")`.
+    - Dispatches message & PDF attachment to customer's linked Telegram chat via `erpnext_telegram_integration`.
+
+#### 2. Sharing Service & Dialog UI
+- **[NEW] [klik_spa/src/services/useSharing.ts](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/services/useSharing.ts)**:
+  - Implement `sendInvoiceTelegram({ customer_name, invoice_name, attach_file })`.
+- **[MODIFY] [klik_spa/src/components/dialog/PaymentHeader.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/dialog/PaymentHeader.tsx)**:
+  - Add Telegram button (using `Send` icon from `lucide-react`) to completion header buttons.
+- **[MODIFY] [klik_spa/src/components/dialog/SharingInterface.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/dialog/SharingInterface.tsx)**:
+  - Add `sharingMode === "telegram"` tab containing message preview box, customer name field, and "Send Telegram" action button.
+
+---
+
+### Module 4: Customer Credit Limit Validation
+
+#### 1. Backend Credit Limit Verification
+- **[MODIFY] [klik_pos/api/sales_invoice.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/sales_invoice.py)**:
+  - Implement `check_customer_credit_limit(customer, new_invoice_amount, company)`:
+    - Queries `Customer.credit_limit`.
+    - Queries current total unpaid outstanding balance: `SELECT COALESCE(SUM(outstanding_amount), 0) FROM tabSales Invoice WHERE customer = %s AND docstatus = 1 AND outstanding_amount > 0`.
+    - If `current_outstanding + new_invoice_amount > credit_limit`, returns exceeded details.
+  - `@frappe.whitelist() def validate_before_submit(data)`: Pre-submission validation endpoint called by POS UI.
+
+#### 2. Service Layer & Payment Dialog UI
+- **[MODIFY] [klik_spa/src/services/salesInvoice.ts](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/services/salesInvoice.ts)**:
+  - Add `validateBeforeSubmit(data)` function and `CreditLimitValidation` interface.
+- **[MODIFY] [klik_spa/src/components/dialog/PaymentDialog.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/dialog/PaymentDialog.tsx)**:
+  - Call `validateBeforeSubmit()` before order submission.
+  - If credit limit is exceeded, display prominent red alert banner with exceeded amount details and block submit button.
+
+---
+
+### Module 5: Additional Discount & Tax Round-Off Fixes
+
+#### 1. Backend Discount & Tax Logic
+- **[MODIFY] [klik_pos/api/sales_invoice.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/sales_invoice.py)**:
+  - Implement `_set_additional_discount_fields(doc, discount_amount, discount_type)`: Sets `discount_amount` or `additional_discount_percentage` on Sales Invoice document.
+  - Fix roundoff calculation when no taxes apply.
+
+#### 2. Payment Dialog UI
+- **[MODIFY] [klik_spa/src/components/dialog/PaymentDialog.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/dialog/PaymentDialog.tsx)**:
+  - Add Additional Discount input fields (Amount & Percentage) in payment summary section.
+  - Recalculate `grandTotal` and change given in real time.
+
+---
+
+### Module 7: Customer-Specific Price List & Dynamic Pricing
+
+#### 1. Backend Batch Pricing API
+- **[MODIFY] [klik_pos/api/item/item_price.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/item/item_price.py)**:
+  - `@frappe.whitelist() def get_items_prices_for_customer(item_codes, customer)`:
+    - Batch fetches item prices for multiple item codes according to customer price list priority (`Customer.default_price_list` $\rightarrow$ `CustomerGroup.default_price_list` $\rightarrow$ `POSProfile.selling_price_list`).
+
+#### 2. Product Provider Live State Listener
+- **[MODIFY] [klik_spa/src/providers/ProductProvider.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/providers/ProductProvider.tsx)**:
+  - Add effect listener on `selectedCustomer` state:
+    - Calls `get_items_prices_for_customer(itemCodesList, selectedCustomer.id)`.
+    - Dynamically updates item price maps so product grid prices instantly update when a customer is selected.
+
+---
+
+### Module 8: Keyboard Navigation & UI Usability
+
+#### 1. Layout Global Shortcuts & Navigation
+- **[MODIFY] [klik_spa/src/components/RetailPOSLayout.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/RetailPOSLayout.tsx)**:
+  - Register `Cmd/Ctrl + F`: Focuses search bar.
+  - Register `Escape`: Clears search bar / deselects search result.
+  - Register `ArrowUp / ArrowDown`: Navigates search results grid.
+  - Register `Shift+Enter`: Opens quantity dialog for highlighted product.
+
+#### 2. Search Bar & Order Summary Refinements
+- **[MODIFY] [klik_spa/src/components/SearchBar.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/SearchBar.tsx)**:
+  - Forward `onKeyDown` prop to search `<input>` element.
+- **[MODIFY] [klik_spa/src/components/order/OrderSummary.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/order/OrderSummary.tsx)**:
+  - Add `custom_invoice_ref` input field for entering physical receipt/invoice numbers.
+
+---
+
+### Module 1: Custom Print Format & Status Indicators
+
+- **[NEW] [klik_pos/klik_pos/print_format/ds_pos_invoice_klik/ds_pos_invoice_klik.json](file:///home/phirun/dev/KLiK_PoS/klik_pos/klik_pos/print_format/ds_pos_invoice_klik/ds_pos_invoice_klik.json)**:
+  - Print format JSON definition for `DS POS Invoice KLiK`.
+  - Displays Khmer sheet order descriptions (`custom_description`), payment breakdown, customer credit info, and status indicators (`PAID`, `UNPAID`, `PARTIAL`).
+
+---
+
+## Verification Plan
+
+### Automated Tests & Builds
+- Run `cd klik_spa && npm run build` to verify TypeScript compilation and asset bundling.
+- Run `python3 -m py_compile klik_pos/api/*.py` to verify Python syntax.
+
+### Manual Verification
+- **AZ Coil Sheet Orders**: Verify in `CartItemRow.tsx` (Option B formula, disabled quantity, Khmer text).
+- **Invoice Payment Types**: Test Unpaid, Partial Payment (`allow_partial_payment`), and Full Payment order submissions.
+- **Closing Shift Reconciliation**: Verify shift closing summary table shows Total Sales, Collected Cash/Card, Credit/Unpaid Sales, and Expected Cash in Drawer with zero duplicate calculations.
+- **Telegram & Credit Limit**: Test Telegram linking/sharing and credit limit warning popups.
