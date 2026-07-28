@@ -553,13 +553,6 @@ export const CartItemRow = ({
                     isMobile={isMobile}
                     disabled={isAZCoilItem}
                   />
-                  {isAZCoilItem && (
-                    <RoofingSpecTable
-                      item={item}
-                      onUpdateQuantity={onUpdateQuantity}
-                      isMobile={isMobile}
-                    />
-                  )}
                 </div>
                 <div>
                   <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>
@@ -573,6 +566,16 @@ export const CartItemRow = ({
                   />
                 </div>
               </div>
+
+              {isAZCoilItem && (
+                <div className="mb-4 w-full">
+                  <RoofingSpecTable
+                    item={item}
+                    onUpdateQuantity={onUpdateQuantity}
+                    isMobile={isMobile}
+                  />
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-4 mb-4">
                 <div>

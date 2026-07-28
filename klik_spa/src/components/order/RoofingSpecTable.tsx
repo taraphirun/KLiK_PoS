@@ -64,7 +64,11 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
 
     updateCartItemField(item.id, 'custom_ds_roofing_spec', newSpecs);
     updateCartItemField(item.id, 'custom_description', descriptionLines.join('\n'));
-    onUpdateQuantity(item.id, Number(totalMeters.toFixed(2)));
+    
+    // Only update quantity to 0 if all specs are removed, otherwise keep current quantity to prevent item deletion when adding new empty row
+    if (newSpecs.length === 0 || totalMeters > 0) {
+      onUpdateQuantity(item.id, Number(totalMeters.toFixed(2)));
+    }
   }, [item.id, updateCartItemField, onUpdateQuantity]);
 
   return (
@@ -73,12 +77,6 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
         <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"}`}>
           Roofing Specifications (cm)
         </label>
-        <button
-          onClick={addSpec}
-          className="text-xs flex items-center gap-1 text-beveren-600 dark:text-beveren-400 hover:text-beveren-700"
-        >
-          <Plus size={14} /> Add Row
-        </button>
       </div>
 
       {specs.length > 0 ? (
@@ -86,16 +84,20 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
           <table className="min-w-full text-left text-xs">
             <thead className="bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
               <tr>
+                <th className="px-2 py-2 font-medium w-8 text-center">No</th>
                 <th className="px-2 py-2 font-medium">Straight<br/>(cm)</th>
                 <th className="px-2 py-2 font-medium">Curve<br/>(cm)</th>
                 <th className="px-2 py-2 font-medium">End<br/>(cm)</th>
-                <th className="px-2 py-2 font-medium">Qty</th>
+                <th className="px-2 py-2 font-medium">Quantity</th>
                 <th className="px-2 py-2 font-medium w-8"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
               {specs.map((spec, index) => (
                 <tr key={index} className="bg-white dark:bg-gray-700">
+                  <td className="px-2 py-1 text-center font-medium text-gray-500 dark:text-gray-400">
+                    {index + 1}
+                  </td>
                   <td className="px-2 py-1">
                     <input
                       type="number"
@@ -150,10 +152,19 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
           </table>
         </div>
       ) : (
-        <div className="text-xs text-gray-500 dark:text-gray-400 italic">
+        <div className="text-xs text-gray-500 dark:text-gray-400 italic mb-2">
           No specifications added.
         </div>
       )}
+
+      <div className="mt-2 flex justify-start">
+        <button
+          onClick={addSpec}
+          className="text-sm font-medium flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-beveren-50 dark:bg-beveren-900/30 text-beveren-600 dark:text-beveren-400 hover:bg-beveren-100 dark:hover:bg-beveren-900/50 transition-colors"
+        >
+          <Plus size={16} /> Add Row
+        </button>
+      </div>
       
       {item.custom_description && (
         <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-600">
