@@ -46,6 +46,21 @@ QUEUE_STATUSES = {
 }
 
 
+
+def _ensure_custom_fields():
+	try:
+		res = frappe.db.sql("""SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS 
+		                       WHERE TABLE_NAME = 'tabSales Invoice Item' AND COLUMN_NAME = 'custom_ds_roofing_spec'""")
+		if not res:
+			frappe.db.sql("ALTER TABLE `tabSales Invoice Item` ADD COLUMN `custom_ds_roofing_spec` Text")
+			frappe.db.sql("ALTER TABLE `tabSales Invoice Item` ADD COLUMN `custom_description` Text")
+			frappe.db.commit()
+			# Clear frappe's column cache for this doctype
+			frappe.client_cache.delete_value("table_columns")
+	except Exception as e:
+		frappe.log_error(title="Failed to ensure custom fields", message=str(e))
+
+
 def _set_checkbox_field_value(doc, fieldname, value):
 	"""Safely set checkbox fields only when present on the document."""
 	if not doc or not hasattr(doc, fieldname):
@@ -1006,10 +1021,19 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 	Fetch invoice items and calculate returned/available quantities.
 	"""
 	# Batch fetch all items for this invoice
-	items_query = """
+	custom_cols = []
+	if frappe.db.has_column("Sales Invoice Item", "custom_ds_roofing_spec"):
+		custom_cols.append("custom_ds_roofing_spec")
+	if frappe.db.has_column("Sales Invoice Item", "custom_description"):
+		custom_cols.append("custom_description")
+	
+	cols_str = ", ".join(custom_cols)
+	if cols_str:
+		cols_str = ", " + cols_str
+	
+	items_query = f"""
 		SELECT name, item_code, item_name, qty, rate, amount, description, uom,
-			price_list_rate, discount_amount, discount_percentage,
-			custom_ds_roofing_spec, custom_description
+			price_list_rate, discount_amount, discount_percentage{cols_str}
 		FROM `tabSales Invoice Item`
 		WHERE parent = %s
 	"""
@@ -1045,7 +1069,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 		available_qty = round(item.qty - returned_qty_value, 6)
 
 		roofing_spec = []
-		if item.custom_ds_roofing_spec:
+		if item.get("custom_ds_roofing_spec"):
 			try:
 				roofing_spec = json.loads(item.custom_ds_roofing_spec)
 			except Exception:
@@ -1067,7 +1091,7 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 				"returned_qty": returned_qty_value,
 				"available_qty": available_qty,
 				"custom_ds_roofing_spec": roofing_spec,
-				"custom_description": item.custom_description,
+				"custom_description": item.get("custom_description"),
 			}
 		)
 
@@ -1145,6 +1169,7 @@ def create_and_submit_invoice(data):
 
 @frappe.whitelist()
 def queue_sales_invoice(data):
+	_ensure_custom_fields()
 	try:
 		import time
 
@@ -2645,12 +2670,14 @@ def _add_serial_to_item(item_data, item):
 
 def _add_roofing_spec_to_item(item_data, item):
 	if "custom_ds_roofing_spec" in item and item["custom_ds_roofing_spec"]:
-		item_data["custom_ds_roofing_spec"] = json.dumps(item["custom_ds_roofing_spec"])
+		if frappe.db.has_column("Sales Invoice Item", "custom_ds_roofing_spec"):
+			item_data["custom_ds_roofing_spec"] = json.dumps(item["custom_ds_roofing_spec"])
 
 
 def _add_description_to_item(item_data, item):
 	if "custom_description" in item and item["custom_description"]:
-		item_data["custom_description"] = item["custom_description"]
+		if frappe.db.has_column("Sales Invoice Item", "custom_description"):
+			item_data["custom_description"] = item["custom_description"]
 		item_data["description"] = item["custom_description"]
 
 
@@ -3710,6 +3737,7 @@ def submit_draft_invoice(invoice_id, data=None):
 	Submit a draft sales invoice directly without payment dialog.
 	This converts a draft invoice to submitted status.
 	"""
+	_ensure_custom_fields()
 	try:
 		invoice_doc = frappe.get_doc("Sales Invoice", invoice_id)
 
