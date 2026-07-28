@@ -626,8 +626,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       dueDate: isCreditSale ? dueDate : null,
       is_credit_sale: isCreditSale,
       due_date: isCreditSale ? dueDate : null,
-      allowPartialPayment: allowPartialPayments,
-      allow_partial_payment: allowPartialPayments,
+      allowPartialPayment: !isCreditSale && totalPaidAmount > 0 && outstandingAmount > 0,
+      allow_partial_payment: !isCreditSale && totalPaidAmount > 0 && outstandingAmount > 0,
       salesperson: currentSalesperson?.name || null,
       tax_id: taxPin || null,
       loyalty: appliedLoyalty
@@ -1160,11 +1160,10 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       const orderTotal = checkoutPayableTotal;
 
       if (totalPaid < orderTotal) {
-        if (allowPartialPayments && totalPaid > 0) {
+        if (totalPaid > 0) {
           // Partial payment — proceed; outstanding balance becomes Accounts Receivable
         } else {
-          const remainingAmount = orderTotal - totalPaid;
-          toast.error(`Insufficient payment. Total: ${formatCurrencyWithSymbol(orderTotal, displayCurrencySymbol)}, Paid: ${formatCurrencyWithSymbol(totalPaid, displayCurrencySymbol)}, Remaining: ${formatCurrencyWithSymbol(remainingAmount, displayCurrencySymbol)}`);
+          toast.error("Please enter a payment amount or use the Credit Sale option for 0-payment invoices.");
           return;
         }
       }
@@ -1404,7 +1403,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
     if (invoiceSubmitted || isProcessingPayment) return true;
     if (isCreditSale && !dueDate) return true;
     if (isB2C && !isCreditSale) {
-      if (allowPartialPayments && totalPaidAmount > 0) return false;
+      if (totalPaidAmount > 0) return false;
       return outstandingAmount > 0;
     }
     return false;
@@ -1904,19 +1903,17 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                 </div>
                 {renderLoyaltyRedemption()}
                 {renderMpesaStatusNotice()}
-                {allowPartialPayments && (
-                  <div className="space-y-3 pt-2">
-                    <button type="button" onClick={() => toggleCreditSale()} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full py-3 rounded-lg font-medium transition-colors ${isCreditSale ? "bg-teal-600 text-white dark:bg-teal-500" : "bg-teal-100 text-teal-800 hover:bg-teal-200 dark:bg-teal-950/40 dark:text-teal-200 dark:hover:bg-teal-950/60"} ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}>
-                      {isCreditSale ? "Credit Sale Enabled" : "Is Credit Sale"}
-                    </button>
-                    {isCreditSale && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Due Date</label>
-                        <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} min={new Date().toISOString().split("T")[0]} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`} />
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div className="space-y-3 pt-2">
+                  <button type="button" onClick={() => toggleCreditSale()} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full py-3 rounded-lg font-medium transition-colors ${isCreditSale ? "bg-teal-600 text-white dark:bg-teal-500" : "bg-teal-100 text-teal-800 hover:bg-teal-200 dark:bg-teal-950/40 dark:text-teal-200 dark:hover:bg-teal-950/60"} ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}>
+                    {isCreditSale ? "Credit Sale Enabled" : "Is Credit Sale"}
+                  </button>
+                  {isCreditSale && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Due Date</label>
+                      <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} min={new Date().toISOString().split("T")[0]} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`} />
+                    </div>
+                  )}
+                </div>
                 {isDeliveryChargeEnabled && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Delivery Charge (Service Item)</label>
@@ -2126,19 +2123,17 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                 {renderLoyaltyRedemption()}
                 {renderMpesaStatusNotice()}
 
-                {allowPartialPayments && (
-                  <div className="space-y-3">
-                    <button type="button" onClick={() => toggleCreditSale()} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full py-3 rounded-lg font-medium transition-colors ${isCreditSale ? "bg-teal-600 text-white dark:bg-teal-500" : "bg-teal-100 text-teal-800 hover:bg-teal-200 dark:bg-teal-950/40 dark:text-teal-200 dark:hover:bg-teal-950/60"} ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}>
-                      {isCreditSale ? "Credit Sale Enabled" : "Is Credit Sale"}
-                    </button>
-                    {isCreditSale && (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Due Date</label>
-                        <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} min={new Date().toISOString().split("T")[0]} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full px-3 py-2 border border-red-300 dark:border-red-600 rounded-lg focus:ring-2 focus:ring-red-500 bg-white dark:bg-red-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`} />
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div className="space-y-3">
+                  <button type="button" onClick={() => toggleCreditSale()} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full py-3 rounded-lg font-medium transition-colors ${isCreditSale ? "bg-teal-600 text-white dark:bg-teal-500" : "bg-teal-100 text-teal-800 hover:bg-teal-200 dark:bg-teal-950/40 dark:text-teal-200 dark:hover:bg-teal-950/60"} ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}>
+                    {isCreditSale ? "Credit Sale Enabled" : "Is Credit Sale"}
+                  </button>
+                  {isCreditSale && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Due Date</label>
+                      <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} min={new Date().toISOString().split("T")[0]} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full px-3 py-2 border border-red-300 dark:border-red-600 rounded-lg focus:ring-2 focus:ring-red-500 bg-white dark:bg-red-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`} />
+                    </div>
+                  )}
+                </div>
 
                 {isDeliveryChargeEnabled && (
                   <div>
