@@ -1,5 +1,10 @@
-const common_site_config = require('../../../sites/common_site_config.json');
-const { webserver_port } = common_site_config;
+let webserver_port = 8000;
+try {
+	const common_site_config = require('../../../sites/common_site_config.json');
+	webserver_port = common_site_config.webserver_port || 8000;
+} catch (e) {
+	// Standalone mode outside Frappe bench
+}
 
 export default {
 	'^/(app|api|assets|files|private)': {
