@@ -138,7 +138,8 @@ doctype_js.update({"Company": "public/js/company.js"})
 # ------------
 
 before_install = "klik_pos.setup.install.before_install"
-# after_install = "klik_pos.install.after_install"
+after_install = "klik_pos.setup.install.after_install"
+after_migrate = "klik_pos.setup.install.after_install"
 
 # Uninstallation
 # ------------

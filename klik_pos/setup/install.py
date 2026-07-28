@@ -41,14 +41,35 @@ def ensure_stock_reservation_is_enabled():
     if not frappe.db.get_single_value("Stock Settings", "enable_stock_reservation"):
         frappe.db.set_value("Stock Settings", None, "enable_stock_reservation", 1)
 
+def ensure_az_coil_item_group_child_table():
+    if not frappe.db.exists("DocType", "KLiK AZ Coil Item Group"):
+        doc = frappe.get_doc({
+            "doctype": "DocType",
+            "name": "KLiK AZ Coil Item Group",
+            "module": "KLiK PoS",
+            "istable": 1,
+            "custom": 1,
+            "fields": [
+                {
+                    "fieldname": "item_group",
+                    "fieldtype": "Link",
+                    "options": "Item Group",
+                    "label": "Item Group",
+                    "in_list_view": 1
+                }
+            ]
+        })
+        doc.insert(ignore_permissions=True)
+
 def ensure_az_coil_custom_fields():
+    ensure_az_coil_item_group_child_table()
     create_custom_field(
         "POS Profile",
         {
             "fieldname": "custom_az_coil_item_groups",
             "label": "AZ Coil Item Groups",
             "fieldtype": "Table",
-            "options": "POS Profile Item Group",
+            "options": "KLiK AZ Coil Item Group",
             "insert_after": "custom_business_type",
             "module": "KLiK PoS",
         },

@@ -2978,7 +2978,7 @@
    "insert_after": "custom_business_type",
    "module": "KLiK PoS",
    "owner": "Administrator",
-   "options": "POS Profile Item Group"
+   "options": "KLiK AZ Coil Item Group"
   }
  ],
  "custom_perms": [],
