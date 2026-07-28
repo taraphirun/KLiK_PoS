@@ -128,6 +128,7 @@ interface CartState {
   setSelectedPriceList: (priceList: string | null) => Promise<void>
   refreshCartPricing: () => Promise<void>
   updateItemBundleEntries: (id: string, entries: SerialBatchEntry[]) => void
+  updateCartItemField: <K extends keyof CartItem>(id: string, field: K, value: CartItem[K]) => void
 }
 
 const shouldInsertNewItemsAtTop = (): boolean => {
@@ -450,6 +451,14 @@ export const useCartStore = create<CartState>()(
               : item
           )
         }));
+      },
+
+      updateCartItemField: (id, field, value) => {
+        set((state) => ({
+          cartItems: state.cartItems.map((item) =>
+            item.id === id ? { ...item, [field]: value } : item
+          ),
+        }))
       },
     }),
     {

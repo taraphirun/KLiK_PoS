@@ -993,7 +993,8 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 	# Batch fetch all items for this invoice
 	items_query = """
 		SELECT name, item_code, item_name, qty, rate, amount, description, uom,
-			price_list_rate, discount_amount, discount_percentage
+			price_list_rate, discount_amount, discount_percentage,
+			custom_ds_roofing_spec, custom_description
 		FROM `tabSales Invoice Item`
 		WHERE parent = %s
 	"""
@@ -1028,6 +1029,13 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 		returned_qty_value = returned_qty_map.get(item.item_code, 0)
 		available_qty = round(item.qty - returned_qty_value, 6)
 
+		roofing_spec = []
+		if item.custom_ds_roofing_spec:
+			try:
+				roofing_spec = json.loads(item.custom_ds_roofing_spec)
+			except Exception:
+				pass
+
 		items.append(
 			{
 				"name": item.name,
@@ -1043,6 +1051,8 @@ def _get_invoice_items_with_returns(invoice_id, customer):
 				"uom": item.uom,
 				"returned_qty": returned_qty_value,
 				"available_qty": available_qty,
+				"custom_ds_roofing_spec": roofing_spec,
+				"custom_description": item.custom_description,
 			}
 		)
 
@@ -2565,6 +2575,8 @@ def _prepare_item_data(doc, item, item_data_map, pos_profile):
 	_add_uom_to_item(item_data, item)
 	_add_batch_to_item(item_data, item, item_data_map.get(item_code, {}))
 	_add_serial_to_item(item_data, item)
+	_add_roofing_spec_to_item(item_data, item)
+	_add_description_to_item(item_data, item)
 
 	return item_data
 
@@ -2610,6 +2622,17 @@ def _add_serial_to_item(item_data, item):
 	if serial_number:
 		item_data["use_serial_batch_fields"] = 1
 		item_data["serial_no"] = serial_number
+
+
+def _add_roofing_spec_to_item(item_data, item):
+	if "custom_ds_roofing_spec" in item and item["custom_ds_roofing_spec"]:
+		item_data["custom_ds_roofing_spec"] = json.dumps(item["custom_ds_roofing_spec"])
+
+
+def _add_description_to_item(item_data, item):
+	if "custom_description" in item and item["custom_description"]:
+		item_data["custom_description"] = item["custom_description"]
+		item_data["description"] = item["custom_description"]
 
 
 def _populate_tax_details(doc, force_inclusive_tax=False):

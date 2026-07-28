@@ -7,12 +7,14 @@ interface QuantityInputProps {
   item: CartItem;
   onUpdateQuantity: (id: string, quantity: number) => void;
   isMobile?: boolean;
+  disabled?: boolean;
 }
 
 export const QuantityInput = ({
   item,
   onUpdateQuantity,
   isMobile,
+  disabled,
 }: QuantityInputProps) => {
   const [inputValue, setInputValue] = useState(item.quantity.toString());
   const [isEditing, setIsEditing] = useState(false);
@@ -56,9 +58,14 @@ export const QuantityInput = ({
       onChange={handleChange}
       onFocus={handleFocus}
       onBlur={handleBlur}
+      disabled={disabled}
       className={`w-full ${
         isMobile ? "text-sm" : "text-sm"
-      } px-3 py-4 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white`}
+      } px-3 py-4 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent ${
+        disabled
+          ? "bg-gray-100 dark:bg-gray-700 cursor-not-allowed text-gray-500 dark:text-gray-400"
+          : "bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+      }`}
     />
   );
 };

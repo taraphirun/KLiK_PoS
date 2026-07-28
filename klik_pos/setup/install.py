@@ -40,3 +40,43 @@ def ensure_sales_invoice_reserve_stock_field():
 def ensure_stock_reservation_is_enabled():
     if not frappe.db.get_single_value("Stock Settings", "enable_stock_reservation"):
         frappe.db.set_value("Stock Settings", None, "enable_stock_reservation", 1)
+
+def ensure_az_coil_custom_fields():
+    create_custom_field(
+        "POS Profile",
+        {
+            "fieldname": "custom_az_coil_item_groups",
+            "label": "AZ Coil Item Groups",
+            "fieldtype": "Small Text",
+            "insert_after": "custom_business_type",
+            "module": "KLiK PoS",
+        },
+        ignore_validate=True,
+    )
+    create_custom_field(
+        "Sales Invoice Item",
+        {
+            "fieldname": "custom_ds_roofing_spec",
+            "label": "DS Roofing Spec",
+            "fieldtype": "JSON",
+            "insert_after": "description",
+            "module": "KLiK PoS",
+        },
+        ignore_validate=True,
+    )
+    create_custom_field(
+        "Sales Invoice Item",
+        {
+            "fieldname": "custom_description",
+            "label": "Custom Description",
+            "fieldtype": "Text",
+            "insert_after": "custom_ds_roofing_spec",
+            "module": "KLiK PoS",
+        },
+        ignore_validate=True,
+    )
+
+def after_install():
+    ensure_sales_invoice_reserve_stock_field()
+    ensure_stock_reservation_is_enabled()
+    ensure_az_coil_custom_fields()

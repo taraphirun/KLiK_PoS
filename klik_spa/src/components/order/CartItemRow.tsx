@@ -12,6 +12,7 @@ import { useCartStore } from "../../stores/cartStore";
 import ProductDetailsModal from "../ProductDetailsModal";
 import { getEffectiveDisplayRate, getEffectiveItemRate, getExclusiveTaxRateForItem } from "../../utils/cartPricing";
 import { roundCurrency } from "../../utils/currencyMath";
+import { RoofingSpecTable } from "./RoofingSpecTable";
 
 interface CartItemRowProps {
   item: CartItem;
@@ -389,6 +390,12 @@ export const CartItemRow = ({
   const showStockWarning = item.quantity > availableStock && availableStock > 0;
   const showNoStockWarning = availableStock === 0;
 
+  const isAZCoilItem = (() => {
+    const azGroups = posDetails?.custom_az_coil_item_groups || "zn";
+    const groups = azGroups.split(',').map((g: string) => g.trim().toLowerCase());
+    return groups.includes(item.item_group?.toLowerCase() || "") || groups.includes(item.category?.toLowerCase() || "");
+  })();
+
   return (
     <>
       <div
@@ -445,9 +452,10 @@ export const CartItemRow = ({
               </p>
             </div>
 
-            <div className="flex items-center border border-gray-200 dark:border-gray-600 rounded-full overflow-hidden">
+            <div className={`flex items-center border border-gray-200 dark:border-gray-600 rounded-full overflow-hidden ${isAZCoilItem ? 'opacity-50 pointer-events-none' : ''}`}>
               <button
                 onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
+                disabled={isAZCoilItem}
                 className={`${
                   isMobile ? "w-7 h-7" : "w-6 h-6"
                 } flex items-center justify-center text-gray-400 dark:text-gray-500 hover:bg-red-50 dark:hover:bg-red-900/30 hover:text-red-500 dark:hover:text-red-400 transition-colors`}
@@ -458,6 +466,7 @@ export const CartItemRow = ({
                 type="number"
                 min="0"
                 value={localQty}
+                disabled={isAZCoilItem}
                 onChange={(e) => setLocalQty(parseInt(e.target.value, 10) || 0)}
                 onBlur={() => {
                   const available = item.available;
@@ -482,6 +491,7 @@ export const CartItemRow = ({
                     onUpdateQuantity(item.id, next);
                   }
                 }}
+                disabled={isAZCoilItem}
                 className={`${
                   isMobile ? "w-7 h-7" : "w-6 h-6"
                 } flex items-center justify-center text-gray-400 dark:text-gray-500 hover:bg-green-50 dark:hover:bg-green-900/30 hover:text-green-600 dark:hover:text-green-400 transition-colors`}
@@ -533,7 +543,15 @@ export const CartItemRow = ({
                     item={item}
                     onUpdateQuantity={onUpdateQuantity}
                     isMobile={isMobile}
+                    disabled={isAZCoilItem}
                   />
+                  {isAZCoilItem && (
+                    <RoofingSpecTable
+                      item={item}
+                      onUpdateQuantity={onUpdateQuantity}
+                      isMobile={isMobile}
+                    />
+                  )}
                 </div>
                 <div>
                   <label className={`block text-gray-700 dark:text-gray-300 font-medium ${isMobile ? "text-sm" : "text-sm"} mb-2`}>

@@ -2969,6 +2969,15 @@
    "translatable": 0,
    "unique": 0,
    "width": null
+  },
+  {
+   "fieldname": "custom_az_coil_item_groups",
+   "fieldtype": "Small Text",
+   "label": "AZ Coil Item Groups",
+   "dt": "POS Profile",
+   "insert_after": "custom_business_type",
+   "module": "KLiK PoS",
+   "owner": "Administrator"
   }
  ],
  "custom_perms": [],

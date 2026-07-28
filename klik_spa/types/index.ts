@@ -34,6 +34,8 @@ export interface CartItem {
   item_tax_rate?: Record<string, number>
   total_tax_rate?: number
   tax_templates?: TaxTemplate[]
+  custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number }>
+  custom_description?: string
 }
 
 export interface TaxTemplate {
@@ -122,6 +124,7 @@ export interface MenuItem {
   variant_based_on?: string
   variant_count?: number
   variant_attributes?: Record<string, string>
+  custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number }>
 }
 
 export interface Category {
@@ -390,6 +393,7 @@ export interface POSProfile {
   custom_default_view?: 'Grid View' | 'List View'
   custom_scale_barcodes_start_with?: string
   custom_prevent_invoice_reprinting?: boolean | number
+  custom_az_coil_item_groups?: string
   // Add other fields as needed
 }
 
