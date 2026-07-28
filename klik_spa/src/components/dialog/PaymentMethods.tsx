@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { CheckCircle } from "lucide-react";
 import type { PaymentMethod } from "./types";
 
