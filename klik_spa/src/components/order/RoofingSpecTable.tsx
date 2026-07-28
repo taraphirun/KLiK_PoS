@@ -166,14 +166,6 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
         </button>
       </div>
       
-      {item.custom_description && (
-        <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-600">
-          <div className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Generated Note:</div>
-          <pre className="text-xs text-gray-600 dark:text-gray-400 whitespace-pre-wrap font-sans">
-            {item.custom_description}
-          </pre>
-        </div>
-      )}
     </div>
   );
 };

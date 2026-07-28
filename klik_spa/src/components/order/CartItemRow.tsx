@@ -432,14 +432,26 @@ export const CartItemRow = ({
                 </svg>
                 <span className="min-w-0 break-words">{item.name}</span>
               </button>
-              {!!posDetails?.custom_show_item_code_in_product_list && (item.item_code || item.id) && (
-                <p className="text-xs text-gray-400 dark:text-gray-500 font-mono leading-tight pl-4">
-                  {item.item_code || item.id}
-                </p>
+              {isAZCoilItem ? (
+                item.custom_description ? (
+                  <div className="pl-4 mt-0.5">
+                    <pre className="text-xs text-beveren-600 dark:text-beveren-400 whitespace-pre-wrap font-sans leading-tight">
+                      {item.custom_description}
+                    </pre>
+                  </div>
+                ) : null
+              ) : (
+                <>
+                  {!!posDetails?.custom_show_item_code_in_product_list && (item.item_code || item.id) && (
+                    <p className="text-xs text-gray-400 dark:text-gray-500 font-mono leading-tight pl-4">
+                      {item.item_code || item.id}
+                    </p>
+                  )}
+                  <p className={`text-gray-500 dark:text-gray-400 capitalize font-medium pl-4 ${isMobile ? "text-sm" : "text-xs"}`}>
+                    {item.category}
+                  </p>
+                </>
               )}
-              <p className={`text-gray-500 dark:text-gray-400 capitalize font-medium pl-4 ${isMobile ? "text-sm" : "text-xs"}`}>
-                {item.category}
-              </p>
             </div>
             <button
               onClick={() => onRemoveItem?.(item.id)}
