@@ -13,6 +13,7 @@ import {
   UserPlus,
   Mail,
   Phone,
+  MessageCircle,
 } from "lucide-react";
 import type { Customer } from "../../types/customer";
 import { useCustomers } from "../../hooks/useCustomers";
@@ -199,6 +200,8 @@ export const CustomerSearchSection = ({
         loyaltyProgram: customer.loyalty?.loyalty_program || null,
         loyaltyTier: customer.loyalty?.loyalty_program_tier || customer.loyalty?.customer_loyalty_program_tier || null,
         redeemableValue: customer.loyalty?.redeemable_value || 0,
+        telegramLinked: customer.telegram_linked || false,
+        telegramDisplayName: customer.telegram_display_name || null,
       };
       
       return transformedCustomer;
@@ -561,6 +564,12 @@ export const CustomerSearchSection = ({
                           {badge.label}
                         </span>
                       )}
+                      {customer.telegramLinked && (
+                        <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">
+                          <MessageCircle size={10} />
+                          {customer.telegramDisplayName}
+                        </span>
+                      )}
                       {isSelected && (
                         <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 ml-auto" />
                       )}
@@ -639,6 +648,12 @@ export const CustomerSearchSection = ({
                     {getCustomerBadge(selectedCustomer) && (
                       <span className={`text-xs px-1.5 py-0.5 rounded ${getCustomerBadge(selectedCustomer)?.color}`}>
                         {getCustomerBadge(selectedCustomer)?.label}
+                      </span>
+                    )}
+                    {selectedCustomer.telegramLinked && (
+                      <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300">
+                        <MessageCircle size={10} />
+                        {selectedCustomer.telegramDisplayName}
                       </span>
                     )}
                   </div>

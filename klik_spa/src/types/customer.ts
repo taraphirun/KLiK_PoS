@@ -84,6 +84,8 @@ export interface Customer {
   loyaltyProgram?: string | null
   loyaltyTier?: string | null
   redeemableValue?: number
+  telegramLinked?: boolean
+  telegramDisplayName?: string | null
 }
 
 export interface LoyaltySummary {

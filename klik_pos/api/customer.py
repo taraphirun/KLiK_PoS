@@ -11,6 +11,49 @@ from klik_pos.api.loyalty import get_customer_loyalty_summary
 from .sql_builder import apply_sql_permissions
 
 
+def _get_customer_telegram_links(customer_names):
+    """Batch-fetch linked Telegram contact info for a list of customer names.
+
+    Mirrors the matching rules in erpnext_telegram_integration.telegram_api.get_customer_telegram_link
+    (link visible to the linking user, or to any System Manager/Administrator) but in one query
+    instead of one call per customer.
+
+    Returns {customer_name: {"telegram_contact_id": ..., "telegram_display_name": ...}}.
+    """
+    if not customer_names or _get_telegram_api() is None:
+        return {}
+    try:
+        user = frappe.session.user
+        is_admin = user == "Administrator" or "System Manager" in frappe.get_roles(user)
+        placeholders = ",".join(["%s"] * len(customer_names))
+        if is_admin:
+            rows = frappe.db.sql(
+                f"""
+                SELECT tcm.customer_name, tcm.telegram_contact_id, tcm.telegram_display_name
+                FROM `tabTelegram Contact Mapping` tcm
+                INNER JOIN `tabTelegram User Settings` tus ON tcm.parent = tus.name
+                WHERE tcm.customer_name IN ({placeholders})
+                """,
+                tuple(customer_names),
+                as_dict=True,
+            )
+        else:
+            rows = frappe.db.sql(
+                f"""
+                SELECT tcm.customer_name, tcm.telegram_contact_id, tcm.telegram_display_name
+                FROM `tabTelegram Contact Mapping` tcm
+                INNER JOIN `tabTelegram User Settings` tus ON tcm.parent = tus.name
+                WHERE tus.user_email = %s AND tcm.customer_name IN ({placeholders})
+                """,
+                tuple([user] + list(customer_names)),
+                as_dict=True,
+            )
+        return {r["customer_name"]: r for r in rows}
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Error batch-fetching Telegram links")
+        return {}
+
+
 @frappe.whitelist(allow_guest=True)
 def get_customers(limit: int = 100, start: int = 0, search: str = ""):
     try:
@@ -151,7 +194,9 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
         params.extend([limit_val, offset_val])
         
         customers = frappe.db.sql(data_query, tuple(params), as_dict=True)
-        
+
+        telegram_links = _get_customer_telegram_links([c["name"] for c in customers])
+
         for cust in customers:
             cust["company_currency"] = company_currency
             cust["contact"] = None
@@ -162,6 +207,11 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
                 company=company,
             )
             cust["loyalty_points"] = cust["loyalty"].get("loyalty_points", 0)
+            telegram_link = telegram_links.get(cust["name"])
+            cust["telegram_linked"] = bool(telegram_link)
+            cust["telegram_display_name"] = (
+                telegram_link["telegram_display_name"] if telegram_link else None
+            )
         
         return {
             "success": True,
@@ -322,6 +372,8 @@ def get_customer_info(customer_name: str):
                 as_dict=True,
             )
 
+        telegram_link = _get_customer_telegram_links([customer.name]).get(customer.name)
+
         # Prepare base customer data
         customer_data = {
             "name": customer.name,
@@ -341,6 +393,10 @@ def get_customer_info(customer_name: str):
             "loyalty": get_customer_loyalty_summary(
                 customer.name,
                 company=getattr(pos_profile, "company", None),
+            ),
+            "telegram_linked": bool(telegram_link),
+            "telegram_display_name": (
+                telegram_link["telegram_display_name"] if telegram_link else None
             ),
             **party_details,
         }

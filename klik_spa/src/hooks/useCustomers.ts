@@ -18,6 +18,8 @@ interface ERPCustomer {
   custom_last_visit?: string;
   is_walkin?: number;
   tax_id?: string;
+  telegram_linked?: boolean;
+  telegram_display_name?: string | null;
   contact?: {
     first_name?: string;
     last_name?: string;
@@ -402,7 +404,9 @@ export function useCustomers(searchQuery?: string) {
           lastVisit: customer.custom_last_visit || undefined,
           avatar: undefined,
           defaultCurrency: customer.default_currency,
-          companyCurrency: customer.company_currency
+          companyCurrency: customer.company_currency,
+          telegramLinked: customer.telegram_linked || false,
+          telegramDisplayName: customer.telegram_display_name || null
         };
       });
 
@@ -501,6 +505,8 @@ export function useCustomerDetails(customerId: string | null) {
           avatar: undefined,
           defaultCurrency: undefined,
           companyCurrency: undefined,
+          telegramLinked: apiCustomer.telegram_linked || false,
+          telegramDisplayName: apiCustomer.telegram_display_name || null,
           customer_group: apiCustomer.customer_group || "All Customer Groups",
           territory: apiCustomer.territory || "All Territories",
           contactPerson: apiCustomer.contact_data ?
