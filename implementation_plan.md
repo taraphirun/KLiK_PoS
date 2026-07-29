@@ -10,6 +10,31 @@ This document details the exact technical changes (functions, state variables, A
 
 ---
 
+## Progress Tracker
+
+Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives in each `todo/NNN.md`; per-phase status in each `phases/phase-NN.md`.
+
+| Module | Phase | Todos | Status |
+|---|---|---|---|
+| 9 — AZ Coil Sheet Order [TOP CORE 1] | (pre-plan) | — | ✅ Done |
+| 6 — Transaction-Based Invoice & Closing Reconciliation [TOP CORE 2] | 1 | 001–004 | ✅ Done (runtime-verified by user; partial/unpaid fix applied) |
+| 2 — Telegram Contact Search & Customer Link | 2 | 005–007 | ⬜ Not started |
+| 3 — Telegram Invoice Sharing | 3 | 008–009 | ⬜ Not started |
+| 4 — Customer Credit Limit Validation | 4 | 010–011 | ⬜ Not started |
+| 5 — Additional Discount & Tax Round-Off | 5 | 012–013 | ⬜ Not started |
+| 7 — Customer-Specific Price List | 6 | 014–015 | ⬜ Not started |
+| 8 — Keyboard Navigation & UI Usability | 7 | 016–017 | ⬜ Not started |
+| 1 — Custom Print Format & Status Indicators | 8 | 018 | ⬜ Not started |
+| 10 — Delivery Tracking & Payment Reconciliation | 9 | 019–024 | ⬜ Not started |
+| 11 — Driver Management & Free-Text→Link | 10 | 025–028 | ⬜ Not started |
+| 12 — Deliveries & Conflicts UI | 11 | 029–030 | ⬜ Not started |
+| 13 — Live Delivery Map | 12 | 031–032 | ⬜ Not started |
+| 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
+
+**Next up:** Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point for the delivery consolidation.
+
+---
+
 ## Top Priority Core Features Summary
 
 1. **Module 9 [TOP CORE 1]**: AZ Coil Sheet Order Custom Input inside `CartItemRow.tsx` (Option B formula, disabled quantity, Khmer text).
@@ -194,6 +219,70 @@ This document details the exact technical changes (functions, state variables, A
 - **[NEW] [klik_pos/klik_pos/print_format/ds_pos_invoice_klik/ds_pos_invoice_klik.json](file:///home/phirun/dev/KLiK_PoS/klik_pos/klik_pos/print_format/ds_pos_invoice_klik/ds_pos_invoice_klik.json)**:
   - Print format JSON definition for `DS POS Invoice KLiK`.
   - Displays Khmer sheet order descriptions (`custom_description`), payment breakdown, customer credit info, and status indicators (`PAID`, `UNPAID`, `PARTIAL`).
+
+---
+
+### Module 10: Delivery Tracking & Payment Reconciliation (Telegram Delivery Bot)
+
+Detailed specification lives in [phases/phase-09.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-09.md) (Todos 019–024). Builds on Module 6 (unpaid/partial invoices go out for delivery, driver collects, reconciliation posts the payment). Does **not** use Sales Orders or Delivery Notes.
+
+**Boundary (decided): bot collects, KlikPOS confirms.** The bot collects delivery data via a structured Telegram (aiogram FSM) flow — invoice no, completion status, payment status, GPS, optional photos/voice — with **no OCR/AI** (the old Document AI/GenAI/ocr-service code is legacy/unused). Data is structured but driver-entered, so KlikPOS does the **invoice matching + human confirm + mark-paid**. KlikPOS runs no OCR/AI (structured-to-structured match). Data flows one-way (bot → KlikPOS); the Payment Entry posts locally in Frappe. Because the collection is a thin structured flow, full consolidation of the bot's data layer into Frappe is now viable — see Module 11 note.
+
+#### 1. Delivery Report Staging DocType
+- **[NEW] `klik_pos/klik_pos/doctype/delivery_report/`**: Stores untrusted bot data (GPS, driver, timestamp, delivery status, paid-at-location, amount collected) plus reconciliation state (`Unmatched` / `Suggested` / `Confirmed` / `Rejected`) and `match_confidence`.
+
+#### 2. Sales Invoice Reconciled Delivery Fields
+- **[MODIFY] `klik_pos/klik_pos/custom/sales_invoice.json`**: Add `custom_delivery_status`, `custom_delivery_driver`, `custom_delivered_at`, `custom_delivery_gps_latitude/longitude`, `custom_delivery_report` — written only after a confirmed match.
+
+#### 3. Delivery API
+- **[NEW] `klik_pos/api/delivery.py`**:
+  - `submit_delivery_report(data)`: idempotent bot ingestion; creates a Delivery Report and runs auto-match.
+  - `match_delivery_report(report)`: exact invoice-no → fuzzy → attribute matching with confidence scoring; suggestion only, never mutates the invoice.
+  - `confirm_delivery_match(report_name, invoice_name, mark_paid)`: stamps delivery data onto the invoice and, if paid-at-location, posts a Payment Entry via the existing `create_payment_entry`.
+  - `reject_delivery_match` / `rematch_delivery_report`: manual resolution.
+
+#### 4. Reconciliation UI
+- **[NEW] `klik_spa/src/pages/DeliveryReconciliationPage.tsx`** + `klik_spa/src/services/delivery.ts`: queue of pending reports, suggested-match card with confidence, confirm / reject / re-match / mark-as-paid actions.
+
+---
+
+### Module 11: Driver Management & Free-Text → Link Migration
+
+Detailed specification lives in [phases/phase-10.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-10.md) (Todos 025–028). Introduces a `Driver` master in KlikPOS and migrates the Phase 9 free-text driver fields to `Link`. Integrates with the existing delivery bot project (`/home/phirun/dev/hd-delivery-telegram`), which already owns driver identity (Telegram id / chat id) in its own PostgreSQL `Driver` table.
+
+#### 1. Driver DocType
+- **[NEW] `klik_pos/klik_pos/doctype/driver/`**: `driver_name`, `phone_number`, `telegram_user_id`, `telegram_username`, `chat_id`, `status` (Active/Pending/Rejected), `bot_driver_id` (cross-system sync key).
+
+#### 2. Driver API + Bot Sync Bridge
+- **[NEW] `klik_pos/api/driver.py`**: `list_drivers`, `upsert_driver`, `set_driver_status`, and `sync_driver_from_bot` (bot attaches Telegram identity). Source-of-truth default: **Frappe is master**, bot syncs from it (see phase-10 for the alternative mirror mode).
+
+#### 3. Driver Management UI
+- **[NEW] `klik_spa/src/pages/DriverManagementPage.tsx`** + `klik_spa/src/services/driver.ts`: side-menu page to list/create/approve/reject/suspend drivers — a native port of the bot's `/drivers` screen.
+
+#### 4. Field Migration
+- **[MODIFY]** `delivery_report.json` and `sales_invoice.json`: convert `delivery_driver` / `custom_delivery_driver` from `Data` to `Link(Driver)` with a backfill patch.
+
+> **Broader UI-integration note** (updated): The delivery bot's collection path is now a thin structured Telegram (aiogram FSM) flow with **no OCR/AI** — the Document AI/GenAI/ocr-service code is legacy. This removes the main obstacle to consolidation, so **full consolidation into Frappe is now viable** and is the recommended direction for a single system-of-record. The one piece that cannot become a KlikPOS web screen is the **Telegram bot process itself** — it stays as a Python service but repoints from Postgres/MinIO to KlikPOS whitelisted APIs + Frappe File, becoming a thin data-entry client.
+>
+> Recommended migration is **strangler-fig, not big-bang**: (1) model the bot's entities as Frappe doctypes (Delivery Report = Module 10, Driver = Module 11); (2) natively port UI screens into `klik_spa` (reconciliation, drivers first; then deliveries list, live map via Google Maps + Frappe realtime); (3) repoint the aiogram bot to write to KlikPOS APIs; (4) retire NestJS + Postgres + Redis/BullMQ + MinIO + ocr-service. Modules 10–14 implement this path in order.
+>
+> **Out of scope (decided)**: The bot's `Customer` and `Address` entities are **not** ported — ERPNext already owns Customer and Address natively; a Delivery Report derives its customer/address from the **matched Sales Invoice**. The bot's `Booklet` feature is a **legacy transition-only aid and is dropped** — no Booklet doctype, field, or UI in KlikPOS. Only **Delivery** and **Driver** entities move.
+
+---
+
+### Module 12: Deliveries & Conflicts UI in KlikPOS
+
+Detailed spec: [phases/phase-11.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-11.md) (Todos 029–030). Native port of the bot's deliveries list + conflicts/duplicates + low-confidence screens, operating over the Frappe `Delivery Report` doctype and reusing the Module 10 reconciliation endpoints.
+
+### Module 13: Live Delivery Map
+
+Detailed spec: [phases/phase-12.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-12.md) (Todos 031–032). Port of the bot's `/live` map: Google Maps (`@vis.gl/react-google-maps`) plotting delivery GPS, driven by Frappe `publish_realtime` instead of NestJS/socket.io.
+
+### Module 14: Offline-First Bot Repoint & Legacy Retirement
+
+Detailed spec: [phases/phase-13.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-13.md) (Todos 033–036). The bot becomes **offline-first**: every delivery is written to a **local SQLite** outbox immediately (so drivers keep working when ERPNext is down), then a **sync worker** forwards `Not Synced` rows to the KlikPOS ingestion API (idempotent on `bot_delivery_id`) and uploads photos/voice to Frappe File. The bot UI is reduced to a per-delivery **Synced / Not Synced** status. Final step retires NestJS + Postgres + Redis/BullMQ + MinIO + ocr-service. These todos live in the bot repo (`hd-delivery-telegram`); the KlikPOS-side contract is the Module 10 APIs.
+
+> **Offline-first invariant**: the bot never blocks a driver. Local SQLite is the durable capture store; KlikPOS is authoritative once synced. Idempotency on `bot_delivery_id` (Module 10, Todo 021) is what makes retry-after-downtime safe.
 
 ---
 
