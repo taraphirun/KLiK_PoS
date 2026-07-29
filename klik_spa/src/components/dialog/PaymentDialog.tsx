@@ -1178,10 +1178,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
         toast.error("Please enter payment amounts");
         return;
       }
-      if (outstandingAmount > 0 && !(allowPartialPayments && totalPaidAmount > 0)) {
-        toast.error("Please complete the payment before proceeding");
-        return;
-      }
+      // Partial payment (some collected, remainder outstanding) is allowed for all customers;
+      // the outstanding balance is recorded as Accounts Receivable.
     }
     setIsProcessingPayment(true);
     const paymentData = buildPaymentData(deliveryPersonnel);

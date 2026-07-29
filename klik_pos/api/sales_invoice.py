@@ -3132,13 +3132,11 @@ class CustomSalesInvoice(SalesInvoice):
 				)
 
 	def validate_full_payment(self):
-		if not self.pos_profile or getattr(self, "is_return", 0):
+		# Only POS invoices (is_pos=1) enforce full/partial-payment rules. Credit/unpaid
+		# invoices (is_pos=0) are regular Accounts Receivable and may be left outstanding.
+		if not getattr(self, "is_pos", 0) or getattr(self, "is_return", 0):
 			return
 
-		allow_partial_payment = frappe.db.get_value(
-			"POS Profile", self.pos_profile, "allow_partial_payment"
-		)
-		allow_partial_payment = allow_partial_payment or getattr(self, "custom_allow_partial_payment", 0)
 		precision = self.precision("rounded_total")
 		if precision is None:
 			precision = self.precision("grand_total")
@@ -3146,6 +3144,15 @@ class CustomSalesInvoice(SalesInvoice):
 		paid_amount = flt(self.paid_amount, precision)
 		if paid_amount < invoice_total and flt(getattr(self, "loyalty_amount", 0)):
 			paid_amount = flt(paid_amount + flt(self.loyalty_amount, precision), precision)
+
+		# Intentional partial payment: some was collected and a remainder is outstanding
+		if paid_amount > 0 and flt(self.outstanding_amount, precision) > 0:
+			return
+
+		allow_partial_payment = frappe.db.get_value(
+			"POS Profile", self.pos_profile, "allow_partial_payment"
+		)
+		allow_partial_payment = allow_partial_payment or getattr(self, "custom_allow_partial_payment", 0)
 
 		if not allow_partial_payment and paid_amount < invoice_total:
 			frappe.throw(
