@@ -19,7 +19,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 9 — AZ Coil Sheet Order [TOP CORE 1] | (pre-plan) | — | ✅ Done |
 | 6 — Transaction-Based Invoice & Closing Reconciliation [TOP CORE 2] | 1 | 001–004 | ✅ Done (runtime-verified by user; partial/unpaid fix applied) |
 | 2 — Telegram Contact Search & Customer Link | 2 | 005–007 | ✅ Done (backend wrappers in customer.py, service routed through them, TelegramLinkSection subcomponent) |
-| 3 — Telegram Invoice Sharing | 3 | 008–009 | ⬜ Not started |
+| 3 — Telegram Invoice Sharing | 3 | 008–009 | ✅ Done |
 | 4 — Customer Credit Limit Validation | 4 | 010–011 | ⬜ Not started |
 | 5 — Additional Discount & Tax Round-Off | 5 | 012–013 | ⬜ Not started |
 | 7 — Customer-Specific Price List | 6 | 014–015 | ⬜ Not started |
@@ -31,7 +31,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 13 — Live Delivery Map | 12 | 031–032 | ⬜ Not started |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
 
-**Next up:** By table order, Phase 3 / Module 3 (Telegram Invoice Sharing, Todos 008–009). Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point. (Phase 2 completed 2026-07-29.)
+**Next up:** By table order, Phase 4 / Module 4 (Customer Credit Limit Validation, Todos 010–011). Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point. (Phase 3 completed 2026-07-29.)
 
 ---
 

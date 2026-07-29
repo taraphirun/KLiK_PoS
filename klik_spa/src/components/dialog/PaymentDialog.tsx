@@ -144,6 +144,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
   });
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [isSendingWhatsapp, setIsSendingWhatsapp] = useState(false);
+  const [isSendingTelegram, setIsSendingTelegram] = useState(false);
   const [whatsappTemplates, setWhatsappTemplates] = useState<any[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
   const [customMessage, setCustomMessage] = useState("");
@@ -2100,6 +2101,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                 setIsSendingEmail={setIsSendingEmail}
                 isSendingWhatsapp={isSendingWhatsapp}
                 setIsSendingWhatsapp={setIsSendingWhatsapp}
+                isSendingTelegram={isSendingTelegram}
+                setIsSendingTelegram={setIsSendingTelegram}
                 setSharingMode={setSharingMode}
                 posDetails={posDetails}
                 getProcessedMessage={getProcessedMessage}

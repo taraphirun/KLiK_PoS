@@ -3923,3 +3923,59 @@ def submit_draft_invoice(invoice_id, data=None):
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), f"Error submitting draft invoice {invoice_id}")
 		return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
+def send_telegram_invoice(customer_name, invoice_name, attach_file=True):
+	"""Generate a PDF of a Sales Invoice and send it to the customer's linked Telegram chat."""
+	import asyncio
+	import os
+	import tempfile
+
+	from klik_pos.api.customer import get_customer_telegram_link
+
+	try:
+		from erpnext_telegram_integration.telethon_client import get_telegram_client_manager
+	except Exception:
+		return {"success": False, "message": _("Telegram integration is not available")}
+
+	if not frappe.db.exists("Sales Invoice", invoice_name):
+		return {"success": False, "message": _("Invoice {0} not found").format(invoice_name)}
+
+	link = get_customer_telegram_link(customer_name)
+	if not link.get("success") or not link.get("linked"):
+		return {
+			"success": False,
+			"message": link.get("message") or _("No Telegram contact linked to this customer"),
+		}
+
+	pdf_file_path = None
+	if cint(attach_file):
+		pos_profile = get_current_pos_profile()
+		print_format = (pos_profile.print_format if pos_profile else None) or "Standard"
+		try:
+			pdf_content = frappe.get_print("Sales Invoice", invoice_name, print_format, as_pdf=True)
+			temp_file = tempfile.NamedTemporaryFile(
+				prefix=f"{invoice_name}_", suffix=".pdf", delete=False
+			)
+			temp_file.write(pdf_content)
+			temp_file.close()
+			pdf_file_path = temp_file.name
+		except Exception:
+			frappe.log_error(frappe.get_traceback(), "send_telegram_invoice PDF generation failed")
+
+	try:
+		manager = get_telegram_client_manager(frappe.session.user)
+		return asyncio.run(
+			manager.send_message(
+				link["telegram_contact_id"],
+				_("Invoice {0}").format(invoice_name),
+				file_path=pdf_file_path,
+			)
+		)
+	except Exception as e:
+		frappe.log_error(frappe.get_traceback(), "send_telegram_invoice failed")
+		return {"success": False, "message": str(e)}
+	finally:
+		if pdf_file_path and os.path.exists(pdf_file_path):
+			os.remove(pdf_file_path)

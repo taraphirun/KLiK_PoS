@@ -264,6 +264,40 @@ export async function sendInvoiceWithPDF(mobile: string, invoiceNo: string, mess
   return result.message;
 }
 
+// Function for sending an invoice via Telegram
+export async function sendInvoiceTelegram(data: {
+  customer_name: string;
+  invoice_name: string;
+  attach_file?: boolean;
+}) {
+  const csrfToken = window.csrf_token;
+
+  const response = await fetch('/api/method/klik_pos.api.sales_invoice.send_telegram_invoice', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Frappe-CSRF-Token': csrfToken,
+    },
+    body: JSON.stringify({
+      customer_name: data.customer_name,
+      invoice_name: data.invoice_name,
+      attach_file: data.attach_file ?? true,
+    }),
+    credentials: 'include',
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.message || !result.message.success) {
+    const serverMsg = result._server_messages
+      ? JSON.parse(result._server_messages)[0]
+      : result.message?.message || 'Failed to send Telegram message';
+    throw new Error(serverMsg);
+  }
+
+  return result.message;
+}
+
 // Function for sending invoice with customer data (from frontend)
 export async function sendInvoiceWhatsApp(data: {
   mobile_no: string;

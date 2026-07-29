@@ -2,6 +2,7 @@ import { X, Loader2, Pencil, Check } from "lucide-react";
 import { formatCurrencyWithSymbol } from "../../utils/currency";
 import { useEffect, useState } from "react";
 import { toast } from "react-toastify";
+import { useCustomerActions } from "../../services/customerService";
 
 interface SharingInterfaceProps {
   sharingMode: string | null;
@@ -30,6 +31,8 @@ interface SharingInterfaceProps {
   setIsSendingEmail: (value: boolean) => void;
   isSendingWhatsapp: boolean;
   setIsSendingWhatsapp: (value: boolean) => void;
+  isSendingTelegram: boolean;
+  setIsSendingTelegram: (value: boolean) => void;
   setSharingMode: (mode: string | null) => void;
   posDetails: any;
   getProcessedMessage: () => string;
@@ -65,6 +68,8 @@ export default function SharingInterface({
   setIsSendingEmail,
   isSendingWhatsapp,
   setIsSendingWhatsapp,
+  isSendingTelegram,
+  setIsSendingTelegram,
   setSharingMode,
   posDetails,
   getProcessedMessage,
@@ -75,6 +80,8 @@ export default function SharingInterface({
   const [modeEnabled, setModeEnabled] = useState(false);
   const [outgoingAccounts, setOutgoingAccounts] = useState<any[]>([]);
   const [selectedSender, setSelectedSender] = useState<string>("");
+  const [telegramDisplayName, setTelegramDisplayName] = useState<string>("");
+  const { getCustomerTelegramLink } = useCustomerActions();
 
   useEffect(() => {
     if (sharingMode === "email") {
@@ -146,6 +153,30 @@ export default function SharingInterface({
       };
 
       checkWhatsAppSetup();
+    } else if (sharingMode === "telegram") {
+      const checkTelegramLink = async () => {
+        const customerId = invoiceData?.customer;
+        if (!customerId) {
+          toast.error("No customer linked to this invoice.");
+          setModeEnabled(false);
+          return;
+        }
+        try {
+          const link = await getCustomerTelegramLink(customerId);
+          if (!link.linked) {
+            toast.error(link.message || "This customer has no linked Telegram account.");
+            setModeEnabled(false);
+          } else {
+            setTelegramDisplayName(link.telegram_display_name || "");
+            setModeEnabled(true);
+          }
+        } catch (error) {
+          toast.error("Failed to check Telegram link. Please try again.");
+          setSharingMode(null);
+        }
+      };
+
+      checkTelegramLink();
     }
   }, [sharingMode]);
 
@@ -185,6 +216,23 @@ export default function SharingInterface({
       alert(error.message);
     } finally {
       setIsSendingWhatsapp(false);
+    }
+  };
+
+  const sendTelegram = async () => {
+    setIsSendingTelegram(true);
+    try {
+      const { sendInvoiceTelegram } = await import("../../services/useSharing");
+      await sendInvoiceTelegram({
+        customer_name: invoiceData?.customer || "",
+        invoice_name: invoiceData?.name || "",
+      });
+      toast.success("Invoice sent via Telegram!");
+      setSharingMode(null);
+    } catch (error: any) {
+      toast.error(error.message);
+    } finally {
+      setIsSendingTelegram(false);
     }
   };
 
@@ -351,6 +399,44 @@ export default function SharingInterface({
             <div className="mt-2 text-sm text-red-600">
               WhatsApp integration is not configured. Please set up WhatsApp
               Business API in ERPNext to use this feature.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (sharingMode === "telegram") {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize">Share via Telegram</h3>
+          <button onClick={() => setSharingMode(null)} className="text-gray-500 hover:text-gray-700">
+            <X size={20} />
+          </button>
+        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Customer Name</label>
+            <input type="text" value={sharingData.name} readOnly className="w-full px-3 py-2 border rounded-lg bg-gray-50 dark:bg-gray-700" placeholder="Customer name" />
+          </div>
+          {telegramDisplayName && (
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              Linked Telegram contact: <span className="font-medium">{telegramDisplayName}</span>
+            </p>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Message Preview</label>
+            <div className="bg-sky-50 dark:bg-sky-900/20 rounded-lg p-4 border border-sky-200">
+              <p className="text-sm text-gray-900">Invoice {invoiceData?.name} will be sent as a PDF attachment.</p>
+            </div>
+          </div>
+          <button onClick={sendTelegram} disabled={isSendingTelegram || !modeEnabled} className="w-full py-3 bg-sky-600 text-white rounded-lg font-medium hover:bg-sky-700 disabled:bg-gray-300">
+            {isSendingTelegram ? "Sending..." : "Send via Telegram"}
+          </button>
+          {!modeEnabled && (
+            <div className="mt-2 text-sm text-red-600">
+              This customer has no linked Telegram account. Link one from the customer profile to use this feature.
             </div>
           )}
         </div>
