@@ -992,8 +992,98 @@ def get_required_customer_fields():
             "fieldtype": f.fieldtype,
             "options": f.options
         }
-        for f in meta.fields 
+        for f in meta.fields
         if f.reqd and f.fieldtype not in ["Section Break", "Column Break", "Tab Break"]
     ]
-    
+
     return required_fields
+
+
+# ---------------------------------------------------------------------------
+# Telegram integration wrappers
+#
+# These proxy to the optional `erpnext_telegram_integration` app. The import is
+# performed lazily inside each endpoint so that a missing/broken Telegram app
+# never breaks the rest of this module (customer create/update, groups, etc.).
+# ---------------------------------------------------------------------------
+
+def _get_telegram_api():
+    """Lazily import the Telegram integration API.
+
+    Returns the `telegram_api` module, or None if the app is not installed.
+    """
+    try:
+        from erpnext_telegram_integration import telegram_api
+        return telegram_api
+    except Exception:
+        return None
+
+
+@frappe.whitelist()
+def search_telegram_contact(search_query, search_type="all"):
+    """Proxy Telegram contact search to erpnext_telegram_integration."""
+    telegram_api = _get_telegram_api()
+    if telegram_api is None:
+        return {
+            "success": False,
+            "contacts": [],
+            "message": _("Telegram integration is not available"),
+        }
+    try:
+        return telegram_api.search_telegram_contact(
+            search_query=search_query, search_type=search_type
+        )
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "search_telegram_contact failed")
+        return {"success": False, "contacts": [], "message": str(e)}
+
+
+@frappe.whitelist()
+def link_telegram_to_customer(
+    customer_name,
+    telegram_user_id,
+    telegram_display_name="",
+    telegram_username="",
+    first_name="",
+    last_name="",
+    phone_number="",
+    is_group=0,
+):
+    """Proxy linking a Telegram user/group to a customer."""
+    telegram_api = _get_telegram_api()
+    if telegram_api is None:
+        return {
+            "success": False,
+            "message": _("Telegram integration is not available"),
+        }
+    try:
+        return telegram_api.link_telegram_to_customer(
+            customer_name=customer_name,
+            telegram_user_id=telegram_user_id,
+            telegram_display_name=telegram_display_name,
+            telegram_username=telegram_username,
+            first_name=first_name,
+            last_name=last_name,
+            phone_number=phone_number,
+            is_group=is_group,
+        )
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "link_telegram_to_customer failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def get_customer_telegram_link(customer_name):
+    """Return the linked Telegram details for a customer, if any."""
+    telegram_api = _get_telegram_api()
+    if telegram_api is None:
+        return {
+            "success": False,
+            "linked": False,
+            "message": _("Telegram integration is not available"),
+        }
+    try:
+        return telegram_api.get_customer_telegram_link(customer_name=customer_name)
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "get_customer_telegram_link failed")
+        return {"success": False, "linked": False, "message": str(e)}

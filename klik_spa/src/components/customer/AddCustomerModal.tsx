@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { X, Save, Building, User } from "lucide-react";
 import type { AddCustomerModalProps } from "../../types/customerForm";
 import type { Customer } from "../../types/customer";
+import { useCustomerActions, type TelegramContact } from "../../services/customerService";
+import TelegramLinkSection from "./TelegramLinkSection";
 import { MissingFieldsRenderer } from "./MissingFieldsRenderer";
 import { CustomerTypeSelector } from "./CustomerTypeSelector";
 import { BasicInformationForm } from "./BasicInformationForm";
@@ -35,6 +37,10 @@ export default function AddCustomerModal({
     handleSubmit,
     canSaveCustomer,
   } = useCustomerForm(propCustomer, prefilledName, prefilledData);
+
+  const { linkTelegramToCustomer } = useCustomerActions();
+  // Telegram contact selected for a new customer, linked once the customer is created.
+  const pendingTelegramContact = useRef<TelegramContact | null>(null);
 
   const [missingDynamicData, setMissingDynamicData] = useState<Record<string, any>>({});
   const [isMissingFieldsValid, setIsMissingFieldsValid] = useState(true);
@@ -147,8 +153,31 @@ export default function AddCustomerModal({
         }
       };
       onSave(finalCustomerData);
+
+      // Link a Telegram contact selected for a brand-new customer.
+      const contact = pendingTelegramContact.current;
+      const createdId = customerData.id || finalCustomerData.name;
+      if (contact && createdId) {
+        const displayName =
+          [contact.first_name, contact.last_name].filter(Boolean).join(" ") ||
+          (contact.telegram_username ? `@${contact.telegram_username}` : `User ${contact.telegram_user_id}`);
+        const result = await linkTelegramToCustomer(String(createdId), contact.telegram_user_id, {
+          telegramDisplayName: displayName,
+          telegramUsername: contact.telegram_username,
+          firstName: contact.first_name,
+          lastName: contact.last_name,
+          phoneNumber: contact.phone_number,
+          isGroup: contact.is_group ? 1 : 0,
+        });
+        if (result.success) {
+          toast.success(`Linked to Telegram: ${displayName}`);
+        } else {
+          toast.error(result.message || "Failed to link Telegram contact");
+        }
+        pendingTelegramContact.current = null;
+      }
     };
-    
+
     await handleSubmit(e, customOnSave, onClose);
   };
 
@@ -246,6 +275,13 @@ export default function AddCustomerModal({
               errors={errors}
               isZatcaEnabled={posDetails?.is_zatca_enabled}
               onChange={(field, value) => updateFormField(`address.${field}`, value)}
+            />
+
+            <TelegramLinkSection
+              customerId={isEditing ? propCustomer?.id : undefined}
+              onPendingContactChange={(contact) => {
+                pendingTelegramContact.current = contact;
+              }}
             />
 
             {!missingFieldsLoading && hasMissingFields && (
