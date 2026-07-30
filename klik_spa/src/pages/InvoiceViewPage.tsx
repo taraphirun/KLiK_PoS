@@ -32,6 +32,7 @@ import {
 
 
 import PaymentDialog from "../components/dialog/PaymentDialog";
+import ShareInvoiceDialog from "../components/dialog/ShareInvoiceDialog";
 import SalespersonAuthModal from "../components/dialog/SalespersonAuthModal";
 import { useInvoiceDetails } from "../hooks/useInvoiceDetails";
 import { useCustomerStatistics } from "../hooks/useCustomerStatistics";
@@ -1017,56 +1018,17 @@ export default function InvoiceViewPage() {
         </div>
 
 
-      {/* PaymentDialog for Sharing */}
+      {/* Share Invoice Dialog (Email / WhatsApp / SMS / Telegram) */}
       {showPaymentDialog && (
-        <PaymentDialog
+        <ShareInvoiceDialog
           isOpen={showPaymentDialog}
           onClose={() => {
             setShowPaymentDialog(false)
             setSharingMode(null)
           }}
-          cartItems={[]}
-          appliedCoupons={[]}
-          selectedCustomer={{
-            id: invoice.customer,
-            name: invoice.customer,
-            email: invoice.customer_address_doc?.email_id || '',
-            phone: invoice.customer_address_doc?.phone || '',
-            type: 'individual',
-            status: 'active',
-            loyaltyPoints: 0,
-            totalOrders: 0,
-            totalSpent: 0,
-
-            address: {
-              addressType: 'Billing',
-              // @ts-expect-error just ignore
-              streetName: invoice.customer_address_doc?.address_line1 || '',
-              buildingNumber: '',
-              subdivisionName: '',
-              cityName: '',
-              postalCode: '',
-              country: posDetails?.company?.country || '',
-              isPrimary: true
-            },
-            vatNumber: '',
-            registrationScheme: '',
-            registrationNumber: '',
-            preferredPaymentMethod: 'Cash',
-            tags: []
-          }}
-          onCompletePayment={() => {
-            setShowPaymentDialog(false)
-            setSharingMode(null)
-          }}
-          onHoldOrder={() => {
-            setShowPaymentDialog(false)
-            setSharingMode(null)
-          }}
-          isMobile={false}
-          isFullPage={false}
-          initialSharingMode={sharingMode}
-          externalInvoiceData={invoice}
+          invoiceData={invoice}
+          posDetails={posDetails}
+          initialMode={sharingMode}
         />
       )}
 

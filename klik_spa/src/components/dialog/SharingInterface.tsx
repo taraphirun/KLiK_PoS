@@ -3,88 +3,86 @@ import { formatCurrencyWithSymbol } from "../../utils/currency";
 import { useEffect, useState } from "react";
 import { toast } from "react-toastify";
 import { useCustomerActions } from "../../services/customerService";
+import { fetchWhatsAppTemplates, getDefaultWhatsAppTemplate, processTemplate, getDefaultMessageTemplate } from "../../services/whatsappTemplateService";
+import { fetchEmailTemplates, getDefaultEmailTemplate, processEmailTemplate, getDefaultEmailMessageTemplate } from "../../services/emailTemplateService";
 
 interface SharingInterfaceProps {
-  sharingMode: string | null;
-  sharingData: { email: string; phone: string; name: string };
-  setSharingData: (data: any) => void;
+  mode: string | null;
+  onModeChange: (mode: string | null) => void;
   invoiceData: any;
-  calculations: any;
-  displayCurrencySymbol: string;
-  whatsappTemplates: any[];
-  selectedTemplate: any;
-  customMessage: string;
-  isLoadingTemplates: boolean;
-  isEditingWhatsapp: boolean;
-  setIsEditingWhatsapp: (value: boolean) => void;
-  setSelectedTemplate: (template: any) => void;
-  setCustomMessage: (message: string) => void;
-  emailTemplates: any[];
-  selectedEmailTemplate: any;
-  emailMessage: string;
-  isLoadingEmailTemplates: boolean;
-  isEditingEmail: boolean;
-  setIsEditingEmail: (value: boolean) => void;
-  setSelectedEmailTemplate: (template: any) => void;
-  setEmailMessage: (message: string) => void;
-  isSendingEmail: boolean;
-  setIsSendingEmail: (value: boolean) => void;
-  isSendingWhatsapp: boolean;
-  setIsSendingWhatsapp: (value: boolean) => void;
-  isSendingTelegram: boolean;
-  setIsSendingTelegram: (value: boolean) => void;
-  setSharingMode: (mode: string | null) => void;
-  posDetails: any;
-  getProcessedMessage: () => string;
-  getProcessedEmailMessage: () => string;
-  handleTemplateChange: (templateName: string) => void;
-  handleEmailTemplateChange: (templateName: string) => void;
+  grandTotal: number;
+  currencySymbol: string;
 }
 
+/**
+ * Self-contained "share this invoice" panel: owns its own sharing-channel state
+ * (recipient details, templates, send-in-flight flags) so it can be mounted
+ * anywhere an invoice needs to be shared - the post-checkout PaymentDialog
+ * screen and the standalone ShareInvoiceDialog both use this same component.
+ */
 export default function SharingInterface({
-  sharingMode,
-  sharingData,
-  setSharingData,
+  mode,
+  onModeChange,
   invoiceData,
-  calculations,
-  displayCurrencySymbol,
-  whatsappTemplates,
-  selectedTemplate,
-  customMessage,
-  isLoadingTemplates,
-  isEditingWhatsapp,
-  setIsEditingWhatsapp,
-  setSelectedTemplate,
-  setCustomMessage,
-  emailTemplates,
-  selectedEmailTemplate,
-  emailMessage,
-  isLoadingEmailTemplates,
-  isEditingEmail,
-  setIsEditingEmail,
-  setSelectedEmailTemplate,
-  setEmailMessage,
-  isSendingEmail,
-  setIsSendingEmail,
-  isSendingWhatsapp,
-  setIsSendingWhatsapp,
-  isSendingTelegram,
-  setIsSendingTelegram,
-  setSharingMode,
-  posDetails,
-  getProcessedMessage,
-  getProcessedEmailMessage,
-  handleTemplateChange,
-  handleEmailTemplateChange,
+  grandTotal,
+  currencySymbol,
 }: SharingInterfaceProps) {
+  const [sharingData, setSharingData] = useState({ email: "", phone: "", name: "" });
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isSendingWhatsapp, setIsSendingWhatsapp] = useState(false);
+  const [isSendingTelegram, setIsSendingTelegram] = useState(false);
+  const [whatsappTemplates, setWhatsappTemplates] = useState<any[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
+  const [customMessage, setCustomMessage] = useState("");
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [isEditingWhatsapp, setIsEditingWhatsapp] = useState(false);
+  const [emailTemplates, setEmailTemplates] = useState<any[]>([]);
+  const [selectedEmailTemplate, setSelectedEmailTemplate] = useState<any>(null);
+  const [emailMessage, setEmailMessage] = useState("");
+  const [isLoadingEmailTemplates, setIsLoadingEmailTemplates] = useState(false);
+  const [isEditingEmail, setIsEditingEmail] = useState(false);
   const [modeEnabled, setModeEnabled] = useState(false);
   const [outgoingAccounts, setOutgoingAccounts] = useState<any[]>([]);
   const [selectedSender, setSelectedSender] = useState<string>("");
   const [telegramDisplayName, setTelegramDisplayName] = useState<string>("");
   const { getCustomerTelegramLink } = useCustomerActions();
 
+  const fetchCustomerDetails = async (customerId: string, existingEmail: string, existingPhone: string, existingName: string) => {
+    try {
+      const response = await fetch(`/api/method/klik_pos.api.customer.get_customer_info?customer_name=${customerId}`);
+      const data = await response.json();
+      if (data.message) {
+        const customerData = data.message;
+        setSharingData({
+          email: existingEmail || customerData.email_id || "",
+          phone: existingPhone || customerData.mobile_no || "",
+          name: existingName || customerData.customer_name || customerData.name || "",
+        });
+      } else {
+        setSharingData({ email: existingEmail, phone: existingPhone, name: existingName });
+      }
+    } catch (error) {
+      console.error("Error fetching customer details:", error);
+      setSharingData({ email: existingEmail, phone: existingPhone, name: existingName });
+    }
+  };
+
   useEffect(() => {
-    if (sharingMode === "email") {
+    if (!mode || !invoiceData) return;
+
+    const email = invoiceData.customer_address_doc?.email_id || invoiceData.customer_email || invoiceData.email_id || "";
+    const phone = invoiceData.mobile_no || invoiceData.customer_address_doc?.mobile_no || invoiceData.customer_address_doc?.phone || invoiceData.customer_phone || "";
+    const name = invoiceData.customer_name || invoiceData.customer || "";
+
+    if ((!email || !phone) && invoiceData.customer) {
+      fetchCustomerDetails(invoiceData.customer, email, phone, name);
+    } else {
+      setSharingData({ email, phone, name });
+    }
+  }, [invoiceData, mode]);
+
+  useEffect(() => {
+    if (mode === "email") {
       const getEmailOutgoingAccounts = async () => {
         const { getAvailableOutgoingAccounts } =
           await import("../../services/useSharing");
@@ -107,12 +105,12 @@ export default function SharingInterface({
           });
         } catch (error) {
           toast.error("Failed to load email accounts. Please try again.");
-          setSharingMode(null);
+          onModeChange(null);
         }
       };
-      
+
       getEmailOutgoingAccounts();
-    } else if (sharingMode === "sms") {
+    } else if (mode === "sms") {
       const getSmsSettings = async () => {
         const { getSMSGateway } = await import("../../services/useSharing");
         try {
@@ -128,12 +126,12 @@ export default function SharingInterface({
           });
         } catch (error) {
           toast.error("Failed to load SMS settings. Please try again.");
-          setSharingMode(null);
+          onModeChange(null);
         }
       };
 
       getSmsSettings();
-    } else if (sharingMode === "whatsapp") {
+    } else if (mode === "whatsapp") {
       const checkWhatsAppSetup = async () => {
         const { getWhatsAppSetup } = await import("../../services/useSharing");
         try {
@@ -148,12 +146,12 @@ export default function SharingInterface({
           }
         } catch (error) {
           toast.error("Failed to load WhatsApp setup. Please try again.");
-          setSharingMode(null);
+          onModeChange(null);
         }
       };
 
       checkWhatsAppSetup();
-    } else if (sharingMode === "telegram") {
+    } else if (mode === "telegram") {
       const checkTelegramLink = async () => {
         const customerId = invoiceData?.customer;
         if (!customerId) {
@@ -172,13 +170,118 @@ export default function SharingInterface({
           }
         } catch (error) {
           toast.error("Failed to check Telegram link. Please try again.");
-          setSharingMode(null);
+          onModeChange(null);
         }
       };
 
       checkTelegramLink();
     }
-  }, [sharingMode]);
+  }, [mode]);
+
+  useEffect(() => {
+    const loadWhatsAppTemplates = async () => {
+      if (mode === "whatsapp" && whatsappTemplates.length === 0) {
+        setIsLoadingTemplates(true);
+        try {
+          const [templates, defaultTemplateName] = await Promise.all([fetchWhatsAppTemplates(), getDefaultWhatsAppTemplate()]);
+          setWhatsappTemplates(templates);
+          if (defaultTemplateName) {
+            const defaultTemplate = templates.find((t) => t.name === defaultTemplateName);
+            if (defaultTemplate) {
+              setSelectedTemplate(defaultTemplate);
+              setCustomMessage(defaultTemplate.template);
+            }
+          } else {
+            setCustomMessage(getDefaultMessageTemplate());
+          }
+        } catch (error) {
+          console.error("Error loading WhatsApp templates:", error);
+          setCustomMessage(getDefaultMessageTemplate());
+        } finally {
+          setIsLoadingTemplates(false);
+        }
+      }
+    };
+    loadWhatsAppTemplates();
+  }, [mode, whatsappTemplates.length]);
+
+  useEffect(() => {
+    const loadEmailTemplates = async () => {
+      if (mode === "email" && emailTemplates.length === 0) {
+        setIsLoadingEmailTemplates(true);
+        try {
+          const [templates, defaultTemplateName] = await Promise.all([fetchEmailTemplates(), getDefaultEmailTemplate()]);
+          setEmailTemplates(templates);
+          if (defaultTemplateName) {
+            const defaultTemplate = templates.find((t) => t.name === defaultTemplateName);
+            if (defaultTemplate) {
+              setSelectedEmailTemplate(defaultTemplate);
+              setEmailMessage(defaultTemplate.response_html || defaultTemplate.response);
+            }
+          } else {
+            setEmailMessage(getDefaultEmailMessageTemplate());
+          }
+        } catch (error) {
+          console.error("Error loading Email templates:", error);
+          setEmailMessage(getDefaultEmailMessageTemplate());
+        } finally {
+          setIsLoadingEmailTemplates(false);
+        }
+      }
+    };
+    loadEmailTemplates();
+  }, [mode, emailTemplates.length]);
+
+  const handleTemplateChange = (templateName: string) => {
+    const template = whatsappTemplates.find((t) => t.name === templateName);
+    if (template) {
+      setSelectedTemplate(template);
+      setCustomMessage(template.template);
+    }
+  };
+
+  const handleEmailTemplateChange = (templateName: string) => {
+    const template = emailTemplates.find((t) => t.name === templateName);
+    if (template) {
+      setSelectedEmailTemplate(template);
+      setEmailMessage(template.response_html || template.response);
+    }
+  };
+
+  const getProcessedMessage = () => {
+    const parameters: Record<string, string> = {
+      customer_name: sharingData.name || "there",
+      invoice_total: formatCurrencyWithSymbol(grandTotal, currencySymbol),
+      invoice_number: invoiceData?.name || "",
+      company_name: "KLiK PoS",
+      date: new Date().toLocaleDateString(),
+    };
+    return processTemplate(customMessage, parameters);
+  };
+
+  const getProcessedEmailMessage = () => {
+    const address = invoiceData?.customer_address_doc?.address_line1 || "";
+    const parameters: Record<string, string | null> = {
+      customer_name: sharingData.name || "Customer",
+      customer: sharingData.name || "Customer",
+      first_name: sharingData.name?.split(" ")[0] || "",
+      last_name: sharingData.name?.split(" ").slice(1).join(" ") || "",
+      address,
+      customer_address: address,
+      delivery_note: invoiceData?.name || "",
+      grand_total: formatCurrencyWithSymbol(grandTotal, currencySymbol),
+      departure_time: new Date().toLocaleTimeString(),
+      estimated_arrival: new Date(Date.now() + 30 * 60000).toLocaleTimeString(),
+      driver_name: "Delivery Driver",
+      cell_number: "+1234567890",
+      vehicle: "Delivery Vehicle",
+      invoice_total: formatCurrencyWithSymbol(grandTotal, currencySymbol),
+      invoice_number: invoiceData?.name || "",
+      company_name: "KLiK PoS",
+      date: new Date().toLocaleDateString(),
+    };
+    return processEmailTemplate(emailMessage, parameters);
+  };
 
   const sendEmail = async () => {
     setIsSendingEmail(true);
@@ -192,7 +295,7 @@ export default function SharingInterface({
         sender: selectedSender || undefined,
       });
       toast.success("Email sent successfully!");
-      setSharingMode(null);
+      onModeChange(null);
     } catch (error: any) {
       toast.error(error.message);
     } finally {
@@ -211,7 +314,7 @@ export default function SharingInterface({
         message: getProcessedMessage(),
       });
       alert("WhatsApp message sent successfully!");
-      setSharingMode(null);
+      onModeChange(null);
     } catch (error: any) {
       alert(error.message);
     } finally {
@@ -228,7 +331,7 @@ export default function SharingInterface({
         invoice_name: invoiceData?.name || "",
       });
       toast.success("Invoice sent via Telegram!");
-      setSharingMode(null);
+      onModeChange(null);
     } catch (error: any) {
       toast.error(error.message);
     } finally {
@@ -242,32 +345,32 @@ export default function SharingInterface({
       await sendSMSMessage({
         mobile_no: sharingData.phone,
         customer_name: sharingData.name,
-        message: `Thank you for your purchase at KLiK PoS.\nInvoice Total: ${formatCurrencyWithSymbol(calculations.grandTotal, displayCurrencySymbol)}\nThank you!`,
+        message: `Thank you for your purchase at KLiK PoS.\nInvoice Total: ${formatCurrencyWithSymbol(grandTotal, currencySymbol)}\nThank you!`,
       });
       alert("SMS sent successfully!");
-      setSharingMode(null);
+      onModeChange(null);
     } catch (error: any) {
       alert(error.message);
     }
   };
 
-  if (sharingMode === "email") {
+  if (mode === "email") {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize">Share via Email</h3>
-          <button onClick={() => setSharingMode(null)} className="text-gray-500 hover:text-gray-700">
+          <button onClick={() => onModeChange(null)} className="text-gray-500 hover:text-gray-700">
             <X size={20} />
           </button>
         </div>
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Customer Name</label>
-            <input type="text" value={sharingData.name} onChange={(e) => setSharingData((prev: any) => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="Customer name" />
+            <input type="text" value={sharingData.name} onChange={(e) => setSharingData((prev) => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="Customer name" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Email Address</label>
-            <input type="email" value={sharingData.email} onChange={(e) => setSharingData((prev: any) => ({ ...prev, email: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="customer@email.com" />
+            <input type="email" value={sharingData.email} onChange={(e) => setSharingData((prev) => ({ ...prev, email: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="customer@email.com" />
           </div>
           {outgoingAccounts.length > 0 && (
             <div>
@@ -338,23 +441,23 @@ export default function SharingInterface({
     );
   }
 
-  if (sharingMode === "whatsapp") {
+  if (mode === "whatsapp") {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize">Share via WhatsApp</h3>
-          <button onClick={() => setSharingMode(null)} className="text-gray-500 hover:text-gray-700">
+          <button onClick={() => onModeChange(null)} className="text-gray-500 hover:text-gray-700">
             <X size={20} />
           </button>
         </div>
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Customer Name</label>
-            <input type="text" value={sharingData.name} onChange={(e) => setSharingData((prev: any) => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="Customer name" />
+            <input type="text" value={sharingData.name} onChange={(e) => setSharingData((prev) => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="Customer name" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Phone Number</label>
-            <input type="tel" value={sharingData.phone} onChange={(e) => setSharingData((prev: any) => ({ ...prev, phone: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="+254700000000" />
+            <input type="tel" value={sharingData.phone} onChange={(e) => setSharingData((prev) => ({ ...prev, phone: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="+254700000000" />
           </div>
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -406,12 +509,12 @@ export default function SharingInterface({
     );
   }
 
-  if (sharingMode === "telegram") {
+  if (mode === "telegram") {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize">Share via Telegram</h3>
-          <button onClick={() => setSharingMode(null)} className="text-gray-500 hover:text-gray-700">
+          <button onClick={() => onModeChange(null)} className="text-gray-500 hover:text-gray-700">
             <X size={20} />
           </button>
         </div>
@@ -444,23 +547,23 @@ export default function SharingInterface({
     );
   }
 
-  if (sharingMode === "sms") {
+  if (mode === "sms") {
     return (
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <h3 className="text-xl font-semibold text-gray-900 dark:text-white capitalize">Share via SMS</h3>
-          <button onClick={() => setSharingMode(null)} className="text-gray-500 hover:text-gray-700">
+          <button onClick={() => onModeChange(null)} className="text-gray-500 hover:text-gray-700">
             <X size={20} />
           </button>
         </div>
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Customer Name</label>
-            <input type="text" value={sharingData.name} onChange={(e) => setSharingData((prev: any) => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="Customer name" />
+            <input type="text" value={sharingData.name} onChange={(e) => setSharingData((prev) => ({ ...prev, name: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="Customer name" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Phone Number</label>
-            <input type="tel" value={sharingData.phone} onChange={(e) => setSharingData((prev: any) => ({ ...prev, phone: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="+254700000000" />
+            <input type="tel" value={sharingData.phone} onChange={(e) => setSharingData((prev) => ({ ...prev, phone: e.target.value }))} className="w-full px-3 py-2 border rounded-lg" placeholder="+254700000000" />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">SMS Message Preview</label>
@@ -468,7 +571,7 @@ export default function SharingInterface({
               <div className="text-sm text-gray-900">
                 <p>Hi {sharingData.name || "Customer"}!</p>
                 <p className="mt-1">Thank you for your purchase at KLiK PoS.</p>
-                <p className="mt-1">Invoice Total: {formatCurrencyWithSymbol(calculations.grandTotal, displayCurrencySymbol)}</p>
+                <p className="mt-1">Invoice Total: {formatCurrencyWithSymbol(grandTotal, currencySymbol)}</p>
                 <p className="mt-1">Thank you!</p>
               </div>
             </div>

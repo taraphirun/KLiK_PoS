@@ -21,8 +21,6 @@ import { clearDraftInvoiceCache, getOriginalDraftInvoiceId } from "../../utils/d
 import { formatCurrencyWithSymbol, getCurrencySymbol } from "../../utils/currency";
 import { calculateRemainingAmount, calculateTotalPayments, roundCurrency } from "../../utils/currencyMath";
 import { extractErrorFromException } from "../../utils/errorExtraction";
-import { fetchWhatsAppTemplates, getDefaultWhatsAppTemplate, processTemplate, getDefaultMessageTemplate } from "../../services/whatsappTemplateService";
-import { fetchEmailTemplates, getDefaultEmailTemplate, processEmailTemplate, getDefaultEmailMessageTemplate } from "../../services/emailTemplateService";
 import { getIconAndColor } from "./paymentIcons";
 import PaymentHeader from "./PaymentHeader";
 import PaymentMethods from "./PaymentMethods";
@@ -141,24 +139,6 @@ export default function PaymentDialog(props: PaymentDialogProps) {
   const [invoiceData, setInvoiceData] = useState<any>(null);
   const [isAutoPrinting, setIsAutoPrinting] = useState(false);
   const [sharingMode, setSharingMode] = useState<string | null>(initialSharingMode);
-  const [sharingData, setSharingData] = useState({
-    email: selectedCustomer?.email || "",
-    phone: selectedCustomer?.phone || "",
-    name: selectedCustomer?.name || "",
-  });
-  const [isSendingEmail, setIsSendingEmail] = useState(false);
-  const [isSendingWhatsapp, setIsSendingWhatsapp] = useState(false);
-  const [isSendingTelegram, setIsSendingTelegram] = useState(false);
-  const [whatsappTemplates, setWhatsappTemplates] = useState<any[]>([]);
-  const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
-  const [customMessage, setCustomMessage] = useState("");
-  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
-  const [isEditingWhatsapp, setIsEditingWhatsapp] = useState(false);
-  const [emailTemplates, setEmailTemplates] = useState<any[]>([]);
-  const [selectedEmailTemplate, setSelectedEmailTemplate] = useState<any>(null);
-  const [emailMessage, setEmailMessage] = useState("");
-  const [isLoadingEmailTemplates, setIsLoadingEmailTemplates] = useState(false);
-  const [isEditingEmail, setIsEditingEmail] = useState(false);
   const [showDeliveryPersonnelModal, setShowDeliveryPersonnelModal] = useState(false);
   const [showSalespersonModal, setShowSalespersonModal] = useState(false);
   const [selectedDeliveryPersonnel, setSelectedDeliveryPersonnel] = useState<string | null>(null);
@@ -1465,60 +1445,6 @@ export default function PaymentDialog(props: PaymentDialogProps) {
     return false;
   };
 
-  const getProcessedMessage = () => {
-    const parameters: Record<string, string> = {
-      customer_name: sharingData.name || "there",
-      invoice_total: formatCurrencyWithSymbol(checkoutGrandTotal, displayCurrencySymbol),
-      invoice_number: invoiceData?.name || "",
-      company_name: "KLiK PoS",
-      date: new Date().toLocaleDateString(),
-    };
-    return processTemplate(customMessage, parameters);
-  };
-
-  const getProcessedEmailMessage = () => {
-    const parameters: Record<string, string | null> = {
-      customer_name: sharingData.name || "Customer",
-      customer: sharingData.name || "Customer",
-      first_name: sharingData.name?.split(" ")[0] || "",
-      last_name: sharingData.name?.split(" ").slice(1).join(" ") || "",
-      address: typeof selectedCustomer?.address === "string" ? selectedCustomer.address : JSON.stringify(selectedCustomer?.address || {}),
-      customer_address: typeof selectedCustomer?.address === "string" ? selectedCustomer.address : JSON.stringify(selectedCustomer?.address || {}),
-      delivery_note: invoiceData?.name || "",
-      grand_total: formatCurrencyWithSymbol(checkoutGrandTotal, displayCurrencySymbol),
-      departure_time: new Date().toLocaleTimeString(),
-      estimated_arrival: new Date(Date.now() + 30 * 60000).toLocaleTimeString(),
-      driver_name: "Delivery Driver",
-      cell_number: "+1234567890",
-      vehicle: "Delivery Vehicle",
-      invoice_total: formatCurrencyWithSymbol(checkoutGrandTotal, displayCurrencySymbol),
-      invoice_number: invoiceData?.name || "",
-      company_name: "KLiK PoS",
-      date: new Date().toLocaleDateString(),
-    };
-    return processEmailTemplate(emailMessage, parameters);
-  };
-
-  const fetchCustomerDetails = async (customerId: string, existingEmail: string, existingPhone: string, existingName: string) => {
-    try {
-      const response = await fetch(`/api/method/klik_pos.api.customer.get_customer_info?customer_name=${customerId}`);
-      const data = await response.json();
-      if (data.message) {
-        const customerData = data.message;
-        setSharingData({
-          email: existingEmail || customerData.email_id || "",
-          phone: existingPhone || customerData.mobile_no || "",
-          name: existingName || customerData.customer_name || customerData.name || "",
-        });
-      } else {
-        setSharingData({ email: existingEmail, phone: existingPhone, name: existingName });
-      }
-    } catch (error) {
-      console.error("Error fetching customer details:", error);
-      setSharingData({ email: existingEmail, phone: existingPhone, name: existingName });
-    }
-  };
-
   useEffect(() => {
     if (isOpen && requiresSalespersonPin) {
       void ensureInitialized();
@@ -1619,90 +1545,6 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       }, 500);
     }
   }, [invoiceSubmitted, invoiceData, print_receipt_on_order_complete, posDetails?.custom_prevent_invoice_reprinting]);
-
-  useEffect(() => {
-    if (externalInvoiceData && sharingMode) {
-      const email = externalInvoiceData.customer_address_doc?.email_id || externalInvoiceData.customer_email || externalInvoiceData.email_id || "";
-      const phone = externalInvoiceData.mobile_no || externalInvoiceData.customer_address_doc?.mobile_no || externalInvoiceData.customer_address_doc?.phone || externalInvoiceData.customer_phone || "";
-      const name = externalInvoiceData.customer_name || externalInvoiceData.customer || "";
-      if ((!email || !phone) && externalInvoiceData.customer) {
-        fetchCustomerDetails(externalInvoiceData.customer, email, phone, name);
-      } else {
-        setSharingData({ email, phone, name });
-      }
-    }
-  }, [externalInvoiceData, sharingMode]);
-  
-
-  useEffect(() => {
-    const loadWhatsAppTemplates = async () => {
-      if (sharingMode === "whatsapp" && whatsappTemplates.length === 0) {
-        setIsLoadingTemplates(true);
-        try {
-          const [templates, defaultTemplateName] = await Promise.all([fetchWhatsAppTemplates(), getDefaultWhatsAppTemplate()]);
-          setWhatsappTemplates(templates);
-          if (defaultTemplateName) {
-            const defaultTemplate = templates.find((t) => t.name === defaultTemplateName);
-            if (defaultTemplate) {
-              setSelectedTemplate(defaultTemplate);
-              setCustomMessage(defaultTemplate.template);
-            }
-          } else {
-            setCustomMessage(getDefaultMessageTemplate());
-          }
-        } catch (error) {
-          console.error("Error loading WhatsApp templates:", error);
-          setCustomMessage(getDefaultMessageTemplate());
-        } finally {
-          setIsLoadingTemplates(false);
-        }
-      }
-    };
-    loadWhatsAppTemplates();
-  }, [sharingMode, whatsappTemplates.length]);
-
-  useEffect(() => {
-    const loadEmailTemplates = async () => {
-      if (sharingMode === "email" && emailTemplates.length === 0) {
-        setIsLoadingEmailTemplates(true);
-        try {
-          const [templates, defaultTemplateName] = await Promise.all([fetchEmailTemplates(), getDefaultEmailTemplate()]);
-          setEmailTemplates(templates);
-          if (defaultTemplateName) {
-            const defaultTemplate = templates.find((t) => t.name === defaultTemplateName);
-            if (defaultTemplate) {
-              setSelectedEmailTemplate(defaultTemplate);
-              setEmailMessage(defaultTemplate.response_html || defaultTemplate.response);
-            }
-          } else {
-            setEmailMessage(getDefaultEmailMessageTemplate());
-          }
-        } catch (error) {
-          console.error("Error loading Email templates:", error);
-          setEmailMessage(getDefaultEmailMessageTemplate());
-        } finally {
-          setIsLoadingEmailTemplates(false);
-        }
-      }
-    };
-    loadEmailTemplates();
-  }, [sharingMode, emailTemplates.length]);
-
-  const handleTemplateChange = (templateName: string) => {
-    const template = whatsappTemplates.find((t) => t.name === templateName);
-    if (template) {
-      setSelectedTemplate(template);
-      setCustomMessage(template.template);
-    }
-  };
-
-  const handleEmailTemplateChange = (templateName: string) => {
-    const template = emailTemplates.find((t) => t.name === templateName);
-    if (template) {
-      setSelectedEmailTemplate(template);
-      setEmailMessage(template.response_html || template.response);
-    }
-  };
 
   const getSelectedDeliveryPersonnelName = () => {
     if (!selectedDeliveryPersonnel) return null;
@@ -2185,40 +2027,11 @@ export default function PaymentDialog(props: PaymentDialogProps) {
           <div className="w-2/3 p-6 overflow-y-auto custom-scrollbar space-y-6">
             {invoiceSubmitted && sharingMode ? (
               <SharingInterface
-                sharingMode={sharingMode}
-                sharingData={sharingData}
-                setSharingData={setSharingData}
+                mode={sharingMode}
+                onModeChange={setSharingMode}
                 invoiceData={invoiceData}
-                calculations={calculations}
-                displayCurrencySymbol={displayCurrencySymbol}
-                whatsappTemplates={whatsappTemplates}
-                selectedTemplate={selectedTemplate}
-                customMessage={customMessage}
-                isLoadingTemplates={isLoadingTemplates}
-                isEditingWhatsapp={isEditingWhatsapp}
-                setIsEditingWhatsapp={setIsEditingWhatsapp}
-                setSelectedTemplate={setSelectedTemplate}
-                setCustomMessage={setCustomMessage}
-                emailTemplates={emailTemplates}
-                selectedEmailTemplate={selectedEmailTemplate}
-                emailMessage={emailMessage}
-                isLoadingEmailTemplates={isLoadingEmailTemplates}
-                isEditingEmail={isEditingEmail}
-                setIsEditingEmail={setIsEditingEmail}
-                setSelectedEmailTemplate={setSelectedEmailTemplate}
-                setEmailMessage={setEmailMessage}
-                isSendingEmail={isSendingEmail}
-                setIsSendingEmail={setIsSendingEmail}
-                isSendingWhatsapp={isSendingWhatsapp}
-                setIsSendingWhatsapp={setIsSendingWhatsapp}
-                isSendingTelegram={isSendingTelegram}
-                setIsSendingTelegram={setIsSendingTelegram}
-                setSharingMode={setSharingMode}
-                posDetails={posDetails}
-                getProcessedMessage={getProcessedMessage}
-                getProcessedEmailMessage={getProcessedEmailMessage}
-                handleTemplateChange={handleTemplateChange}
-                handleEmailTemplateChange={handleEmailTemplateChange}
+                grandTotal={checkoutGrandTotal}
+                currencySymbol={displayCurrencySymbol}
               />
             ) : (
               <>
