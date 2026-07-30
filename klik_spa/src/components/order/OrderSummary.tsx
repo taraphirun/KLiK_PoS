@@ -45,6 +45,9 @@ export default function OrderSummary({
     updateQuantity,
     removeItem,
     clearCart,
+    additionalDiscountAmount,
+    additionalDiscountPercentage,
+    applyDiscountOn,
   } = useCartStore();
 
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
@@ -334,6 +337,10 @@ export default function OrderSummary({
         status: "held",
         salesperson: activeSalesperson?.name || null,
         draft_invoice_id: originalDraftInvoiceId,
+        additionalDiscountAmount,
+        additionalDiscountPercentage,
+        applyDiscountOn,
+        customInvoiceRef: customInvoiceRef || null,
       });
       if (result?.success) {
         handleClearCart();

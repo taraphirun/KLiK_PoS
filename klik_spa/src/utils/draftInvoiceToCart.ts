@@ -222,7 +222,11 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
     const customer = await getDraftCustomer(invoiceData);
 
     // Cache the items and customer instead of adding directly to cart
-    cacheDraftInvoiceItems(invoiceId, cartItems as RootCartItem[], customer);
+    cacheDraftInvoiceItems(invoiceId, cartItems as RootCartItem[], customer, {
+      additionalDiscountAmount: Number(invoiceData.discount_amount) || 0,
+      additionalDiscountPercentage: Number(invoiceData.additional_discount_percentage) || 0,
+      applyDiscountOn: invoiceData.apply_discount_on || "Grand Total",
+    });
 
     return true;
 

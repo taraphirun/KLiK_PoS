@@ -1,24 +1,41 @@
 import { useCartStore } from '../stores/cartStore';
 import type { CartItem, Customer } from '../../types';
 
+interface DraftInvoiceDiscount {
+  additionalDiscountAmount?: number;
+  additionalDiscountPercentage?: number;
+  applyDiscountOn?: string;
+}
+
 interface DraftInvoiceCache {
   items: CartItem[];
   timestamp: number;
   invoiceId: string;
   customer: Customer | null;
   originalDraftInvoiceId: string; // Track the original draft invoice to delete later
+  additionalDiscountAmount: number;
+  additionalDiscountPercentage: number;
+  applyDiscountOn: string;
 }
 
 const CACHE_KEY = 'draft-invoice-cache';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-export function cacheDraftInvoiceItems(invoiceId: string, items: CartItem[], customer: Customer | null): void {
+export function cacheDraftInvoiceItems(
+  invoiceId: string,
+  items: CartItem[],
+  customer: Customer | null,
+  discount?: DraftInvoiceDiscount
+): void {
   const cache: DraftInvoiceCache = {
     items,
     timestamp: Date.now(),
     invoiceId,
     customer,
-    originalDraftInvoiceId: invoiceId // Store the original draft invoice ID
+    originalDraftInvoiceId: invoiceId, // Store the original draft invoice ID
+    additionalDiscountAmount: discount?.additionalDiscountAmount || 0,
+    additionalDiscountPercentage: discount?.additionalDiscountPercentage || 0,
+    applyDiscountOn: discount?.applyDiscountOn || 'Grand Total',
   };
 
   localStorage.setItem(CACHE_KEY, JSON.stringify(cache));
@@ -75,6 +92,9 @@ export async function loadCachedItemsToCart(): Promise<boolean> {
     cartItems: mappedItems,
     appliedCoupons: [],
     selectedCustomer: cachedData.customer,
+    additionalDiscountAmount: cachedData.additionalDiscountAmount || 0,
+    additionalDiscountPercentage: cachedData.additionalDiscountPercentage || 0,
+    applyDiscountOn: cachedData.applyDiscountOn || 'Grand Total',
   }));
 
   return true;

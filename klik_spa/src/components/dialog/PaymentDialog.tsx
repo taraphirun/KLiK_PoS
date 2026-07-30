@@ -163,9 +163,6 @@ export default function PaymentDialog(props: PaymentDialogProps) {
   const [showSalespersonModal, setShowSalespersonModal] = useState(false);
   const [selectedDeliveryPersonnel, setSelectedDeliveryPersonnel] = useState<string | null>(null);
   const [deliveryCharge, setDeliveryCharge] = useState(0);
-  const [discountMode, setDiscountMode] = useState<"amount" | "percentage">("amount");
-  const [additionalDiscountAmount, setAdditionalDiscountAmount] = useState(0);
-  const [additionalDiscountPercentage, setAdditionalDiscountPercentage] = useState(0);
   const [taxPin, setTaxPin] = useState("");
   const [backendTaxPreview, setBackendTaxPreview] = useState<BackendTaxPreview | null>(null);
   const [isTaxPreviewLoading, setIsTaxPreviewLoading] = useState(false);
@@ -202,7 +199,17 @@ export default function PaymentDialog(props: PaymentDialogProps) {
   const { salesTaxCharges, defaultTax, isLoading: salesTaxLoading } = useSalesTaxCharges();
   const { personnel: deliveryPersonnelList } = useDeliveryPersonnel();
   const navigate = useNavigate();
-  const { clearCart } = useCartStore();
+  const {
+    clearCart,
+    additionalDiscountAmount,
+    additionalDiscountPercentage,
+    setAdditionalDiscountAmount,
+    setAdditionalDiscountPercentage,
+  } = useCartStore();
+  // Persisted with the cart (survives Hold/Resume); this is only which input is shown, not the value.
+  const [discountMode, setDiscountMode] = useState<"amount" | "percentage">(
+    additionalDiscountPercentage > 0 ? "percentage" : "amount"
+  );
   const posProfileName = typeof posDetails?.name === "string" ? posDetails.name : "";
   const posCompanyName =
     typeof posDetails?.company === "string"
@@ -1158,9 +1165,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       setSelectedMpesaPayments([]);
       setDeliveryCharge(0);
       setCreditLimitWarning(null);
-      setAdditionalDiscountAmount(0);
-      setAdditionalDiscountPercentage(0);
-      setDiscountMode("amount");
+      // additionalDiscountAmount/Percentage intentionally not reset here -- they live in
+      // cartStore now so they survive Hold/Resume, and only clear via clearCart().
     }
   }, [isOpen]);
 

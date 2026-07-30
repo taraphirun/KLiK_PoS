@@ -115,6 +115,9 @@ interface CartState {
   selectedPriceList: string | null
   isPricingLoading: boolean
   pricingError: string | null
+  additionalDiscountAmount: number
+  additionalDiscountPercentage: number
+  applyDiscountOn: string
 
   addToCart: (item: Omit<CartItem, 'quantity'>) => Promise<void>
   addToCartWithQuantity: (item: Omit<CartItem, 'quantity'>, quantity: number) => Promise<void>
@@ -129,6 +132,9 @@ interface CartState {
   refreshCartPricing: () => Promise<void>
   updateItemBundleEntries: (id: string, entries: SerialBatchEntry[]) => void
   updateCartItemField: <K extends keyof CartItem>(id: string, field: K, value: CartItem[K]) => void
+  setAdditionalDiscountAmount: (amount: number) => void
+  setAdditionalDiscountPercentage: (percentage: number) => void
+  setApplyDiscountOn: (value: string) => void
 }
 
 const shouldInsertNewItemsAtTop = (): boolean => {
@@ -145,6 +151,9 @@ export const useCartStore = create<CartState>()(
       selectedPriceList: null,
       isPricingLoading: false,
       pricingError: null,
+      additionalDiscountAmount: 0,
+      additionalDiscountPercentage: 0,
+      applyDiscountOn: 'Grand Total',
 
       refreshCartPricing: async () => {
         const state = get();
@@ -443,6 +452,9 @@ export const useCartStore = create<CartState>()(
           appliedCoupons: [],
           selectedCustomer: null,
           selectedPriceList: null,
+          additionalDiscountAmount: 0,
+          additionalDiscountPercentage: 0,
+          applyDiscountOn: 'Grand Total',
         }));
       },
 
@@ -492,6 +504,10 @@ export const useCartStore = create<CartState>()(
           ),
         }))
       },
+
+      setAdditionalDiscountAmount: (amount) => set({ additionalDiscountAmount: amount }),
+      setAdditionalDiscountPercentage: (percentage) => set({ additionalDiscountPercentage: percentage }),
+      setApplyDiscountOn: (value) => set({ applyDiscountOn: value }),
     }),
     {
       name: 'beveren-cart-storage'
