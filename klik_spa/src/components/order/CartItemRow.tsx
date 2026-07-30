@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Minus, Plus, X, Copy, Package, ChevronDown, ChevronUp, AlertTriangle, Eye } from "lucide-react";
 import { toast } from "react-toastify";
 import type { BundleEntry, CartItem } from "../../../types";
@@ -138,8 +138,15 @@ export const CartItemRow = ({
     const amt = itemDiscount.discountAmount || 0;
     return item.price > 0 ? parseFloat(((amt / item.price) * 100).toFixed(2)) : 0;
   });
+  // Set right before a percentage-input-driven discountAmount change so the effect below doesn't
+  // immediately overwrite the typed percentage with a lossy amount->percentage round-trip.
+  const skipNextDiscountPctSyncRef = useRef(false);
 
   useEffect(() => {
+    if (skipNextDiscountPctSyncRef.current) {
+      skipNextDiscountPctSyncRef.current = false;
+      return;
+    }
     const amt = itemDiscount.discountAmount || 0;
     const nextDiscountPct = item.price > 0 ? parseFloat(((amt / item.price) * 100).toFixed(2)) : 0;
     setLocalDiscountPct(nextDiscountPct);
@@ -328,6 +335,7 @@ export const CartItemRow = ({
   const handleDiscountPercentageChange = (value: number) => {
     const pct = Math.min(100, Math.max(0, value || 0));
     const amt = parseFloat(((item.price * pct) / 100).toFixed(2));
+    skipNextDiscountPctSyncRef.current = true;
     setLocalDiscountPct(pct);
     onDiscountChange(item.id, "discountAmount", amt);
   };
