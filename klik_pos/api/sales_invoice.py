@@ -1017,7 +1017,99 @@ def validate_checkout_invoice(data):
 
 	except Exception as e:
 		return {"success": False, "message": str(e)}
-	
+
+
+def check_customer_credit_limit(customer, new_outstanding_amount, company):
+	"""Check whether adding `new_outstanding_amount` of unpaid balance would exceed the
+	customer's credit limit.
+
+	Thin wrapper around ERPNext core's own credit-limit source
+	(erpnext.selling.doctype.customer.customer.get_credit_limit / get_customer_outstanding) so this
+	always agrees with what Sales Invoice.on_submit() enforces — no credit-limit math is
+	re-derived here.
+	"""
+	from erpnext.selling.doctype.customer.customer import get_credit_limit, get_customer_outstanding
+
+	credit_limit = flt(get_credit_limit(customer, company))
+	current_outstanding = flt(get_customer_outstanding(customer, company))
+	new_outstanding_amount = flt(new_outstanding_amount)
+	projected_outstanding = current_outstanding + new_outstanding_amount
+
+	exceeded = bool(credit_limit > 0 and projected_outstanding > credit_limit)
+
+	return {
+		"exceeded": exceeded,
+		"credit_limit": credit_limit,
+		"current_outstanding": current_outstanding,
+		"new_outstanding_amount": new_outstanding_amount,
+		"projected_outstanding": projected_outstanding,
+		"excess": flt(projected_outstanding - credit_limit) if exceeded else 0,
+	}
+
+
+@frappe.whitelist()
+def validate_before_submit(data):
+	"""Pre-submit credit limit check for the POS payment dialog.
+
+	Builds the same kind of in-memory preview doc as validate_checkout_invoice (no DB writes), but
+	with payment context included, so the resulting grand_total/paid amount reflect what this
+	invoice would actually add to the customer's outstanding balance. This is advisory only for
+	UX — erpnext's Sales Invoice.on_submit() remains the real enforcement point, so it can't be
+	bypassed by skipping this pre-check.
+	"""
+	try:
+		(
+			customer,
+			items,
+			amount_paid,
+			sales_and_tax_charges,
+			mode_of_payment,
+			business_type,
+			roundoff_amount,
+			delivery_charge,
+			delivery_personnel,
+			is_credit_sale,
+			allow_partial_payment,
+			due_date,
+			salesperson,
+			tax_id,
+			enable_background_submission,
+			loyalty_redemption,
+			custom_invoice_ref,
+		) = parse_invoice_data(data)
+
+		preview_doc = build_sales_invoice_doc(
+			customer,
+			items,
+			amount_paid,
+			sales_and_tax_charges,
+			mode_of_payment,
+			business_type,
+			roundoff_amount,
+			delivery_charge,
+			include_payments=True,
+			delivery_personnel=delivery_personnel,
+			is_credit_sale=is_credit_sale,
+			allow_partial_payment=allow_partial_payment,
+			due_date=due_date,
+			salesperson=salesperson,
+			tax_id=tax_id,
+			create_batch_and_serial_bundle=False,
+			enable_background_submission=enable_background_submission,
+			loyalty_redemption=loyalty_redemption,
+			custom_invoice_ref=custom_invoice_ref,
+		)
+
+		paid_credit = flt(amount_paid) + flt(getattr(preview_doc, "loyalty_amount", 0))
+		new_outstanding_amount = max(flt(preview_doc.grand_total) - paid_credit, 0)
+
+		result = check_customer_credit_limit(customer, new_outstanding_amount, preview_doc.company)
+		result["success"] = True
+		return result
+
+	except Exception as e:
+		return {"success": False, "message": str(e)}
+
 
 def _get_invoice_items_with_returns(invoice_id, customer):
 	"""

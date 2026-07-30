@@ -13,7 +13,9 @@ import {
   createSalesInvoice,
   previewLoyaltyRedemption,
   submitDraftInvoice,
+  validateBeforeSubmit,
   validateCheckoutInvoice,
+  type CreditLimitValidation,
 } from "../../services/salesInvoice";
 import { clearDraftInvoiceCache, getOriginalDraftInvoiceId } from "../../utils/draftInvoiceCache";
 import { formatCurrencyWithSymbol, getCurrencySymbol } from "../../utils/currency";
@@ -129,6 +131,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
   const [activeMethodId, setActiveMethodId] = useState<string | null>(null);
   const [lastModifiedMethodId, setLastModifiedMethodId] = useState<string | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [creditLimitWarning, setCreditLimitWarning] = useState<CreditLimitValidation | null>(null);
   const [isHoldingOrder, setIsHoldingOrder] = useState(false);
   const [invoiceSubmitted, setInvoiceSubmitted] = useState(false);
   const [isCreditSale, setIsCreditSale] = useState(false);
@@ -1140,12 +1143,21 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       setMpesaSearchTerm("");
       setSelectedMpesaPayments([]);
       setDeliveryCharge(0);
+      setCreditLimitWarning(null);
     }
   }, [isOpen]);
 
   useEffect(() => {
     clearLoyaltyRedemption();
+    setCreditLimitWarning(null);
   }, [clearLoyaltyRedemption, selectedCustomer?.id, isOpen]);
+
+  // Re-enable submission after a blocked attempt once the cashier adjusts the amount that
+  // determines outstanding exposure (payment amounts, credit-sale toggle, or due date) — the
+  // next submit click re-runs validateBeforeSubmit against the new figures.
+  useEffect(() => {
+    setCreditLimitWarning(null);
+  }, [paymentAmounts, isCreditSale, dueDate]);
 
   const processPayment = async (deliveryPersonnel: string | null = null) => {
     if (!selectedCustomer || !selectedCustomer.name) {
@@ -1184,6 +1196,23 @@ export default function PaymentDialog(props: PaymentDialogProps) {
     }
     setIsProcessingPayment(true);
     const paymentData = buildPaymentData(deliveryPersonnel);
+
+    try {
+      const creditCheck = await validateBeforeSubmit(paymentData);
+      if (creditCheck?.exceeded) {
+        setCreditLimitWarning(creditCheck);
+        toast.error(
+          `Credit limit exceeded for ${selectedCustomer.name}. Over by ${formatCurrencyWithSymbol(creditCheck.excess, displayCurrencySymbol)}.`
+        );
+        setIsProcessingPayment(false);
+        return;
+      }
+      setCreditLimitWarning(null);
+    } catch {
+      // Advisory only — erpnext's own on_submit credit-limit check remains the real
+      // enforcement point, so a failed pre-check shouldn't block submission.
+    }
+
     const originalDraftInvoiceId = getOriginalDraftInvoiceId();
     try {
       let response;
@@ -1400,6 +1429,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
 
   const isActionButtonDisabled = () => {
     if (invoiceSubmitted || isProcessingPayment) return true;
+    if (creditLimitWarning?.exceeded) return true;
     if (isCreditSale && !dueDate) return true;
     if (isB2C && !isCreditSale) {
       if (totalPaidAmount > 0) return false;
@@ -1979,6 +2009,19 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                       </div>
                     </label>
                   </div>
+                  {creditLimitWarning?.exceeded && (
+                    <div className="bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-700 rounded-lg p-3">
+                      <p className="text-sm font-semibold text-red-700 dark:text-red-300">
+                        Credit limit exceeded for {selectedCustomer?.name || "this customer"}
+                      </p>
+                      <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                        Limit: {formatCurrencyWithSymbol(creditLimitWarning.credit_limit, displayCurrencySymbol)} · Current outstanding: {formatCurrencyWithSymbol(creditLimitWarning.current_outstanding, displayCurrencySymbol)} · This sale adds: {formatCurrencyWithSymbol(creditLimitWarning.new_outstanding_amount, displayCurrencySymbol)}
+                      </p>
+                      <p className="text-xs text-red-600 dark:text-red-400 mt-1">
+                        Over by {formatCurrencyWithSymbol(creditLimitWarning.excess, displayCurrencySymbol)}. Reduce the outstanding amount or contact a credit controller to proceed.
+                      </p>
+                    </div>
+                  )}
                   <button onClick={handleCompletePayment} disabled={isActionButtonDisabled()} className={`w-full py-4 rounded-lg font-semibold disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors flex items-center justify-center space-x-2 ${isB2B ? "bg-blue-600 hover:bg-blue-700 text-white" : "bg-green-600 hover:bg-green-700 text-white"}`}>
                     {isProcessingPayment ? (
                       <>

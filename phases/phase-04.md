@@ -1,7 +1,7 @@
 # Phase 4: Customer Credit Limit Validation
 **Module 4**
 
-**Status:** ⬜ Not started
+**Status:** ✅ Done
 
 ## Objective
 Enforce customer credit limits during the POS checkout process, preventing submission if limits are exceeded.
@@ -15,6 +15,6 @@ warn the cashier before the draft invoice is created, instead of only after `doc
 No credit-limit math is being reimplemented. See `implementation_plan.md` → Module 4 for details.
 
 ## Todos
-- [ ] [010.md](../todo/010.md): Backend credit limit verification API (wraps core, pre-submit only)
-- [ ] [011.md](../todo/011.md): Frontend Payment Dialog credit limit validation integration
-- [ ] [037.md](../todo/037.md): Show customer credit used / credit limit on the Customers list page
+- [x] [010.md](../todo/010.md): Backend credit limit verification API (wraps core, pre-submit only)
+- [x] [011.md](../todo/011.md): Frontend Payment Dialog credit limit validation integration
+- [x] [037.md](../todo/037.md): Show customer credit used / credit limit on the Customers list page

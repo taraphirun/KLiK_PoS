@@ -138,6 +138,39 @@ export async function validateCheckoutInvoice(data: any) {
   return result.message;
 }
 
+export interface CreditLimitValidation {
+  exceeded: boolean
+  credit_limit: number
+  current_outstanding: number
+  new_outstanding_amount: number
+  projected_outstanding: number
+  excess: number
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function validateBeforeSubmit(data: any): Promise<CreditLimitValidation> {
+  const csrfToken = window.csrf_token;
+
+  const response = await fetch('/api/method/klik_pos.api.sales_invoice.validate_before_submit', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Frappe-CSRF-Token': csrfToken
+    },
+    body: JSON.stringify({ data }),
+    credentials: 'include'
+  });
+
+  const result = await response.json();
+
+  if (!response.ok || !result.message || result.message.success === false) {
+    const errorMessage = extractErrorMessage(result, 'Credit limit validation failed');
+    throw new Error(errorMessage);
+  }
+
+  return result.message;
+}
+
 export async function retryQueuedInvoice(invoiceId: string) {
   const csrfToken = window.csrf_token;
 
