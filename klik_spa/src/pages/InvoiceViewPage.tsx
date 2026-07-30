@@ -7,6 +7,7 @@ import {
   MailPlus,
   MessageCirclePlus,
   MessageSquarePlus,
+  Send,
   Edit,
   Check,
   RefreshCw,
@@ -458,6 +459,19 @@ export default function InvoiceViewPage() {
                   <MailPlus size={20} />
                   <span className="absolute top-full left-1/2 transform -translate-x-1/2 mt-0.5 px-2 py-1 text-xs text-gray-600 dark:text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-50">
                     Send via Email
+                  </span>
+                </button>
+
+                <button
+                  className="group relative p-2 text-sky-600 hover:bg-sky-100 dark:text-sky-400 dark:hover:bg-sky-900 rounded-lg transition-all duration-200"
+                  onClick={() => {
+                    setSharingMode('telegram')
+                    setShowPaymentDialog(true)
+                  }}
+                >
+                  <Send size={20} />
+                  <span className="absolute top-full left-1/2 transform -translate-x-1/2 mt-0.5 px-2 py-1 text-xs text-gray-600 dark:text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity duration-200 whitespace-nowrap z-50">
+                    Send via Telegram
                   </span>
                 </button>
 
