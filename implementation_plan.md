@@ -22,7 +22,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 3 — Telegram Invoice Sharing | 3 | 008–009 | ✅ Done |
 | 4 — Customer Credit Limit Validation | 4 | 010–011, 037 | ✅ Done (pre-submit check wraps erpnext core; credit visibility added to /customers list) |
 | 5 — Additional Discount & Tax Round-Off | 5 | 012–013 | ✅ Done (round-off was already fixed pre-session; discount wraps erpnext native fields) |
-| 7 — Customer-Specific Price List | 6 | 014–015 | ⬜ Not started |
+| 7 — Customer-Specific Price List | 6 | 014–015 | ✅ Done (fixed N+1 price query in get_items; dynamic pricing on customer change already existed) |
 | 8 — Keyboard Navigation & UI Usability | 7 | 016–017 | ⬜ Not started |
 | 1 — Custom Print Format & Status Indicators | 8 | 018 | ⬜ Not started |
 | 10 — Delivery Tracking & Payment Reconciliation | 9 | 019–024 | ⬜ Not started |
@@ -31,7 +31,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 13 — Live Delivery Map | 12 | 031–032 | ⬜ Not started |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
 
-**Next up:** By table order, Phase 6 / Module 7 (Customer-Specific Price List & Dynamic Pricing, Todos 014–015). Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point. (Phase 5 completed 2026-07-30.)
+**Next up:** By table order, Phase 7 / Module 8 (Keyboard Navigation & UI Usability, Todos 016–017). Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point. (Phase 6 completed 2026-07-30.)
 
 ---
 
@@ -235,16 +235,36 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 
 ### Module 7: Customer-Specific Price List & Dynamic Pricing
 
-#### 1. Backend Batch Pricing API
-- **[MODIFY] [klik_pos/api/item/item_price.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/item/item_price.py)**:
-  - `@frappe.whitelist() def get_items_prices_for_customer(item_codes, customer)`:
-    - Batch fetches item prices for multiple item codes according to customer price list priority (`Customer.default_price_list` $\rightarrow$ `CustomerGroup.default_price_list` $\rightarrow$ `POSProfile.selling_price_list`).
+> **Note (2026-07-30):** Both halves of this module are substantially already implemented, just via
+> a different architecture than originally planned:
+>
+> - Price-list priority (Customer → Customer Group → POS Profile → Selling Settings) is already
+>   resolved once per request by `_get_priority_price_list()` in `item_listing.py`'s `get_items()`.
+> - Dynamic pricing on customer change already works: `setSelectedCustomer()` in `productStore.ts`
+>   triggers `initializePOS()` → a full product refetch with the new customer id, and the cache
+>   explicitly bypasses itself whenever a customer is set (`isCacheValid && !effectiveCustomerId`).
+>   The product grid already gets fully re-priced items on customer selection — no new listener
+>   needed in `ProductProvider.tsx`.
+>
+> The real remaining gap: `get_items()` calls `_fetch_item_prices_sql(item_code, price_list,
+> current_date)` **once per item inside the product loop** — a genuine N+1 query (up to 2000 items =
+> up to 2000 queries), unlike stock/bundle/variant counts in the same function which are already
+> correctly batched before the loop. The fix is batching that one query in `item_listing.py`
+> (mirroring `_fetch_batch_stock`/`_fetch_product_bundle_map`), not building a new endpoint in
+> `item_price.py` that nothing would call. (`_get_conversion_factor_sql` has the same N+1 shape but
+> is UOM conversion, not customer pricing — out of scope for this module.)
 
-#### 2. Product Provider Live State Listener
-- **[MODIFY] [klik_spa/src/providers/ProductProvider.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/providers/ProductProvider.tsx)**:
-  - Add effect listener on `selectedCustomer` state:
-    - Calls `get_items_prices_for_customer(itemCodesList, selectedCustomer.id)`.
-    - Dynamically updates item price maps so product grid prices instantly update when a customer is selected.
+#### 1. Backend Batch Pricing Fix
+- **[MODIFY] [klik_pos/api/item/item_listing.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/item/item_listing.py)**:
+  - Add `_fetch_item_prices_batch_sql(item_codes, price_list, current_date)`: one query for all item
+    codes in the page (`item_code IN (...)`), returning a `{item_code: [price_rows]}` map.
+  - Call it once before the `for item in items:` loop; replace the per-item
+    `_fetch_item_prices_sql(item_code, ...)` call with a map lookup.
+  - No changes to price-list priority resolution — `_get_priority_price_list()` is already correct.
+
+#### 2. Product Provider
+- No code change needed — `setSelectedCustomer` → `initializePOS` already refetches
+  fully-repriced products on customer change.
 
 ---
 

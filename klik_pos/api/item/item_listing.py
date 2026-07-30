@@ -232,9 +232,11 @@ def get_items(
         stock_map = _fetch_batch_stock(item_codes, warehouse)
         product_bundle_map = _fetch_product_bundle_map(item_codes, warehouse)
         variant_count_map = _fetch_variant_count_map(item_codes)
-        
+
         enriched_items = []
         current_date = frappe.utils.today()
+
+        item_prices_map = _fetch_item_prices_batch_sql(item_codes, price_list, current_date)
 
         price_by_item = {}
 
@@ -258,7 +260,7 @@ def get_items(
             if hide_unavailable and not is_variant_template and (is_stock_item or is_product_bundle) and balance <= 0:
                 continue
 
-            item_prices = _fetch_item_prices_sql(item_code, price_list, current_date)
+            item_prices = item_prices_map.get(item_code, [])
             
             stock_uom_price = next((d for d in item_prices if d.get("uom") == item.stock_uom), {})
             item_uom = item.stock_uom
@@ -349,33 +351,43 @@ def get_items(
         frappe.throw(_("Something went wrong while fetching item data."))
  
 
-def _fetch_item_prices_sql(item_code, price_list, current_date):
-    if not price_list:
-        return []
-    
+def _fetch_item_prices_batch_sql(item_codes, price_list, current_date):
+    """Batched price lookup for a page of items, replacing a former per-item query.
+
+    Returns {item_code: [price_rows]}, each list ordered by valid_from DESC so downstream per-uom
+    lookups keep picking the most recently valid price.
+    """
+    if not price_list or not item_codes:
+        return {}
+
     try:
-        query = """
-            SELECT price_list_rate, currency, uom, batch_no, valid_from, valid_upto
+        placeholders = ",".join(["%s"] * len(item_codes))
+        query = f"""
+            SELECT item_code, price_list_rate, currency, uom, batch_no, valid_from, valid_upto
             FROM `tabItem Price`
             WHERE price_list = %s
-            AND item_code = %s
+            AND item_code IN ({placeholders})
             AND selling = 1
             AND (valid_from <= %s OR valid_from IS NULL)
             AND (valid_upto >= %s OR valid_upto IS NULL)
-            ORDER BY valid_from DESC
+            ORDER BY item_code, valid_from DESC
         """
-        
+
         query = apply_sql_permissions(query)
-        
+
         results = frappe.db.sql(
             query,
-            (price_list, item_code, current_date, current_date),
+            (price_list, *item_codes, current_date, current_date),
             as_dict=True,
         )
-        
-        return results
+
+        prices_map = {}
+        for row in results:
+            prices_map.setdefault(row["item_code"], []).append(row)
+
+        return prices_map
     except Exception:
-        return []
+        return {}
 
 
 def _empty_tax_info():
