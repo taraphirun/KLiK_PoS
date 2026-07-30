@@ -25,15 +25,15 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 7 — Customer-Specific Price List | 6 | 014–015 | ✅ Done (fixed N+1 price query in get_items; dynamic pricing on customer change already existed) |
 | 8 — Keyboard Navigation & UI Usability | 7 | 016–017 | ✅ Done (Cmd/Ctrl+F, Escape, custom_invoice_ref, grid arrow-nav + Shift+Enter quantity dialog) |
 | 1 — Custom Print Format & Status Indicators | 8 | 018 | ✅ Done (existing DB-only print format exported to repo; custom_description + credit info added) |
-| 10 — Delivery Tracking & Payment Reconciliation | 9 | 019–024 | 🔷 In progress (019 done: `Delivery Report` staging DocType) |
+| 10 — Delivery Tracking & Payment Reconciliation | 9 | 019–024 | 🔷 In progress (019–020 done: staging DocType + reconciled Sales Invoice fields) |
 | 11 — Driver Management & Free-Text→Link | 10 | 025–028 | ⬜ Not started |
 | 12 — Deliveries & Conflicts UI | 11 | 029–030 | ⬜ Not started |
 | 13 — Live Delivery Map | 12 | 031–032 | ⬜ Not started |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
 
-**Next up:** Module 10 / Todo 020 (Sales Invoice custom fields for reconciled delivery data) is the
-next step in the delivery-consolidation track (Phases 9-13). (Phase 6 completed 2026-07-30; Phase 7
-completed 2026-07-30; Phase 8 completed 2026-07-30; Phase 9 Todo 019 completed 2026-07-30.)
+**Next up:** Module 10 / Todo 021 (bot ingestion API endpoint + payload validation) is the next step
+in the delivery-consolidation track (Phases 9-13). (Phase 6 completed 2026-07-30; Phase 7 completed
+2026-07-30; Phase 8 completed 2026-07-30; Phase 9 Todos 019–020 completed 2026-07-30.)
 
 ---
 

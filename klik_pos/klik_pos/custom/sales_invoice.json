@@ -1403,6 +1403,81 @@
    "insert_after": "custom_ds_roofing_spec",
    "module": "KLiK PoS",
    "owner": "Administrator"
+  },
+  {
+   "fieldname": "custom_delivery_status",
+   "fieldtype": "Select",
+   "label": "Delivery Status",
+   "options": "Pending\nDelivered\nPartially Delivered\nNot Delivered",
+   "default": "Pending",
+   "dt": "Sales Invoice",
+   "insert_after": "custom_delivery_personnel_name",
+   "read_only": 1,
+   "module": "KLiK PoS",
+   "owner": "Administrator"
+  },
+  {
+   "fieldname": "custom_delivery_driver",
+   "fieldtype": "Data",
+   "label": "Delivery Driver (Bot Reported)",
+   "description": "Driver name from the confirmed Delivery Report, not the internally-assigned Delivery Personnel above.",
+   "dt": "Sales Invoice",
+   "insert_after": "custom_delivery_status",
+   "read_only": 1,
+   "module": "KLiK PoS",
+   "owner": "Administrator"
+  },
+  {
+   "fieldname": "custom_delivered_at",
+   "fieldtype": "Datetime",
+   "label": "Delivered At",
+   "dt": "Sales Invoice",
+   "insert_after": "custom_delivery_driver",
+   "read_only": 1,
+   "module": "KLiK PoS",
+   "owner": "Administrator"
+  },
+  {
+   "fieldname": "custom_delivery_column_break",
+   "fieldtype": "Column Break",
+   "dt": "Sales Invoice",
+   "insert_after": "custom_delivered_at",
+   "module": "KLiK PoS",
+   "owner": "Administrator"
+  },
+  {
+   "fieldname": "custom_delivery_gps_latitude",
+   "fieldtype": "Float",
+   "label": "Delivery GPS Latitude",
+   "precision": "6",
+   "dt": "Sales Invoice",
+   "insert_after": "custom_delivery_column_break",
+   "read_only": 1,
+   "module": "KLiK PoS",
+   "owner": "Administrator"
+  },
+  {
+   "fieldname": "custom_delivery_gps_longitude",
+   "fieldtype": "Float",
+   "label": "Delivery GPS Longitude",
+   "precision": "6",
+   "dt": "Sales Invoice",
+   "insert_after": "custom_delivery_gps_latitude",
+   "read_only": 1,
+   "module": "KLiK PoS",
+   "owner": "Administrator"
+  },
+  {
+   "fieldname": "custom_delivery_report",
+   "fieldtype": "Link",
+   "label": "Delivery Report",
+   "options": "Delivery Report",
+   "description": "The confirmed Delivery Report this delivery outcome was reconciled from.",
+   "dt": "Sales Invoice",
+   "insert_after": "custom_delivery_gps_longitude",
+   "read_only": 1,
+   "module": "KLiK PoS",
+   "owner": "Administrator"
   }
  ],
  "custom_perms": [],

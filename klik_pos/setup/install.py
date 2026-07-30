@@ -124,8 +124,90 @@ def ensure_pos_print_format_field():
     )
 
 
+def ensure_delivery_reconciliation_fields():
+    """Create the Sales Invoice fields that hold the *reconciled* (trusted) delivery outcome.
+
+    These are only ever written by the Delivery Report confirm step (Module 10 / Todo 023) -
+    never directly by the bot - so they're read-only here. Denormalized (including GPS) onto
+    the invoice rather than read through custom_delivery_report so Report Builder/list filters
+    can query them as real columns; custom_delivery_report is kept for audit/drill-down back to
+    the raw bot payload. Distinct from the existing custom_delivery_personnel/_name fields, which
+    track an internally-assigned delivery person, not the bot-reported driver on a confirmed
+    delivery.
+    """
+    fields = [
+        {
+            "fieldname": "custom_delivery_status",
+            "label": "Delivery Status",
+            "fieldtype": "Select",
+            "options": "Pending\nDelivered\nPartially Delivered\nNot Delivered",
+            "default": "Pending",
+            "insert_after": "custom_delivery_personnel_name",
+            "read_only": 1,
+            "module": "KLiK PoS",
+        },
+        {
+            "fieldname": "custom_delivery_driver",
+            "label": "Delivery Driver (Bot Reported)",
+            "fieldtype": "Data",
+            "insert_after": "custom_delivery_status",
+            "read_only": 1,
+            "module": "KLiK PoS",
+            "description": "Driver name from the confirmed Delivery Report, not the internally-assigned Delivery Personnel above.",
+        },
+        {
+            "fieldname": "custom_delivered_at",
+            "label": "Delivered At",
+            "fieldtype": "Datetime",
+            "insert_after": "custom_delivery_driver",
+            "read_only": 1,
+            "module": "KLiK PoS",
+        },
+        {
+            "fieldname": "custom_delivery_column_break",
+            "fieldtype": "Column Break",
+            "insert_after": "custom_delivered_at",
+            "module": "KLiK PoS",
+        },
+        {
+            "fieldname": "custom_delivery_gps_latitude",
+            "label": "Delivery GPS Latitude",
+            "fieldtype": "Float",
+            "precision": "6",
+            "insert_after": "custom_delivery_column_break",
+            "read_only": 1,
+            "module": "KLiK PoS",
+        },
+        {
+            "fieldname": "custom_delivery_gps_longitude",
+            "label": "Delivery GPS Longitude",
+            "fieldtype": "Float",
+            "precision": "6",
+            "insert_after": "custom_delivery_gps_latitude",
+            "read_only": 1,
+            "module": "KLiK PoS",
+        },
+        {
+            "fieldname": "custom_delivery_report",
+            "label": "Delivery Report",
+            "fieldtype": "Link",
+            "options": "Delivery Report",
+            "insert_after": "custom_delivery_gps_longitude",
+            "read_only": 1,
+            "module": "KLiK PoS",
+            "description": "The confirmed Delivery Report this delivery outcome was reconciled from.",
+        },
+    ]
+
+    for field in fields:
+        if frappe.db.exists("Custom Field", f"Sales Invoice-{field['fieldname']}"):
+            continue
+        create_custom_field("Sales Invoice", field, ignore_validate=True)
+
+
 def after_install():
     ensure_sales_invoice_reserve_stock_field()
     ensure_stock_reservation_is_enabled()
     ensure_az_coil_custom_fields()
     ensure_pos_print_format_field()
+    ensure_delivery_reconciliation_fields()
