@@ -129,10 +129,9 @@ doctype_js.update({"Company": "public/js/company.js"})
 # ----------
 
 # add methods and filters to jinja environment
-# jinja = {
-# 	"methods": "klik_pos.utils.jinja_methods",
-# 	"filters": "klik_pos.utils.jinja_filters"
-# }
+jinja = {
+	"methods": ["klik_pos.klik_pos.utils.get_customer_credit_summary"],
+}
 
 # Installation
 # ------------

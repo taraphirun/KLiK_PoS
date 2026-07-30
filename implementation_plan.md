@@ -24,17 +24,16 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 5 — Additional Discount & Tax Round-Off | 5 | 012–013 | ✅ Done (round-off was already fixed pre-session; discount wraps erpnext native fields) |
 | 7 — Customer-Specific Price List | 6 | 014–015 | ✅ Done (fixed N+1 price query in get_items; dynamic pricing on customer change already existed) |
 | 8 — Keyboard Navigation & UI Usability | 7 | 016–017 | ✅ Done (Cmd/Ctrl+F, Escape, custom_invoice_ref, grid arrow-nav + Shift+Enter quantity dialog) |
-| 1 — Custom Print Format & Status Indicators | 8 | 018 | ⬜ Not started |
+| 1 — Custom Print Format & Status Indicators | 8 | 018 | ✅ Done (existing DB-only print format exported to repo; custom_description + credit info added) |
 | 10 — Delivery Tracking & Payment Reconciliation | 9 | 019–024 | ⬜ Not started |
 | 11 — Driver Management & Free-Text→Link | 10 | 025–028 | ⬜ Not started |
 | 12 — Deliveries & Conflicts UI | 11 | 029–030 | ⬜ Not started |
 | 13 — Live Delivery Map | 12 | 031–032 | ⬜ Not started |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
 
-**Next up:** By table order, Phase 8 / Module 1 (Custom Print Format & Status Indicators, Todo 018).
-Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019 (`Delivery Report`
-doctype) is the unblocked starting point. (Phase 6 completed 2026-07-30; Phase 7 completed
-2026-07-30.)
+**Next up:** Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point for
+the delivery-consolidation track (Phases 9-13). (Phase 6 completed 2026-07-30; Phase 7 completed
+2026-07-30; Phase 8 completed 2026-07-30.)
 
 ---
 

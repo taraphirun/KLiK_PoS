@@ -67,3 +67,23 @@ def clear_pos_profile_cache(user=None):
 def get_user_default_company():
 	user = frappe.session.user
 	return frappe.defaults.get_user_default(user, "Company")
+
+
+def get_customer_credit_summary(customer, company=None):
+	"""Exposed to print-format Jinja templates (see hooks.py `jinja.methods`).
+
+	Reuses the same credit_limit/outstanding source as the POS credit-limit check
+	(klik_pos.api.customer._get_customer_credit_info) so the numbers shown on a printed
+	invoice always agree with what is enforced on submit. Lazy import to avoid a circular
+	import (api.customer already imports get_current_pos_profile from this module).
+	"""
+	if not customer:
+		return {}
+
+	from klik_pos.api.customer import _get_customer_credit_info
+
+	company = company or get_user_default_company()
+	if not company:
+		return {}
+
+	return _get_customer_credit_info([customer], company).get(customer, {})
