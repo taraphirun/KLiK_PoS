@@ -959,6 +959,9 @@ def validate_checkout_invoice(data):
 			enable_background_submission,
 			loyalty_redemption,
 			custom_invoice_ref,
+			additional_discount_amount,
+			additional_discount_percentage,
+			apply_discount_on,
 		) = parse_invoice_data(data)
 
 		preview_doc = build_sales_invoice_doc(
@@ -980,6 +983,9 @@ def validate_checkout_invoice(data):
 			enable_background_submission=enable_background_submission,
 			loyalty_redemption=loyalty_redemption,
 			custom_invoice_ref=custom_invoice_ref,
+			additional_discount_amount=additional_discount_amount,
+			additional_discount_percentage=additional_discount_percentage,
+			apply_discount_on=apply_discount_on,
 		)
 
 		validate_required_salesperson(preview_doc)
@@ -1076,6 +1082,9 @@ def validate_before_submit(data):
 			enable_background_submission,
 			loyalty_redemption,
 			custom_invoice_ref,
+			additional_discount_amount,
+			additional_discount_percentage,
+			apply_discount_on,
 		) = parse_invoice_data(data)
 
 		preview_doc = build_sales_invoice_doc(
@@ -1098,6 +1107,9 @@ def validate_before_submit(data):
 			enable_background_submission=enable_background_submission,
 			loyalty_redemption=loyalty_redemption,
 			custom_invoice_ref=custom_invoice_ref,
+			additional_discount_amount=additional_discount_amount,
+			additional_discount_percentage=additional_discount_percentage,
+			apply_discount_on=apply_discount_on,
 		)
 
 		paid_credit = flt(amount_paid) + flt(getattr(preview_doc, "loyalty_amount", 0))
@@ -1291,6 +1303,9 @@ def queue_sales_invoice(data):
 			enable_background_submission,
 			loyalty_redemption,
 			custom_invoice_ref,
+			additional_discount_amount,
+			additional_discount_percentage,
+			apply_discount_on,
 		) = parse_invoice_data(data)
 
 		if not customer:
@@ -1317,6 +1332,9 @@ def queue_sales_invoice(data):
 			enable_background_submission=enable_background_submission,
 			loyalty_redemption=loyalty_redemption,
 			custom_invoice_ref=custom_invoice_ref,
+			additional_discount_amount=additional_discount_amount,
+			additional_discount_percentage=additional_discount_percentage,
+			apply_discount_on=apply_discount_on,
 		)
 
 		validate_required_salesperson(doc)
@@ -1524,6 +1542,9 @@ def create_draft_invoice(data):
 			enable_background_submission,
 			loyalty_redemption,
 			custom_invoice_ref,
+			additional_discount_amount,
+			additional_discount_percentage,
+			apply_discount_on,
 		) = parse_invoice_data(data)
 
 		if target_draft_invoice_id:
@@ -1554,6 +1575,9 @@ def create_draft_invoice(data):
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
 				custom_invoice_ref=custom_invoice_ref,
+				additional_discount_amount=additional_discount_amount,
+				additional_discount_percentage=additional_discount_percentage,
+				apply_discount_on=apply_discount_on,
 			)
 		else:
 			doc = build_sales_invoice_doc(
@@ -1575,6 +1599,9 @@ def create_draft_invoice(data):
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
 				custom_invoice_ref=custom_invoice_ref,
+				additional_discount_amount=additional_discount_amount,
+				additional_discount_percentage=additional_discount_percentage,
+				apply_discount_on=apply_discount_on,
 			)
 
 			validate_required_salesperson(doc)
@@ -1629,6 +1656,13 @@ def parse_invoice_data(data):
 	)
 	loyalty_redemption = normalize_loyalty_redemption(data)
 	due_date = data.get("dueDate") or data.get("due_date")
+	additional_discount_amount = flt(
+		data.get("additionalDiscountAmount") or data.get("additional_discount_amount") or 0
+	)
+	additional_discount_percentage = flt(
+		data.get("additionalDiscountPercentage") or data.get("additional_discount_percentage") or 0
+	)
+	apply_discount_on = data.get("applyDiscountOn") or data.get("apply_discount_on") or "Grand Total"
 	mode_of_payment = None
 	default_payment_mode = None
 	checkout_status = str(data.get("status") or "").strip().lower()
@@ -1841,6 +1875,9 @@ def parse_invoice_data(data):
 		enable_background_submission,
 		loyalty_redemption,
 		custom_invoice_ref,
+		additional_discount_amount,
+		additional_discount_percentage,
+		apply_discount_on,
 	)
 
 
@@ -1864,6 +1901,9 @@ def build_sales_invoice_doc(
 	enable_background_submission=False,
 	loyalty_redemption=None,
 	custom_invoice_ref=None,
+	additional_discount_amount=0.0,
+	additional_discount_percentage=0.0,
+	apply_discount_on="Grand Total",
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -1925,7 +1965,10 @@ def build_sales_invoice_doc(
 	_upsert_delivery_charge_service_item(doc, pos_profile, delivery_charge)
 
 	doc.set_taxes()
-	
+
+	_set_additional_discount_fields(
+		doc, additional_discount_amount, additional_discount_percentage, apply_discount_on
+	)
 
 	doc.set_missing_values()
 	doc.calculate_taxes_and_totals()
@@ -1966,6 +2009,9 @@ def _update_existing_draft_invoice(
 	enable_background_submission=False,
 	loyalty_redemption=None,
 	custom_invoice_ref=None,
+	additional_discount_amount=0.0,
+	additional_discount_percentage=0.0,
+	apply_discount_on="Grand Total",
 ):
 	rebuilt_doc = build_sales_invoice_doc(
 		customer,
@@ -1987,6 +2033,9 @@ def _update_existing_draft_invoice(
 		enable_background_submission=enable_background_submission,
 		loyalty_redemption=loyalty_redemption,
 		custom_invoice_ref=custom_invoice_ref,
+		additional_discount_amount=additional_discount_amount,
+		additional_discount_percentage=additional_discount_percentage,
+		apply_discount_on=apply_discount_on,
 	)
 
 	invoice_doc.customer = rebuilt_doc.customer
@@ -2013,6 +2062,9 @@ def _update_existing_draft_invoice(
 	invoice_doc.loyalty_redemption_account = rebuilt_doc.loyalty_redemption_account
 	invoice_doc.loyalty_redemption_cost_center = rebuilt_doc.loyalty_redemption_cost_center
 	invoice_doc.taxes_and_charges = rebuilt_doc.taxes_and_charges
+	invoice_doc.apply_discount_on = rebuilt_doc.apply_discount_on
+	invoice_doc.discount_amount = rebuilt_doc.discount_amount
+	invoice_doc.additional_discount_percentage = rebuilt_doc.additional_discount_percentage
 	invoice_doc.set("items", [])
 	for item_row in rebuilt_doc.get("items", []):
 		invoice_doc.append("items", item_row.as_dict())
@@ -2491,6 +2543,27 @@ def _set_pos_opening_entry(doc):
 def _set_roundoff_fields(doc, roundoff_amount):
 	"""Legacy no-op: ERPNext handles invoice rounding natively."""
 	return
+
+
+def _set_additional_discount_fields(doc, discount_amount, discount_percentage, apply_discount_on):
+	"""Set invoice-level additional discount using erpnext's own native fields.
+
+	discount_amount and discount_percentage are mutually exclusive (percentage wins if both are
+	given); doc.calculate_taxes_and_totals() applies the discount, no math happens here.
+	"""
+	doc.apply_discount_on = (
+		"Net Total" if apply_discount_on == "Net Total" else "Grand Total"
+	)
+
+	if flt(discount_percentage) > 0:
+		doc.additional_discount_percentage = flt(discount_percentage)
+		doc.discount_amount = 0
+	elif flt(discount_amount) > 0:
+		doc.discount_amount = flt(discount_amount)
+		doc.additional_discount_percentage = 0
+	else:
+		doc.discount_amount = 0
+		doc.additional_discount_percentage = 0
 
 
 def _set_taxes_and_charges(doc, sales_and_tax_charges, pos_profile):
@@ -3888,6 +3961,9 @@ def submit_draft_invoice(invoice_id, data=None):
 				enable_background_submission,
 				loyalty_redemption,
 				custom_invoice_ref,
+				additional_discount_amount,
+				additional_discount_percentage,
+				apply_discount_on,
 			) = parse_invoice_data(data)
 
 			rebuilt_doc = build_sales_invoice_doc(
@@ -3910,6 +3986,9 @@ def submit_draft_invoice(invoice_id, data=None):
 				enable_background_submission=enable_background_submission,
 				loyalty_redemption=loyalty_redemption,
 				custom_invoice_ref=custom_invoice_ref,
+				additional_discount_amount=additional_discount_amount,
+				additional_discount_percentage=additional_discount_percentage,
+				apply_discount_on=apply_discount_on,
 			)
 
 			invoice_doc.customer = rebuilt_doc.customer
@@ -3936,6 +4015,9 @@ def submit_draft_invoice(invoice_id, data=None):
 			invoice_doc.loyalty_redemption_account = rebuilt_doc.loyalty_redemption_account
 			invoice_doc.loyalty_redemption_cost_center = rebuilt_doc.loyalty_redemption_cost_center
 			invoice_doc.taxes_and_charges = rebuilt_doc.taxes_and_charges
+			invoice_doc.apply_discount_on = rebuilt_doc.apply_discount_on
+			invoice_doc.discount_amount = rebuilt_doc.discount_amount
+			invoice_doc.additional_discount_percentage = rebuilt_doc.additional_discount_percentage
 			invoice_doc.set("items", [])
 			for item_row in rebuilt_doc.get("items", []):
 				invoice_doc.append("items", item_row.as_dict())

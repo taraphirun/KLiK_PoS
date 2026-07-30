@@ -162,6 +162,9 @@ export default function PaymentDialog(props: PaymentDialogProps) {
   const [showSalespersonModal, setShowSalespersonModal] = useState(false);
   const [selectedDeliveryPersonnel, setSelectedDeliveryPersonnel] = useState<string | null>(null);
   const [deliveryCharge, setDeliveryCharge] = useState(0);
+  const [discountMode, setDiscountMode] = useState<"amount" | "percentage">("amount");
+  const [additionalDiscountAmount, setAdditionalDiscountAmount] = useState(0);
+  const [additionalDiscountPercentage, setAdditionalDiscountPercentage] = useState(0);
   const [taxPin, setTaxPin] = useState("");
   const [backendTaxPreview, setBackendTaxPreview] = useState<BackendTaxPreview | null>(null);
   const [isTaxPreviewLoading, setIsTaxPreviewLoading] = useState(false);
@@ -620,6 +623,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       couponDiscount: calculations.couponDiscount,
       deliveryCharge: Number(deliveryCharge || 0),
       delivery_charge: Number(deliveryCharge || 0),
+      additionalDiscountAmount: Number(additionalDiscountAmount || 0),
+      additionalDiscountPercentage: Number(additionalDiscountPercentage || 0),
       grandTotal: checkoutGrandTotal,
       amountPaid: totalPaidAmount,
       outstandingAmount: outstandingAmount,
@@ -917,6 +922,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       SalesTaxCharges: selectedSalesTaxCharges,
       businessType: posDetails?.business_type || "",
       deliveryCharge: Number(deliveryCharge || 0),
+      additionalDiscountAmount: Number(additionalDiscountAmount || 0),
+      additionalDiscountPercentage: Number(additionalDiscountPercentage || 0),
       loyalty: appliedLoyalty
         ? {
             loyalty_program: appliedLoyalty.loyalty_program,
@@ -976,6 +983,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
           SalesTaxCharges: selectedSalesTaxCharges,
           businessType: posDetails?.business_type,
           deliveryCharge,
+          additionalDiscountAmount,
+          additionalDiscountPercentage,
           loyalty: appliedLoyalty
             ? {
                 loyalty_program: appliedLoyalty.loyalty_program,
@@ -1051,6 +1060,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
     salesTaxLoading,
     posDetails?.business_type,
     deliveryCharge,
+    additionalDiscountAmount,
+    additionalDiscountPercentage,
     appliedLoyalty,
     isCreditSale,
     dueDate,
@@ -1144,6 +1155,9 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       setSelectedMpesaPayments([]);
       setDeliveryCharge(0);
       setCreditLimitWarning(null);
+      setAdditionalDiscountAmount(0);
+      setAdditionalDiscountPercentage(0);
+      setDiscountMode("amount");
     }
   }, [isOpen]);
 
@@ -1344,6 +1358,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
         taxType: calculations.isInclusive ? "inclusive" : "exclusive",
         couponDiscount: calculations.couponDiscount,
         deliveryCharge,
+        additionalDiscountAmount: Number(additionalDiscountAmount || 0),
+        additionalDiscountPercentage: Number(additionalDiscountPercentage || 0),
         grandTotal: checkoutGrandTotal,
         appliedCoupons,
         itemDiscounts,
@@ -1962,6 +1978,44 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                     </p>
                   </div>
                 )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Additional Discount</label>
+                  <div className="flex gap-2">
+                    <select
+                      value={discountMode}
+                      onChange={(e) => {
+                        const mode = e.target.value as "amount" | "percentage";
+                        setDiscountMode(mode);
+                        if (mode === "amount") {
+                          setAdditionalDiscountPercentage(0);
+                        } else {
+                          setAdditionalDiscountAmount(0);
+                        }
+                      }}
+                      disabled={invoiceSubmitted || isProcessingPayment}
+                      className={`px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}
+                    >
+                      <option value="amount">Amount</option>
+                      <option value="percentage">Percent</option>
+                    </select>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={discountMode === "amount" ? additionalDiscountAmount : additionalDiscountPercentage}
+                      onChange={(e) => {
+                        const value = Math.max(0, Number(e.target.value || 0));
+                        if (discountMode === "amount") {
+                          setAdditionalDiscountAmount(value);
+                        } else {
+                          setAdditionalDiscountPercentage(Math.min(value, 100));
+                        }
+                      }}
+                      disabled={invoiceSubmitted || isProcessingPayment}
+                      className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}
+                    />
+                  </div>
+                </div>
                 {/* <TaxSection
                   selectedCustomer={selectedCustomer}
                   invoiceSubmitted={invoiceSubmitted}

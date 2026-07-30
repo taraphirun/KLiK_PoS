@@ -21,7 +21,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 2 — Telegram Contact Search & Customer Link | 2 | 005–007 | ✅ Done (backend wrappers in customer.py, service routed through them, TelegramLinkSection subcomponent) |
 | 3 — Telegram Invoice Sharing | 3 | 008–009 | ✅ Done |
 | 4 — Customer Credit Limit Validation | 4 | 010–011, 037 | ✅ Done (pre-submit check wraps erpnext core; credit visibility added to /customers list) |
-| 5 — Additional Discount & Tax Round-Off | 5 | 012–013 | ⬜ Not started |
+| 5 — Additional Discount & Tax Round-Off | 5 | 012–013 | ✅ Done (round-off was already fixed pre-session; discount wraps erpnext native fields) |
 | 7 — Customer-Specific Price List | 6 | 014–015 | ⬜ Not started |
 | 8 — Keyboard Navigation & UI Usability | 7 | 016–017 | ⬜ Not started |
 | 1 — Custom Print Format & Status Indicators | 8 | 018 | ⬜ Not started |
@@ -31,7 +31,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 13 — Live Delivery Map | 12 | 031–032 | ⬜ Not started |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
 
-**Next up:** By table order, Phase 5 / Module 5 (Additional Discount & Tax Round-Off, Todos 012–013). Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point. (Phase 4 completed 2026-07-30.)
+**Next up:** By table order, Phase 6 / Module 7 (Customer-Specific Price List & Dynamic Pricing, Todos 014–015). Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point. (Phase 5 completed 2026-07-30.)
 
 ---
 
@@ -197,15 +197,39 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 
 ### Module 5: Additional Discount & Tax Round-Off Fixes
 
-#### 1. Backend Discount & Tax Logic
+> **Note (2026-07-30):** The round-off half of this module is already fixed — commit `cf59278`
+> ("fix: remove klik's custom roundoff from the sales invoice flow", 2026-07-07) removed klik's
+> buggy custom round-off monkey-patch/GL path. `_set_roundoff_fields()` in `sales_invoice.py` is now
+> an intentional no-op ("ERPNext handles invoice rounding natively"). Nothing to do there.
+>
+> The additional-discount half is genuinely missing, but the math already exists in ERPNext core:
+> Sales Invoice already has native `apply_discount_on` (Grand Total/Net Total), `discount_amount`,
+> and `additional_discount_percentage` fields, and `calculate_taxes_and_totals()` (already called in
+> `build_sales_invoice_doc`) already fully applies them. klik_pos currently never touches these
+> fields. This module is glue only — parse a discount value from the POS payload and set it on the
+> doc before totals are calculated — not new discount math.
+>
+> Bonus: the existing `validate_checkout_invoice` tax-preview endpoint already rebuilds the doc via
+> `build_sales_invoice_doc` and returns `grand_total`/`net_total`, and the Payment Dialog already
+> polls it live. Once the backend sets the discount field, that same endpoint reflects it
+> automatically — the "recalculate in real time" requirement below is mostly already wired.
+
+#### 1. Backend Discount Logic
 - **[MODIFY] [klik_pos/api/sales_invoice.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/sales_invoice.py)**:
-  - Implement `_set_additional_discount_fields(doc, discount_amount, discount_type)`: Sets `discount_amount` or `additional_discount_percentage` on Sales Invoice document.
-  - Fix roundoff calculation when no taxes apply.
+  - `parse_invoice_data`: read `additionalDiscountAmount`/`additionalDiscountPercentage` and
+    `discountType`/`apply_discount_on` from the payload.
+  - Implement `_set_additional_discount_fields(doc, discount_amount, discount_percentage, apply_discount_on)`:
+    sets `doc.discount_amount` / `doc.additional_discount_percentage` / `doc.apply_discount_on`
+    directly — no new discount math, `calculate_taxes_and_totals()` (core) does the rest.
+  - Call this from both `build_sales_invoice_doc` (real submit) and `validate_checkout_invoice`'s
+    preview path so the live tax preview and the actual submitted invoice always agree.
 
 #### 2. Payment Dialog UI
 - **[MODIFY] [klik_spa/src/components/dialog/PaymentDialog.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/dialog/PaymentDialog.tsx)**:
-  - Add Additional Discount input fields (Amount & Percentage) in payment summary section.
-  - Recalculate `grandTotal` and change given in real time.
+  - Add Additional Discount input fields (Amount & Percentage, mutually exclusive via `apply_discount_on`/discount type toggle) in the payment summary section.
+  - Include the discount fields in the existing `validateCheckoutInvoice` preview payload so
+    `grandTotal` and change given recalculate in real time off the backend-computed total (not a
+    reimplemented client-side formula).
 
 ---
 
