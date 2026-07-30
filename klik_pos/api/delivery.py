@@ -269,11 +269,15 @@ def _parse_bool(value, default=None):
 
 
 @frappe.whitelist()
-def confirm_delivery_match(report_name, invoice_name=None, mark_paid=None):
+def confirm_delivery_match(report_name, invoice_name=None, mark_paid=None, amount_collected=None):
     """Human confirms a Delivery Report's match (suggested or manually picked) and stamps the
     reconciled delivery data onto the Sales Invoice (Todo 020 fields). If the driver reported
     payment collected (Paid/Partial) and mark_paid isn't explicitly False, posts a Payment Entry
     via the existing create_payment_entry - never reimplemented here.
+
+    amount_collected, if passed, is saved onto the Delivery Report before the Partial-payment
+    branch reads it - this is how the reconciliation UI (Todo 024) supplies the human-confirmed
+    collected amount in the same call, rather than a separate write beforehand.
 
     Idempotent: confirming an already-Confirmed report is a no-op and never posts a second
     Payment Entry (guarded both by an early-return fast path and a re-check of
@@ -297,6 +301,10 @@ def confirm_delivery_match(report_name, invoice_name=None, mark_paid=None):
 
         if report.reconciliation_status == "Rejected":
             frappe.throw("Cannot confirm a rejected Delivery Report - re-match it first")
+
+        if amount_collected is not None:
+            report.amount_collected = flt(amount_collected)
+            report.save(ignore_permissions=True)
 
         target_invoice_name = invoice_name or report.matched_invoice
         if not target_invoice_name:
@@ -395,6 +403,77 @@ def reject_delivery_match(report_name, reason=None):
     except Exception as e:
         frappe.log_error(title="Delivery Report reject failed")
         return {"success": False, "message": str(e)}
+
+
+DELIVERY_REPORT_LIST_FIELDS = [
+    "name",
+    "bot_delivery_id",
+    "reported_invoice_no",
+    "completion_status",
+    "payment_status",
+    "delivery_driver",
+    "driver_telegram_id",
+    "delivery_timestamp",
+    "gps_latitude",
+    "gps_longitude",
+    "photos",
+    "voice_note",
+    "matched_invoice",
+    "amount_collected",
+    "reconciliation_status",
+    "match_confidence",
+    "match_notes",
+    "payment_entry",
+    "creation",
+]
+
+
+@frappe.whitelist()
+def get_delivery_reports(status=None, search="", start=0, limit=100):
+    """List Delivery Reports for the reconciliation queue (Todo 024 frontend), newest first.
+
+    status: comma-separated reconciliation_status values. Defaults to the actionable queue
+    (Unmatched + Suggested) - pass e.g. "Confirmed,Rejected" to view resolved history instead.
+    search: matches bot_delivery_id / reported_invoice_no / delivery_driver / matched_invoice.
+    """
+    try:
+        start = int(start or 0)
+        limit = min(int(limit or 100), 200)
+
+        statuses = [s.strip() for s in (status.split(",") if status else ["Unmatched", "Suggested"]) if s.strip()]
+        filters = [["reconciliation_status", "in", statuses]] if statuses else []
+
+        or_filters = None
+        search = (search or "").strip()
+        if search:
+            term = f"%{search}%"
+            or_filters = [
+                ["bot_delivery_id", "like", term],
+                ["reported_invoice_no", "like", term],
+                ["delivery_driver", "like", term],
+                ["matched_invoice", "like", term],
+            ]
+
+        # Delivery Report is a low-volume staging table (bounded by delivery throughput, not
+        # sales data), so a plain count of matching names is cheap enough - no need for the
+        # dict-syntax aggregate query here.
+        total_count = len(frappe.get_all("Delivery Report", filters=filters, or_filters=or_filters, pluck="name"))
+
+        data = frappe.get_all(
+            "Delivery Report",
+            filters=filters,
+            or_filters=or_filters,
+            fields=DELIVERY_REPORT_LIST_FIELDS,
+            order_by="creation desc",
+            limit_start=start,
+            limit_page_length=limit,
+        )
+
+        return {"success": True, "data": data, "total_count": total_count, "start": start, "limit": limit}
+
+    except Exception as e:
+        frappe.log_error(title="Delivery Report list failed")
+        return {"success": False, "message": str(e), "data": [], "total_count": 0}
 
 
 @frappe.whitelist()

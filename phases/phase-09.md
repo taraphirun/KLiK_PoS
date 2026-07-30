@@ -1,7 +1,7 @@
 # Phase 9: Delivery Tracking & Payment Reconciliation (Telegram Delivery Bot)
 **Module 10**
 
-**Status:** 🔷 In progress
+**Status:** ✅ Done (backend fully verified; frontend not yet checked in a live browser this session — see Todo 024 notes)
 
 ## Objective
 Capture delivery outcomes reported by a Telegram delivery bot and reconcile them against
@@ -74,6 +74,7 @@ Telegram Bot ──POST──▶ [Ingestion API] ──▶ [Delivery Report] (st
 - [x] [021.md](../todo/021.md): Bot ingestion API endpoint + payload validation
 - [x] [022.md](../todo/022.md): Auto-match logic (exact → normalized → fuzzy invoice no) with confidence scoring — attribute/customer/amount matching dropped, see todo notes
 - [x] [023.md](../todo/023.md): Reconciliation API (confirm / reject / re-match) + mark-as-paid automation
+- [x] [024.md](../todo/024.md): Frontend reconciliation page
 - [ ] [024.md](../todo/024.md): Frontend reconciliation page
 
 ## Key design decisions

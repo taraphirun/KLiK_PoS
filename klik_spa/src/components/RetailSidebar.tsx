@@ -1,7 +1,11 @@
-import { Receipt, Grid3X3, BarChart3, Users, MonitorX, Banknote } from "lucide-react"
+import { useEffect, useState } from "react"
+import { Receipt, Grid3X3, BarChart3, Users, MonitorX, Banknote, Truck } from "lucide-react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useUserInfo } from "../hooks/useUserInfo"
 import { usePOSProfileStore } from "../stores/posProfileStore";
+import { getDeliveryReports } from "../services/delivery";
+
+const PENDING_DELIVERY_POLL_MS = 60000;
 
 // Inside your component
 export default function RetailSidebar() {
@@ -11,6 +15,27 @@ export default function RetailSidebar() {
   const {posDetails} = usePOSProfileStore()
 
   const canAccessSalesDashboard = userInfo?.is_admin_user ?? false
+  const [pendingDeliveryCount, setPendingDeliveryCount] = useState(0)
+
+  useEffect(() => {
+    if (!canAccessSalesDashboard) return
+    let isCurrent = true
+    const fetchCount = () => {
+      getDeliveryReports()
+        .then((response) => {
+          if (isCurrent) setPendingDeliveryCount(response.total_count || 0)
+        })
+        .catch(() => {
+          // Nav badge is best-effort - a failed poll just skips this refresh.
+        })
+    }
+    fetchCount()
+    const interval = window.setInterval(fetchCount, PENDING_DELIVERY_POLL_MS)
+    return () => {
+      isCurrent = false
+      window.clearInterval(interval)
+    }
+  }, [canAccessSalesDashboard])
 
   const menuItems = [
     { icon: Grid3X3, path: "/pos", label: "POS" },
@@ -19,6 +44,7 @@ export default function RetailSidebar() {
      { icon: Users, path: "/customers", label: "Customers", requiresEditCreatePermission: true },
     { icon: BarChart3, path: "/dashboard", label: "Dashboard", requiresSalesDashboard: true },
     { icon: MonitorX, path: "/closing_shift", label: "Closing Shift" },
+    { icon: Truck, path: "/deliveries/reconcile", label: "Deliveries", requiresSalesDashboard: true },
 
   ]
 
@@ -71,13 +97,14 @@ export default function RetailSidebar() {
             return null; // Don't render this menu item if the user doesn't have permission
            }
            
+          const showPendingBadge = item.path === "/deliveries/reconcile" && pendingDeliveryCount > 0
           return (
           <button
             key={index}
             onClick={() => handleNav(item)}
             disabled={disabled}
-            title={disabled ? "Sales Dashboard (Sales Manager, System Manager or Administrator only)" : item.label}
-            className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-150 ${
+            title={disabled ? `${item.label} (Sales Manager, System Manager or Administrator only)` : item.label}
+            className={`relative w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-150 ${
               disabled
                 ? "opacity-50 cursor-not-allowed text-gray-400 dark:text-gray-600"
                 : "cursor-pointer active:scale-90 " + (
@@ -88,6 +115,11 @@ export default function RetailSidebar() {
             }`}
           >
             <item.icon size={20} />
+            {showPendingBadge && (
+              <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
+                {pendingDeliveryCount > 99 ? "99+" : pendingDeliveryCount}
+              </span>
+            )}
           </button>
         )})}
       </div>
