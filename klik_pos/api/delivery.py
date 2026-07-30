@@ -5,6 +5,11 @@ import re
 import frappe
 from frappe.utils import add_days, flt, get_datetime, nowdate
 
+from klik_pos.api.sales_invoice import create_payment_entry
+
+# completion_status (Delivery Report) -> custom_delivery_status (Sales Invoice, Todo 020).
+DELIVERY_STATUS_MAP = {"Full": "Delivered", "Partial": "Partially Delivered"}
+
 ALLOWED_COMPLETION_STATUSES = {"Full", "Partial"}
 ALLOWED_PAYMENT_STATUSES = {"Paid", "Unpaid", "Partial"}
 REQUIRED_FIELDS = ("bot_delivery_id", "reported_invoice_no", "completion_status", "payment_status")
@@ -250,4 +255,180 @@ def submit_delivery_report(data):
         return {"success": False, "message": str(e)}
     except Exception as e:
         frappe.log_error(title="Delivery Report ingestion failed")
+        return {"success": False, "message": str(e)}
+
+
+def _parse_bool(value, default=None):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "yes")
+
+
+@frappe.whitelist()
+def confirm_delivery_match(report_name, invoice_name=None, mark_paid=None):
+    """Human confirms a Delivery Report's match (suggested or manually picked) and stamps the
+    reconciled delivery data onto the Sales Invoice (Todo 020 fields). If the driver reported
+    payment collected (Paid/Partial) and mark_paid isn't explicitly False, posts a Payment Entry
+    via the existing create_payment_entry - never reimplemented here.
+
+    Idempotent: confirming an already-Confirmed report is a no-op and never posts a second
+    Payment Entry (guarded both by an early-return fast path and a re-check of
+    reconciliation_status/payment_entry immediately before posting, covering concurrent calls).
+
+    Design rule (decided 2026-07-30): completion_status and payment_status are independent axes -
+    a Partially Delivered order can still be fully paid and vice versa. mark-as-paid keys purely
+    off payment_status; completion_status only drives custom_delivery_status.
+    """
+    try:
+        report = frappe.get_doc("Delivery Report", report_name)
+
+        if report.reconciliation_status == "Confirmed":
+            return {
+                "success": True,
+                "message": "Already confirmed",
+                "delivery_report": report.name,
+                "matched_invoice": report.matched_invoice,
+                "payment_entry": report.payment_entry,
+            }
+
+        if report.reconciliation_status == "Rejected":
+            frappe.throw("Cannot confirm a rejected Delivery Report - re-match it first")
+
+        target_invoice_name = invoice_name or report.matched_invoice
+        if not target_invoice_name:
+            frappe.throw("No invoice to confirm - pass invoice_name or auto-match the report first")
+
+        if not frappe.db.exists("Sales Invoice", target_invoice_name):
+            frappe.throw(f"Sales Invoice {target_invoice_name} does not exist")
+
+        invoice = frappe.get_doc("Sales Invoice", target_invoice_name)
+        if invoice.docstatus != 1:
+            frappe.throw(f"Sales Invoice {target_invoice_name} is not submitted")
+
+        invoice.custom_delivery_status = DELIVERY_STATUS_MAP.get(report.completion_status, "Pending")
+        invoice.custom_delivery_driver = report.delivery_driver
+        invoice.custom_delivered_at = report.delivery_timestamp
+        invoice.custom_delivery_gps_latitude = report.gps_latitude
+        invoice.custom_delivery_gps_longitude = report.gps_longitude
+        invoice.custom_delivery_report = report.name
+        invoice.save(ignore_permissions=True)
+
+        payment_entry_name = None
+        mark_paid_override = _parse_bool(mark_paid)
+        should_mark_paid = report.payment_status in ("Paid", "Partial") and mark_paid_override is not False
+
+        if should_mark_paid:
+            # Re-check right before posting - guards the race between two concurrent confirm
+            # calls both passing the fast-path check above (Todo 023 risk: double payment).
+            current_status, current_payment_entry = frappe.db.get_value(
+                "Delivery Report", report.name, ["reconciliation_status", "payment_entry"]
+            )
+            if current_status == "Confirmed" or current_payment_entry:
+                frappe.throw("Delivery Report was just confirmed by another request")
+
+            if report.payment_status == "Paid":
+                amount = flt(invoice.outstanding_amount)
+            else:  # Partial
+                amount = flt(report.amount_collected)
+                if amount <= 0:
+                    frappe.throw("amount_collected must be set (> 0) to confirm a Partial payment")
+                if amount > flt(invoice.outstanding_amount):
+                    frappe.throw(
+                        f"amount_collected ({amount}) exceeds invoice outstanding_amount "
+                        f"({invoice.outstanding_amount}) - cannot over-allocate"
+                    )
+
+            if amount > 0:
+                payment_entry = create_payment_entry(invoice, None, amount)
+                payment_entry_name = payment_entry.name
+
+        report.matched_invoice = target_invoice_name
+        report.reconciliation_status = "Confirmed"
+        report.payment_entry = payment_entry_name
+        report.save(ignore_permissions=True)
+
+        return {
+            "success": True,
+            "delivery_report": report.name,
+            "matched_invoice": target_invoice_name,
+            "reconciliation_status": report.reconciliation_status,
+            "payment_entry": payment_entry_name,
+        }
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Delivery Report confirm failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def reject_delivery_match(report_name, reason=None):
+    """Flip a Delivery Report to Rejected. Never touches any Sales Invoice - matched_invoice and
+    match_confidence are left as-is for audit (what was suggested/rejected and why), only the
+    status changes. The optional reason is recorded as a comment on the report's timeline rather
+    than overwriting match_notes (which explains the auto-match itself)."""
+    try:
+        report = frappe.get_doc("Delivery Report", report_name)
+
+        if report.reconciliation_status == "Confirmed":
+            frappe.throw("Cannot reject an already-confirmed Delivery Report")
+
+        report.reconciliation_status = "Rejected"
+        report.save(ignore_permissions=True)
+
+        if reason:
+            report.add_comment("Comment", f"Rejected: {reason}")
+
+        return {
+            "success": True,
+            "delivery_report": report.name,
+            "reconciliation_status": report.reconciliation_status,
+        }
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Delivery Report reject failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def rematch_delivery_report(report_name, invoice_name):
+    """Manually override the suggested (or absent) match to a specific invoice, resetting status
+    to Suggested so it still requires a separate confirm_delivery_match call - a re-match is not
+    itself a confirmation."""
+    try:
+        report = frappe.get_doc("Delivery Report", report_name)
+
+        if report.reconciliation_status == "Confirmed":
+            frappe.throw(
+                "Cannot re-match an already-confirmed Delivery Report - reject it first if the "
+                "confirmed match was wrong"
+            )
+
+        if not frappe.db.exists("Sales Invoice", invoice_name):
+            frappe.throw(f"Sales Invoice {invoice_name} does not exist")
+
+        report.matched_invoice = invoice_name
+        report.match_confidence = 1.0
+        report.match_notes = f"Manually re-matched to {invoice_name} by {frappe.session.user}"
+        report.reconciliation_status = "Suggested"
+        report.save(ignore_permissions=True)
+
+        return {
+            "success": True,
+            "delivery_report": report.name,
+            "matched_invoice": invoice_name,
+            "reconciliation_status": report.reconciliation_status,
+        }
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Delivery Report re-match failed")
         return {"success": False, "message": str(e)}

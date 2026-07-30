@@ -1413,6 +1413,7 @@
    "dt": "Sales Invoice",
    "insert_after": "custom_delivery_personnel_name",
    "read_only": 1,
+   "allow_on_submit": 1,
    "module": "KLiK PoS",
    "owner": "Administrator"
   },
@@ -1424,6 +1425,7 @@
    "dt": "Sales Invoice",
    "insert_after": "custom_delivery_status",
    "read_only": 1,
+   "allow_on_submit": 1,
    "module": "KLiK PoS",
    "owner": "Administrator"
   },
@@ -1434,6 +1436,7 @@
    "dt": "Sales Invoice",
    "insert_after": "custom_delivery_driver",
    "read_only": 1,
+   "allow_on_submit": 1,
    "module": "KLiK PoS",
    "owner": "Administrator"
   },
@@ -1453,6 +1456,7 @@
    "dt": "Sales Invoice",
    "insert_after": "custom_delivery_column_break",
    "read_only": 1,
+   "allow_on_submit": 1,
    "module": "KLiK PoS",
    "owner": "Administrator"
   },
@@ -1464,6 +1468,7 @@
    "dt": "Sales Invoice",
    "insert_after": "custom_delivery_gps_latitude",
    "read_only": 1,
+   "allow_on_submit": 1,
    "module": "KLiK PoS",
    "owner": "Administrator"
   },
@@ -1476,6 +1481,7 @@
    "dt": "Sales Invoice",
    "insert_after": "custom_delivery_gps_longitude",
    "read_only": 1,
+   "allow_on_submit": 1,
    "module": "KLiK PoS",
    "owner": "Administrator"
   }

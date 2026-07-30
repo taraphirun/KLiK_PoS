@@ -1,5 +1,5 @@
 import frappe
-from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+from frappe.custom.doctype.custom_field.custom_field import create_custom_field, create_custom_fields
 
 
 def before_install():
@@ -125,84 +125,91 @@ def ensure_pos_print_format_field():
 
 
 def ensure_delivery_reconciliation_fields():
-    """Create the Sales Invoice fields that hold the *reconciled* (trusted) delivery outcome.
+    """Create/update the Sales Invoice fields that hold the *reconciled* (trusted) delivery
+    outcome.
 
     These are only ever written by the Delivery Report confirm step (Module 10 / Todo 023) -
-    never directly by the bot - so they're read-only here. Denormalized (including GPS) onto
-    the invoice rather than read through custom_delivery_report so Report Builder/list filters
-    can query them as real columns; custom_delivery_report is kept for audit/drill-down back to
-    the raw bot payload. Distinct from the existing custom_delivery_personnel/_name fields, which
-    track an internally-assigned delivery person, not the bot-reported driver on a confirmed
-    delivery.
-    """
-    fields = [
-        {
-            "fieldname": "custom_delivery_status",
-            "label": "Delivery Status",
-            "fieldtype": "Select",
-            "options": "Pending\nDelivered\nPartially Delivered\nNot Delivered",
-            "default": "Pending",
-            "insert_after": "custom_delivery_personnel_name",
-            "read_only": 1,
-            "module": "KLiK PoS",
-        },
-        {
-            "fieldname": "custom_delivery_driver",
-            "label": "Delivery Driver (Bot Reported)",
-            "fieldtype": "Data",
-            "insert_after": "custom_delivery_status",
-            "read_only": 1,
-            "module": "KLiK PoS",
-            "description": "Driver name from the confirmed Delivery Report, not the internally-assigned Delivery Personnel above.",
-        },
-        {
-            "fieldname": "custom_delivered_at",
-            "label": "Delivered At",
-            "fieldtype": "Datetime",
-            "insert_after": "custom_delivery_driver",
-            "read_only": 1,
-            "module": "KLiK PoS",
-        },
-        {
-            "fieldname": "custom_delivery_column_break",
-            "fieldtype": "Column Break",
-            "insert_after": "custom_delivered_at",
-            "module": "KLiK PoS",
-        },
-        {
-            "fieldname": "custom_delivery_gps_latitude",
-            "label": "Delivery GPS Latitude",
-            "fieldtype": "Float",
-            "precision": "6",
-            "insert_after": "custom_delivery_column_break",
-            "read_only": 1,
-            "module": "KLiK PoS",
-        },
-        {
-            "fieldname": "custom_delivery_gps_longitude",
-            "label": "Delivery GPS Longitude",
-            "fieldtype": "Float",
-            "precision": "6",
-            "insert_after": "custom_delivery_gps_latitude",
-            "read_only": 1,
-            "module": "KLiK PoS",
-        },
-        {
-            "fieldname": "custom_delivery_report",
-            "label": "Delivery Report",
-            "fieldtype": "Link",
-            "options": "Delivery Report",
-            "insert_after": "custom_delivery_gps_longitude",
-            "read_only": 1,
-            "module": "KLiK PoS",
-            "description": "The confirmed Delivery Report this delivery outcome was reconciled from.",
-        },
-    ]
+    never directly by the bot - so they're read-only in the desk form. Denormalized (including
+    GPS) onto the invoice rather than read through custom_delivery_report so Report Builder/list
+    filters can query them as real columns; custom_delivery_report is kept for audit/drill-down
+    back to the raw bot payload. Distinct from the existing custom_delivery_personnel/_name
+    fields, which track an internally-assigned delivery person, not the bot-reported driver on a
+    confirmed delivery.
 
-    for field in fields:
-        if frappe.db.exists("Custom Field", f"Sales Invoice-{field['fieldname']}"):
-            continue
-        create_custom_field("Sales Invoice", field, ignore_validate=True)
+    allow_on_submit=1 is required on every data-carrying field here: reconciliation always runs
+    *after* the invoice is already submitted (that's the entire point - it happens later, at
+    delivery time), and Frappe blocks writes to non-allow_on_submit fields on a submitted
+    document. Uses create_custom_fields (update=True) rather than create_custom_field so
+    re-running this (e.g. after changing a field's properties) also fixes already-existing sites,
+    not just fresh installs - see Todo 023 notes for the incident that made this necessary.
+    """
+    create_custom_fields(
+        {
+            "Sales Invoice": [
+                {
+                    "fieldname": "custom_delivery_status",
+                    "label": "Delivery Status",
+                    "fieldtype": "Select",
+                    "options": "Pending\nDelivered\nPartially Delivered\nNot Delivered",
+                    "default": "Pending",
+                    "insert_after": "custom_delivery_personnel_name",
+                    "read_only": 1,
+                    "allow_on_submit": 1,
+                },
+                {
+                    "fieldname": "custom_delivery_driver",
+                    "label": "Delivery Driver (Bot Reported)",
+                    "fieldtype": "Data",
+                    "insert_after": "custom_delivery_status",
+                    "read_only": 1,
+                    "allow_on_submit": 1,
+                    "description": "Driver name from the confirmed Delivery Report, not the internally-assigned Delivery Personnel above.",
+                },
+                {
+                    "fieldname": "custom_delivered_at",
+                    "label": "Delivered At",
+                    "fieldtype": "Datetime",
+                    "insert_after": "custom_delivery_driver",
+                    "read_only": 1,
+                    "allow_on_submit": 1,
+                },
+                {
+                    "fieldname": "custom_delivery_column_break",
+                    "fieldtype": "Column Break",
+                    "insert_after": "custom_delivered_at",
+                },
+                {
+                    "fieldname": "custom_delivery_gps_latitude",
+                    "label": "Delivery GPS Latitude",
+                    "fieldtype": "Float",
+                    "precision": "6",
+                    "insert_after": "custom_delivery_column_break",
+                    "read_only": 1,
+                    "allow_on_submit": 1,
+                },
+                {
+                    "fieldname": "custom_delivery_gps_longitude",
+                    "label": "Delivery GPS Longitude",
+                    "fieldtype": "Float",
+                    "precision": "6",
+                    "insert_after": "custom_delivery_gps_latitude",
+                    "read_only": 1,
+                    "allow_on_submit": 1,
+                },
+                {
+                    "fieldname": "custom_delivery_report",
+                    "label": "Delivery Report",
+                    "fieldtype": "Link",
+                    "options": "Delivery Report",
+                    "insert_after": "custom_delivery_gps_longitude",
+                    "read_only": 1,
+                    "allow_on_submit": 1,
+                    "description": "The confirmed Delivery Report this delivery outcome was reconciled from.",
+                },
+            ]
+        },
+        ignore_validate=True,
+    )
 
 
 def after_install():
