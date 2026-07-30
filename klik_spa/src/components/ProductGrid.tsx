@@ -172,9 +172,10 @@ export default function ProductGrid({
     return columns || 1;
   }, []);
 
-  // Desktop-only grid keyboard navigation: Arrow keys move the highlight, Shift+Enter
-  // opens the quantity dialog for the highlighted product. Scoped to grid view only —
-  // list view uses a different component (ProductLineView) with no highlight support yet.
+  // Desktop-only grid keyboard navigation: Arrow keys move the highlight, Enter adds the
+  // highlighted product at qty 1, Shift+Enter opens the quantity dialog instead. Scoped to
+  // grid view only — list view uses a different component (ProductLineView) with no
+  // highlight support yet.
   useEffect(() => {
     if (isMobile || viewMode !== "grid") return;
 
@@ -193,15 +194,20 @@ export default function ProductGrid({
       // Let the search box's own cursor movement win when it's focused.
       if (isSearchInput && isArrowLeftRight) return;
 
-      const isShiftEnter = e.key === "Enter" && e.shiftKey;
+      const isEnter = e.key === "Enter";
       const isArrow = e.key === "ArrowUp" || e.key === "ArrowDown" || isArrowLeftRight;
-      if (!isArrow && !isShiftEnter) return;
+      if (!isArrow && !isEnter) return;
 
       e.preventDefault();
 
-      if (isShiftEnter) {
+      if (isEnter) {
         const item = inStockItems[highlightedIndex];
-        if (item) openQuantityDialogForItem(item);
+        if (!item) return;
+        if (e.shiftKey) {
+          openQuantityDialogForItem(item);
+        } else {
+          void handleAddToCart(item);
+        }
         return;
       }
 
@@ -228,6 +234,7 @@ export default function ProductGrid({
     quantityDialogItem,
     getColumnCount,
     openQuantityDialogForItem,
+    handleAddToCart,
   ]);
 
   const handleObserver = useCallback(
