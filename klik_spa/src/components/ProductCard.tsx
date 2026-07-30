@@ -12,6 +12,7 @@ interface ProductCardProps {
   isMobile?: boolean;
   scannerOnly?: boolean;
   showItemCode?: boolean;
+  isHighlighted?: boolean;
 }
 
 export default function ProductCard({
@@ -20,6 +21,7 @@ export default function ProductCard({
   isMobile = false,
   scannerOnly = false,
   showItemCode = false,
+  isHighlighted = false,
 }: ProductCardProps) {
   const [showTooltip, setShowTooltip] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -61,13 +63,17 @@ export default function ProductCard({
   return (
     <>
       <div
-        className={`bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-visible transition-all duration-200 relative flex flex-col ${
+        className={`bg-white dark:bg-gray-800 rounded-xl border overflow-visible transition-all duration-200 relative flex flex-col ${
           showTooltip ? "z-[2]" : "z-1"
         } ${
           isDisabled
             ? "cursor-not-allowed"
             : "hover:shadow-lg hover:scale-105 cursor-pointer active:scale-95"
-        } ${isMobile ? "touch-manipulation" : ""}`}
+        } ${isMobile ? "touch-manipulation" : ""} ${
+          isHighlighted
+            ? "border-beveren-500 ring-2 ring-beveren-500 ring-offset-1 dark:ring-offset-gray-900"
+            : "border-gray-200 dark:border-gray-700"
+        }`}
         onClick={(e) => {
           if ((e.target as HTMLElement).closest("button")) return;
           if (!isDisabled) onAddToCart(item);

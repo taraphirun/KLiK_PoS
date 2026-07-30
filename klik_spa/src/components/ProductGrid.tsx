@@ -7,6 +7,7 @@ import ProductCard from "./ProductCard";
 import ProductLineView from "./ProductLineView";
 import SalespersonAuthModal from "./dialog/SalespersonAuthModal";
 import VariantPickerModal from "./VariantPickerModal";
+import QuantityDialog from "./QuantityDialog";
 import { useCartStore } from "../stores/cartStore";
 import { usePOSProfileStore } from "../stores/posProfileStore";
 import { useSalespersonStore } from "../stores/salespersonStore";
@@ -34,12 +35,14 @@ export default function ProductGrid({
   isSearching = false,
 }: ProductGridProps) {
   const { filteredItems, hideUnavailableItems, selectedCustomer } = useProduct();
-  const { addToCart } = useCartStore();
+  const { addToCart, addToCartWithQuantity } = useCartStore();
   const { posDetails } = usePOSProfileStore();
   const { activeSalesperson, ensureInitialized, isRestoring } = useSalespersonStore();
   const [showSalespersonModal, setShowSalespersonModal] = useState(false);
   const [pendingCartItem, setPendingCartItem] = useState<MenuItem | null>(null);
   const [variantTemplateItem, setVariantTemplateItem] = useState<MenuItem | null>(null);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [quantityDialogItem, setQuantityDialogItem] = useState<MenuItem | null>(null);
 
   const defaultView = posDetails?.custom_default_view || "Grid View";
   const viewMode = propViewMode || (defaultView === "List View" ? "list" : "grid");
@@ -48,6 +51,7 @@ export default function ProductGrid({
   const isSalespersonLockActive = requiresSalespersonPin && !activeSalesperson && !isRestoring;
 
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const gridContainerRef = useRef<HTMLDivElement>(null);
 
   const inStockItems = useMemo(
     () => (
@@ -131,6 +135,100 @@ export default function ProductGrid({
   const handleVariantSelected = useCallback(async (variant: MenuItem) => {
     await addConcreteItemToCart(variant);
   }, [addConcreteItemToCart]);
+
+  // Keep the highlight in range as search/pagination changes the result set,
+  // without resetting position on every unrelated re-render.
+  useEffect(() => {
+    setHighlightedIndex((prev) => (prev >= inStockItems.length ? 0 : prev));
+  }, [inStockItems]);
+
+  const openQuantityDialogForItem = useCallback((item: MenuItem) => {
+    if (item.is_stock_item !== false && item.available <= 0) return;
+    if (scannerOnly) return;
+
+    if (item.is_variant_template || item.has_variants) {
+      setVariantTemplateItem(item);
+      return;
+    }
+
+    if (requiresSalespersonPin && !activeSalesperson) {
+      setPendingCartItem(item);
+      setShowSalespersonModal(true);
+      return;
+    }
+
+    setQuantityDialogItem(item);
+  }, [scannerOnly, requiresSalespersonPin, activeSalesperson]);
+
+  const handleQuantityConfirm = useCallback(async (item: MenuItem, quantity: number) => {
+    await addToCartWithQuantity({ ...item, item_code: item.id }, quantity);
+    setQuantityDialogItem(null);
+  }, [addToCartWithQuantity]);
+
+  const getColumnCount = useCallback(() => {
+    const el = gridContainerRef.current;
+    if (!el) return 1;
+    const columns = window.getComputedStyle(el).gridTemplateColumns.split(" ").filter(Boolean).length;
+    return columns || 1;
+  }, []);
+
+  // Desktop-only grid keyboard navigation: Arrow keys move the highlight, Shift+Enter
+  // opens the quantity dialog for the highlighted product. Scoped to grid view only —
+  // list view uses a different component (ProductLineView) with no highlight support yet.
+  useEffect(() => {
+    if (isMobile || viewMode !== "grid") return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (showSalespersonModal || variantTemplateItem || quantityDialogItem) return;
+      if (inStockItems.length === 0) return;
+
+      const active = document.activeElement as HTMLElement | null;
+      const isSearchInput = active?.getAttribute("data-pos-search-input") === "true";
+      const isOtherEditable = !!active && !isSearchInput && (
+        active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable
+      );
+      if (isOtherEditable) return;
+
+      const isArrowLeftRight = e.key === "ArrowLeft" || e.key === "ArrowRight";
+      // Let the search box's own cursor movement win when it's focused.
+      if (isSearchInput && isArrowLeftRight) return;
+
+      const isShiftEnter = e.key === "Enter" && e.shiftKey;
+      const isArrow = e.key === "ArrowUp" || e.key === "ArrowDown" || isArrowLeftRight;
+      if (!isArrow && !isShiftEnter) return;
+
+      e.preventDefault();
+
+      if (isShiftEnter) {
+        const item = inStockItems[highlightedIndex];
+        if (item) openQuantityDialogForItem(item);
+        return;
+      }
+
+      const cols = getColumnCount();
+      const max = inStockItems.length - 1;
+      setHighlightedIndex((prev) => {
+        if (e.key === "ArrowRight") return Math.min(max, prev + 1);
+        if (e.key === "ArrowLeft") return Math.max(0, prev - 1);
+        if (e.key === "ArrowDown") return Math.min(max, prev + cols);
+        if (e.key === "ArrowUp") return Math.max(0, prev - cols);
+        return prev;
+      });
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    isMobile,
+    viewMode,
+    inStockItems,
+    highlightedIndex,
+    showSalespersonModal,
+    variantTemplateItem,
+    quantityDialogItem,
+    getColumnCount,
+    openQuantityDialogForItem,
+  ]);
 
   const handleObserver = useCallback(
     (entries: IntersectionObserverEntry[]) => {
@@ -280,8 +378,11 @@ export default function ProductGrid({
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-beveren-600"></div>
         </div>
       )}
-      <div className={`grid ${isMobile ? "gap-3 grid-cols-2 sm:grid-cols-2" : "gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-4"}`}>
-        {inStockItems.map((item) => (
+      <div
+        ref={gridContainerRef}
+        className={`grid ${isMobile ? "gap-3 grid-cols-2 sm:grid-cols-2" : "gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-4"}`}
+      >
+        {inStockItems.map((item, index) => (
           <ProductCard
             key={item.id}
             item={item}
@@ -289,6 +390,7 @@ export default function ProductGrid({
             isMobile={isMobile}
             showItemCode={showItemCode}
             scannerOnly={scannerOnly}
+            isHighlighted={!isMobile && index === highlightedIndex}
           />
         ))}
       </div>
@@ -341,6 +443,13 @@ export default function ProductGrid({
           customerId={selectedCustomer?.id}
           onClose={() => setVariantTemplateItem(null)}
           onSelectVariant={handleVariantSelected}
+        />
+      )}
+      {quantityDialogItem && (
+        <QuantityDialog
+          item={quantityDialogItem}
+          onCancel={() => setQuantityDialogItem(null)}
+          onConfirm={(quantity) => handleQuantityConfirm(quantityDialogItem, quantity)}
         />
       )}
     </>

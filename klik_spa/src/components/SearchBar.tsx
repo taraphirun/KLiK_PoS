@@ -33,6 +33,7 @@ const SearchBar = forwardRef<HTMLInputElement, SearchBarProps>(function SearchBa
         <input
           ref={ref}
           type="text"
+          data-pos-search-input="true"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
           onKeyPress={onSearchKeyPress}
