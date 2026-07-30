@@ -20,6 +20,9 @@ interface ERPCustomer {
   tax_id?: string;
   telegram_linked?: boolean;
   telegram_display_name?: string | null;
+  credit_limit?: number;
+  credit_used?: number;
+  credit_available?: number | null;
   contact?: {
     first_name?: string;
     last_name?: string;
@@ -406,7 +409,10 @@ export function useCustomers(searchQuery?: string) {
           defaultCurrency: customer.default_currency,
           companyCurrency: customer.company_currency,
           telegramLinked: customer.telegram_linked || false,
-          telegramDisplayName: customer.telegram_display_name || null
+          telegramDisplayName: customer.telegram_display_name || null,
+          creditLimit: customer.credit_limit || 0,
+          creditUsed: customer.credit_used || 0,
+          creditAvailable: customer.credit_available ?? null
         };
       });
 

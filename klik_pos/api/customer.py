@@ -4,6 +4,7 @@ import frappe
 from erpnext.setup.utils import get_exchange_rate
 from erpnext.accounts.party import get_party_details
 from frappe import _
+from frappe.utils import flt
 from contextlib import contextmanager
 
 from klik_pos.klik_pos.utils import get_current_pos_profile
@@ -52,6 +53,47 @@ def _get_customer_telegram_links(customer_names):
     except Exception:
         frappe.log_error(frappe.get_traceback(), "Error batch-fetching Telegram links")
         return {}
+
+
+def _get_customer_credit_info(customer_names, company):
+    """Batch-fetch credit limit and outstanding balance (credit used) for a page of customers.
+
+    Reuses erpnext's own credit-limit source (Customer Credit Limit / Customer Group / Company
+    default via get_credit_limit) and outstanding source (GL Entry) so these numbers always agree
+    with what erpnext.selling.doctype.customer.customer.check_credit_limit enforces on submit.
+    Outstanding is batched into a single grouped query since it's the expensive part; credit_limit
+    is looked up per customer via the core helper (cheap, partly cached).
+    """
+    from erpnext.selling.doctype.customer.customer import get_credit_limit
+
+    if not customer_names or not company:
+        return {}
+
+    outstanding_rows = frappe.db.sql(
+        """
+        SELECT party, SUM(debit) - SUM(credit) as outstanding
+        FROM `tabGL Entry`
+        WHERE party_type = 'Customer'
+          AND is_cancelled = 0
+          AND company = %s
+          AND party IN ({placeholders})
+        GROUP BY party
+        """.format(placeholders=",".join(["%s"] * len(customer_names))),
+        tuple([company] + list(customer_names)),
+        as_dict=True,
+    )
+    outstanding_by_customer = {row["party"]: flt(row["outstanding"]) for row in outstanding_rows}
+
+    info = {}
+    for name in customer_names:
+        credit_limit = flt(get_credit_limit(name, company))
+        credit_used = flt(outstanding_by_customer.get(name, 0))
+        info[name] = {
+            "credit_limit": credit_limit,
+            "credit_used": credit_used,
+            "credit_available": (credit_limit - credit_used) if credit_limit > 0 else None,
+        }
+    return info
 
 
 @frappe.whitelist(allow_guest=True)
@@ -195,7 +237,9 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
         
         customers = frappe.db.sql(data_query, tuple(params), as_dict=True)
 
-        telegram_links = _get_customer_telegram_links([c["name"] for c in customers])
+        customer_names = [c["name"] for c in customers]
+        telegram_links = _get_customer_telegram_links(customer_names)
+        credit_info = _get_customer_credit_info(customer_names, company)
 
         for cust in customers:
             cust["company_currency"] = company_currency
@@ -211,6 +255,12 @@ def get_customers(limit: int = 100, start: int = 0, search: str = ""):
             cust["telegram_linked"] = bool(telegram_link)
             cust["telegram_display_name"] = (
                 telegram_link["telegram_display_name"] if telegram_link else None
+            )
+            cust.update(
+                credit_info.get(
+                    cust["name"],
+                    {"credit_limit": 0, "credit_used": 0, "credit_available": None},
+                )
             )
         
         return {

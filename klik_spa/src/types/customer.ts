@@ -86,6 +86,9 @@ export interface Customer {
   redeemableValue?: number
   telegramLinked?: boolean
   telegramDisplayName?: string | null
+  creditLimit?: number
+  creditUsed?: number
+  creditAvailable?: number | null
 }
 
 export interface LoyaltySummary {

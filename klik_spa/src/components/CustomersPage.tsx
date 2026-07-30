@@ -131,6 +131,26 @@ export default function CustomersPage() {
 
 
 
+  const renderCreditCell = (customer: Customer) => {
+    const limit = customer.creditLimit || 0
+    const used = customer.creditUsed || 0
+    const currency = customer.defaultCurrency || customer.companyCurrency
+    if (!limit) {
+      return <div className="text-sm text-gray-500 dark:text-gray-400">No Limit</div>
+    }
+    const overLimit = used > limit
+    return (
+      <div className="space-y-1">
+        <div className={`text-sm font-medium ${overLimit ? "text-red-600 dark:text-red-400" : "text-gray-900 dark:text-white"}`}>
+          {formatCurrencyWithSymbol(used, currency)}
+        </div>
+        <div className="text-sm text-gray-500 dark:text-gray-400">
+          of {formatCurrencyWithSymbol(limit, currency)}
+        </div>
+      </div>
+    )
+  }
+
   const getInitials = (name: string) => {
     return name
       .split(" ")
@@ -273,6 +293,9 @@ export default function CustomersPage() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Orders & Spent
                       </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Credit
+                      </th>
                       {/* <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Status
                       </th> */}
@@ -331,6 +354,10 @@ export default function CustomersPage() {
                               {formatCurrencyWithSymbol(customer.totalSpent, customer.defaultCurrency || customer.companyCurrency)}
                             </div>
                           </div>
+                        </td>
+
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          {renderCreditCell(customer)}
                         </td>
 
                         {/* <td className="px-6 py-4 whitespace-nowrap">
@@ -551,6 +578,9 @@ export default function CustomersPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Orders & Spent
                     </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                      Credit
+                    </th>
                     {/* <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                       Status
                     </th> */}
@@ -609,6 +639,10 @@ export default function CustomersPage() {
                             {customer.totalSpent > 0 ? formatCurrencyWithSymbol(customer.totalSpent, customer.defaultCurrency || customer.companyCurrency) : 'No purchases'}
                           </div>
                         </div>
+                      </td>
+
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {renderCreditCell(customer)}
                       </td>
 
                       {/* <td className="px-6 py-4 whitespace-nowrap">

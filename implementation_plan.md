@@ -151,13 +151,28 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 
 ### Module 4: Customer Credit Limit Validation
 
+> **Note (2026-07-30):** ERPNext core already implements credit limit enforcement —
+> `erpnext.selling.doctype.customer.customer.get_credit_limit()` / `get_customer_outstanding()` /
+> `check_credit_limit()`, invoked automatically from `Sales Invoice.on_submit()`
+> (`sales_invoice.py:519,745`). klik_pos does not bypass it, so `doc.submit()` in
+> `submit_draft_invoice()` already blocks over-limit invoices today. This module does **not**
+> reimplement that math — it wraps the existing core functions in a pre-submit check so the
+> Payment Dialog can warn the cashier *before* the draft invoice is even inserted, instead of only
+> finding out after `doc.submit()` throws (which currently leaves an orphaned draft Sales Invoice
+> behind).
+
 #### 1. Backend Credit Limit Verification
 - **[MODIFY] [klik_pos/api/sales_invoice.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/sales_invoice.py)**:
-  - Implement `check_customer_credit_limit(customer, new_invoice_amount, company)`:
-    - Queries `Customer.credit_limit`.
-    - Queries current total unpaid outstanding balance: `SELECT COALESCE(SUM(outstanding_amount), 0) FROM tabSales Invoice WHERE customer = %s AND docstatus = 1 AND outstanding_amount > 0`.
-    - If `current_outstanding + new_invoice_amount > credit_limit`, returns exceeded details.
-  - `@frappe.whitelist() def validate_before_submit(data)`: Pre-submission validation endpoint called by POS UI.
+  - Implement `check_customer_credit_limit(customer, new_invoice_amount, company)` as a thin wrapper:
+    - Reuses `erpnext.selling.doctype.customer.customer.get_credit_limit(customer, company)` and
+      `get_customer_outstanding(customer, company)` — do not re-derive the credit limit or
+      outstanding balance with new SQL.
+    - If `credit_limit > 0` and `current_outstanding + new_invoice_amount > credit_limit`, returns
+      exceeded details (`credit_limit`, `current_outstanding`, `new_invoice_amount`, `excess`).
+  - `@frappe.whitelist() def validate_before_submit(data)`: Pre-submission endpoint called by POS UI
+    before `submit_draft_invoice`; calls `check_customer_credit_limit` using the draft's customer
+    and grand total. Purely advisory — the core `on_submit` check remains the actual enforcement
+    point, so this can't be bypassed by skipping the pre-check.
 
 #### 2. Service Layer & Payment Dialog UI
 - **[MODIFY] [klik_spa/src/services/salesInvoice.ts](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/services/salesInvoice.ts)**:
@@ -165,6 +180,18 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 - **[MODIFY] [klik_spa/src/components/dialog/PaymentDialog.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/dialog/PaymentDialog.tsx)**:
   - Call `validateBeforeSubmit()` before order submission.
   - If credit limit is exceeded, display prominent red alert banner with exceeded amount details and block submit button.
+
+#### 3. Customer List Visibility (added 2026-07-30, requested alongside this phase)
+- **[MODIFY] [klik_pos/api/customer.py](file:///home/phirun/dev/KLiK_PoS/klik_pos/api/customer.py)**:
+  - `get_customers()` batch-attaches `credit_limit` (via `get_credit_limit`, falling back to the
+    Company default) and `credit_used` (outstanding, via a single grouped GL Entry query across the
+    current page's customers — not one core `get_customer_outstanding()` call per row) to each
+    returned customer row.
+- **[MODIFY] [klik_spa/src/hooks/useCustomers.ts](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/hooks/useCustomers.ts)**:
+  - Map `credit_limit`/`credit_used` onto `Customer.creditLimit`/`creditUsed`.
+- **[MODIFY] [klik_spa/src/components/CustomersPage.tsx](file:///home/phirun/dev/KLiK_PoS/klik_spa/src/components/CustomersPage.tsx)**:
+  - Add a "Credit" column (desktop + mobile tables) showing credit used vs. total allowed credit
+    (or "No Limit" when `credit_limit` is 0).
 
 ---
 
