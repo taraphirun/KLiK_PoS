@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useCartStore } from "../stores/cartStore";
 import MenuGrid from "./MenuGrid";
 import OrderSummary from "./order/OrderSummary";
@@ -15,7 +15,8 @@ export default function RetailPOSLayout() {
   const [showScanner, setShowScanner] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
   const isMobile = useMediaQuery("(max-width: 1024px)");
-  
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   const {
     isLoading: isProductsLoading,
     error: productError,
@@ -93,6 +94,29 @@ export default function RetailPOSLayout() {
     return () => window.removeEventListener("focus", handleFocus);
   }, [refreshStockOnly]);
 
+  useEffect(() => {
+    if (isMobile) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isFocusSearchShortcut = (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f";
+      if (isFocusSearchShortcut) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+
+      if (e.key === "Escape" && document.activeElement === searchInputRef.current) {
+        if (searchQuery) {
+          searchProducts("");
+        }
+        searchInputRef.current?.blur();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isMobile, searchQuery, searchProducts]);
+
   if (isInitializing && !posDetails) {
     return <LoadingSpinner message="Loading POS configuration..." />;
   }
@@ -160,6 +184,7 @@ export default function RetailPOSLayout() {
           <MenuGrid
             onRefreshStock={handleRefreshStock}
             onScanBarcode={() => setShowScanner(true)}
+            searchInputRef={searchInputRef}
           />
         </div>
         

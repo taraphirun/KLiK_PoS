@@ -23,7 +23,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 4 — Customer Credit Limit Validation | 4 | 010–011, 037 | ✅ Done (pre-submit check wraps erpnext core; credit visibility added to /customers list) |
 | 5 — Additional Discount & Tax Round-Off | 5 | 012–013 | ✅ Done (round-off was already fixed pre-session; discount wraps erpnext native fields) |
 | 7 — Customer-Specific Price List | 6 | 014–015 | ✅ Done (fixed N+1 price query in get_items; dynamic pricing on customer change already existed) |
-| 8 — Keyboard Navigation & UI Usability | 7 | 016–017 | ⬜ Not started |
+| 8 — Keyboard Navigation & UI Usability | 7 | 016–017 | 🔷 In progress (Cmd/Ctrl+F, Escape, custom_invoice_ref done; grid arrow-nav + quantity dialog deferred until live testing) |
 | 1 — Custom Print Format & Status Indicators | 8 | 018 | ⬜ Not started |
 | 10 — Delivery Tracking & Payment Reconciliation | 9 | 019–024 | ⬜ Not started |
 | 11 — Driver Management & Free-Text→Link | 10 | 025–028 | ⬜ Not started |
@@ -31,7 +31,11 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 13 — Live Delivery Map | 12 | 031–032 | ⬜ Not started |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
 
-**Next up:** By table order, Phase 7 / Module 8 (Keyboard Navigation & UI Usability, Todos 016–017). Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019 (`Delivery Report` doctype) is the unblocked starting point. (Phase 6 completed 2026-07-30.)
+**Next up:** Finish Phase 7's deferred half (grid arrow-key navigation + quantity dialog) once live
+testing is possible. By table order otherwise, Phase 8 / Module 1 (Custom Print Format & Status
+Indicators, Todo 018). Alternatively, per the delivery-consolidation priority, Module 10 / Todo 019
+(`Delivery Report` doctype) is the unblocked starting point. (Phase 6 completed 2026-07-30; Phase 7
+partially completed 2026-07-30.)
 
 ---
 

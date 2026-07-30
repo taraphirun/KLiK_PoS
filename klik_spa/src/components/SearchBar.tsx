@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { forwardRef, useState } from "react"
 import { Scan } from "lucide-react"
 
 interface SearchBarProps {
@@ -11,13 +11,13 @@ interface SearchBarProps {
   isMobile?: boolean
 }
 
-export default function SearchBar({
+const SearchBar = forwardRef<HTMLInputElement, SearchBarProps>(function SearchBar({
   searchQuery,
   onSearchChange,
   onScanBarcode,
   onSearchKeyPress,
   isMobile = false
-}: SearchBarProps) {
+}, ref) {
   const [isFocused, setIsFocused] = useState(false)
 
   const getPlaceholder = () => {
@@ -31,6 +31,7 @@ export default function SearchBar({
     <div className={`relative ${isMobile ? "w-full" : "w-full max-w-3xl"}`}>
       <div className="relative flex items-center">
         <input
+          ref={ref}
           type="text"
           value={searchQuery}
           onChange={(e) => onSearchChange(e.target.value)}
@@ -83,4 +84,6 @@ export default function SearchBar({
       </div>
     </div>
   )
-}
+})
+
+export default SearchBar

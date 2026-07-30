@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type Ref } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
 import { useTheme } from "../hooks/useTheme";
@@ -17,9 +17,10 @@ import { useSalespersonStore } from "../stores/salespersonStore";
 interface MenuGridProps {
   onRefreshStock?: () => void;
   onScanBarcode?: () => void;
+  searchInputRef?: Ref<HTMLInputElement>;
 }
 
-export default function MenuGrid({ onRefreshStock, onScanBarcode }: MenuGridProps) {
+export default function MenuGrid({ onRefreshStock, onScanBarcode, searchInputRef }: MenuGridProps) {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
   const {
@@ -102,6 +103,7 @@ export default function MenuGrid({ onRefreshStock, onScanBarcode }: MenuGridProp
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center space-x-3 flex-1 max-w-md">
             <SearchBar
+              ref={searchInputRef}
               searchQuery={searchQuery}
               onSearchChange={handleSearchChange}
               onScanBarcode={onScanBarcode}

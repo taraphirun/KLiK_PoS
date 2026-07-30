@@ -15,6 +15,7 @@ export interface PaymentDialogProps {
   externalInvoiceData?: any;
   itemDiscounts?: any;
   totalItemDiscount?: number;
+  customInvoiceRef?: string;
 }
 
 export interface PaymentMethod {

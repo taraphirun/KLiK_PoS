@@ -55,6 +55,7 @@ export default function OrderSummary({
   const [pendingSalespersonAction, setPendingSalespersonAction] = useState<
     "checkout" | "hold" | null
   >(null);
+  const [customInvoiceRef, setCustomInvoiceRef] = useState("");
 
   const { posDetails } = usePOSProfileStore();
   const { refreshStockOnly } = useProductStore();
@@ -368,6 +369,7 @@ export default function OrderSummary({
     if (cartItems.length === 0) return;
     clearCart();
     setItemDiscounts({});
+    setCustomInvoiceRef("");
     onClearCart?.();
   };
 
@@ -447,6 +449,18 @@ export default function OrderSummary({
           customer={selectedCustomer}
           currencySymbol={currency_symbol}
         />
+        <div className="mt-3">
+          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+            Invoice Reference (optional)
+          </label>
+          <input
+            type="text"
+            value={customInvoiceRef}
+            onChange={(e) => setCustomInvoiceRef(e.target.value)}
+            placeholder="Physical receipt / reference number"
+            className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-beveren-500"
+          />
+        </div>
       </div>
 
       <div
@@ -538,6 +552,7 @@ export default function OrderSummary({
           isMobile={isMobile}
           itemDiscounts={itemDiscounts}
           totalItemDiscount={totalItemDiscount}
+          customInvoiceRef={customInvoiceRef}
         />
       )}
 

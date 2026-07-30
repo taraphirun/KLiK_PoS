@@ -124,6 +124,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
     initialSharingMode = null,
     externalInvoiceData = null,
     itemDiscounts = {},
+    customInvoiceRef = "",
   } = props;
 
   const [selectedSalesTaxCharges, setSelectedSalesTaxCharges] = useState("");
@@ -639,6 +640,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       allow_partial_payment: !isCreditSale && totalPaidAmount > 0 && outstandingAmount > 0,
       salesperson: currentSalesperson?.name || null,
       tax_id: taxPin || null,
+      customInvoiceRef: customInvoiceRef || null,
+      custom_invoice_ref: customInvoiceRef || null,
       loyalty: appliedLoyalty
         ? {
             loyalty_program: appliedLoyalty.loyalty_program,
@@ -1369,6 +1372,8 @@ export default function PaymentDialog(props: PaymentDialogProps) {
         businessType: posDetails?.business_type,
         salesperson: currentSalesperson?.name || null,
         tax_id: taxPin || null,
+        customInvoiceRef: customInvoiceRef || null,
+        custom_invoice_ref: customInvoiceRef || null,
         loyalty: appliedLoyalty
           ? {
               loyalty_program: appliedLoyalty.loyalty_program,
