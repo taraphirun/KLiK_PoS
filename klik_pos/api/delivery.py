@@ -1,11 +1,23 @@
+import difflib
 import json
+import re
 
 import frappe
-from frappe.utils import flt, get_datetime
+from frappe.utils import add_days, flt, get_datetime, nowdate
 
 ALLOWED_COMPLETION_STATUSES = {"Full", "Partial"}
 ALLOWED_PAYMENT_STATUSES = {"Paid", "Unpaid", "Partial"}
 REQUIRED_FIELDS = ("bot_delivery_id", "reported_invoice_no", "completion_status", "payment_status")
+
+# Auto-match tuning. Only invoice-number matching is implemented (exact / normalized / fuzzy) -
+# no customer or amount attribute matching, because Delivery Report has no bot-reported customer
+# or amount field to match against (amount_collected is filled in by a human during confirm,
+# Todo 023, not by the bot) - decided 2026-07-30.
+FUZZY_CANDIDATE_WINDOW_DAYS = 30
+EXACT_CONFIDENCE = 1.0
+NORMALIZED_EXACT_CONFIDENCE = 0.92
+FUZZY_MAX_CONFIDENCE = 0.85
+FUZZY_MIN_CONFIDENCE = 0.6
 
 
 def _validate_delivery_payload(data):
@@ -26,23 +38,141 @@ def _validate_delivery_payload(data):
         )
 
 
-def match_delivery_report(report):
-    """Attempt to resolve a Delivery Report to a real Sales Invoice.
+def _safe_nonzero_int(value):
+    """Parse value as an int, or None if it isn't purely numeric or is 0 (custom_invoice_ref's
+    unset default - see match_delivery_report tier 1)."""
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed or None
 
-    Minimal exact-match implementation for now (Todo 021) - fuzzy/attribute matching with
-    weighted confidence scoring is Todo 022. Mutates the in-memory `report` doc only
-    (matched_invoice / match_confidence / reconciliation_status); never touches the invoice.
-    Safe to call again on an already-saved report (e.g. a manual re-match).
+
+def _normalize_invoice_no(value):
+    """Upper-case, strip everything but letters/digits - tolerates dashes, spaces, and case
+    typos ("acc sinv 2026 21" vs "ACC-SINV-2026-00021") without touching real content.
+    str()-cast first since custom_invoice_ref comes back as an int, not text (see tier 1)."""
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def _fetch_candidate_invoices():
+    """Bounded candidate pool for normalized/fuzzy matching (tiers 2-3 below).
+
+    Tier 1 (verbatim exact) queries the DB directly with no date bound - a unique-indexed exact
+    lookup is cheap regardless of table size. Tiers 2-3 run in Python (normalization + string
+    similarity aren't expressible in SQL), so the pool has to be bounded to stay fast; deliveries
+    reconcile against recent invoices, not months-old ones, so a rolling window is the natural
+    bound given there's no customer/amount signal available to narrow the search instead.
     """
-    invoice_no = (report.reported_invoice_no or "").strip()
-    if invoice_no and frappe.db.exists("Sales Invoice", invoice_no):
-        report.matched_invoice = invoice_no
-        report.match_confidence = 1.0
-        report.reconciliation_status = "Suggested"
-    else:
-        report.matched_invoice = None
-        report.match_confidence = 0
-        report.reconciliation_status = "Unmatched"
+    cutoff = add_days(nowdate(), -FUZZY_CANDIDATE_WINDOW_DAYS)
+    return frappe.get_all(
+        "Sales Invoice",
+        filters={"docstatus": 1, "posting_date": [">=", cutoff]},
+        fields=["name", "custom_invoice_ref", "outstanding_amount", "custom_delivery_status"],
+    )
+
+
+def _prefer_undelivered_unpaid(candidates):
+    """Tie-break among equally-scored candidates: prefer invoices still owing money and not yet
+    marked delivered, per Todo 022's tie-break rule."""
+
+    def rank(c):
+        unpaid_rank = 0 if flt(c.outstanding_amount) > 0 else 1
+        undelivered_rank = 0 if c.custom_delivery_status != "Delivered" else 1
+        return (unpaid_rank, undelivered_rank)
+
+    return sorted(candidates, key=rank)[0]
+
+
+def _apply_match(report, invoice_name, confidence, note):
+    report.matched_invoice = invoice_name
+    report.match_confidence = confidence
+    report.reconciliation_status = "Suggested"
+    report.match_notes = note
+
+
+def match_delivery_report(report):
+    """Resolve a Delivery Report to a real Sales Invoice by invoice number alone.
+
+    Structured-to-structured matching only, per the Phase 9 system boundary - the bot already
+    resolved everything it can (no OCR/AI here). Only invoice-number signals exist to match on
+    (see module docstring above for why customer/amount attribute matching was dropped: Delivery
+    Report has neither field populated by the bot). Three tiers, highest confidence first:
+      1. Verbatim exact match against Sales Invoice `name` or `custom_invoice_ref`.
+      2. Match after normalizing case/punctuation (typo/format tolerant).
+      3. Fuzzy string similarity (difflib) against a bounded recent-invoice pool.
+    A suggestion only - mutates the in-memory `report` doc alone, never the invoice. Read-only
+    with respect to Sales Invoices. Safe to call again (e.g. a manual re-match, Todo 023), except
+    it refuses to touch a report a human has already confirmed or rejected.
+    """
+    if report.reconciliation_status in ("Confirmed", "Rejected"):
+        return
+
+    report.matched_invoice = None
+    report.match_confidence = 0
+    report.reconciliation_status = "Unmatched"
+    report.match_notes = None
+
+    reported_no = (report.reported_invoice_no or "").strip()
+    if not reported_no:
+        return
+
+    # Tier 1: verbatim exact match (unbounded - cheap indexed lookup).
+    # custom_invoice_ref is an Int column defaulting to 0 (not Data/text, despite the name) - a
+    # naive string filter lets MySQL coerce a non-numeric reported_no to 0 and match every
+    # invoice that still has the untouched default. Only query it when reported_no is itself a
+    # non-zero integer, and compare as an int.
+    exact_name = frappe.db.get_value("Sales Invoice", {"name": reported_no}, "name")
+    if not exact_name:
+        ref_as_int = _safe_nonzero_int(reported_no)
+        if ref_as_int is not None:
+            exact_name = frappe.db.get_value("Sales Invoice", {"custom_invoice_ref": ref_as_int}, "name")
+    if exact_name:
+        _apply_match(report, exact_name, EXACT_CONFIDENCE, "Exact invoice number match")
+        return
+
+    normalized_reported = _normalize_invoice_no(reported_no)
+    if not normalized_reported:
+        return
+
+    candidates = _fetch_candidate_invoices()
+
+    # Tier 2: match after normalizing (case/punctuation-tolerant).
+    normalized_hits = [
+        c
+        for c in candidates
+        if _normalize_invoice_no(c.name) == normalized_reported
+        or (c.custom_invoice_ref and _normalize_invoice_no(c.custom_invoice_ref) == normalized_reported)
+    ]
+    if normalized_hits:
+        best = _prefer_undelivered_unpaid(normalized_hits)
+        _apply_match(
+            report, best.name, NORMALIZED_EXACT_CONFIDENCE, "Matched after normalizing case/punctuation"
+        )
+        return
+
+    # Tier 3: fuzzy similarity - bias toward leaving Unmatched when uncertain (Todo 022 risk note).
+    scored = []
+    for c in candidates:
+        score = difflib.SequenceMatcher(None, normalized_reported, _normalize_invoice_no(c.name)).ratio()
+        if c.custom_invoice_ref:
+            score = max(
+                score,
+                difflib.SequenceMatcher(
+                    None, normalized_reported, _normalize_invoice_no(c.custom_invoice_ref)
+                ).ratio(),
+            )
+        if score >= FUZZY_MIN_CONFIDENCE:
+            scored.append((score, c))
+
+    if not scored:
+        return
+
+    best_score = max(s for s, _ in scored)
+    best_candidates = [c for s, c in scored if s == best_score]
+    best = _prefer_undelivered_unpaid(best_candidates)
+    confidence = min(best_score, FUZZY_MAX_CONFIDENCE)
+    _apply_match(report, best.name, confidence, f"Fuzzy invoice number match (similarity {best_score:.2f})")
 
 
 def _delivery_report_response(report):
@@ -51,6 +181,7 @@ def _delivery_report_response(report):
         "delivery_report": report.name,
         "matched_invoice": report.matched_invoice,
         "match_confidence": report.match_confidence,
+        "match_notes": report.match_notes,
         "reconciliation_status": report.reconciliation_status,
     }
 

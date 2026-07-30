@@ -25,6 +25,7 @@
   "section_break_reconciliation",
   "reconciliation_status",
   "match_confidence",
+  "match_notes",
   "column_break_reconciliation_1",
   "matched_invoice",
   "amount_collected",
@@ -150,6 +151,13 @@
    "fieldtype": "Float",
    "label": "Match Confidence",
    "precision": "2"
+  },
+  {
+   "description": "Explains which signal(s) auto-match used (exact/normalized/fuzzy invoice number, similarity score) so the reconciliation UI can show why a match was suggested.",
+   "fieldname": "match_notes",
+   "fieldtype": "Small Text",
+   "label": "Match Notes",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_reconciliation_1",

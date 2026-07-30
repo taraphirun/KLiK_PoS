@@ -72,7 +72,7 @@ Telegram Bot ──POST──▶ [Ingestion API] ──▶ [Delivery Report] (st
 - [x] [019.md](../todo/019.md): New `Delivery Report` staging DocType (bot data + reconciliation state)
 - [x] [020.md](../todo/020.md): Custom fields on Sales Invoice for reconciled delivery data
 - [x] [021.md](../todo/021.md): Bot ingestion API endpoint + payload validation
-- [ ] [022.md](../todo/022.md): Auto-match logic (exact invoice no → fuzzy customer/amount/date) with confidence scoring
+- [x] [022.md](../todo/022.md): Auto-match logic (exact → normalized → fuzzy invoice no) with confidence scoring — attribute/customer/amount matching dropped, see todo notes
 - [ ] [023.md](../todo/023.md): Reconciliation API (confirm / reject / re-match) + mark-as-paid automation
 - [ ] [024.md](../todo/024.md): Frontend reconciliation page
 

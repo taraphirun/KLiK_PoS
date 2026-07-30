@@ -58,3 +58,57 @@ Either:
 ### Related
 [Todo 020](todo/020.md) / [Phase 9](phases/phase-09.md) — the reconciled `custom_delivered_at`
 field added there may make this field redundant once resolved either way.
+
+---
+
+## BUG-002: `custom_invoice_ref` on Sales Invoice is an Int column (not text) and defaults to 0
+
+**Status:** ⬜ Not started
+**Found:** 2026-07-30, while doing Todo 022 (Delivery Report auto-match) — writing invoice-number
+matching against `custom_invoice_ref` ("physical receipt/invoice number", Module 6 spec) exposed
+this the hard way: a garbage test input (`"ZZZZZZZZZZZZZZZZZZZZ"`) falsely "exact matched" a real
+invoice.
+
+### Description
+`custom_invoice_ref` (label "Invoice Ref") is a **Custom Field**, `fieldtype: Int`, DB column
+`int(11) NOT NULL DEFAULT 0` — confirmed via `bench console`
+(`frappe.db.get_value("Custom Field", "Sales Invoice-custom_invoice_ref", ["fieldtype","label"])`
+→ `{'fieldtype': 'Int', 'label': 'Invoice Ref'}`; `describe tabSales Invoice` →
+`('custom_invoice_ref', 'int(11)', 'NO', '', '0', '')`). Every invoice that has never had a ref
+set carries the literal value `0`, not `NULL`/empty.
+
+It's also **DB-only** — not present in `klik_pos/klik_pos/custom/sales_invoice.json` — the same
+"customization created directly on the site, never exported to the repo" gap as the Phase 8 print
+format bug, so a fresh site/migration silently loses this field entirely.
+
+### Why it's dangerous
+Any code that filters/compares `custom_invoice_ref` against a string via `frappe.db.get_value`,
+`frappe.db.exists`, or a dict-filter query lets MySQL's implicit type coercion convert a
+non-numeric string to `0` for the comparison — which then matches **every** invoice still at the
+untouched default. Concretely: `frappe.db.get_value("Sales Invoice", {"custom_invoice_ref":
+"any-non-numeric-string"}, "name")` returns the first invoice with `custom_invoice_ref = 0`,
+not `None` as you'd expect from "no such ref exists."
+
+`klik_pos/api/delivery.py`'s `match_delivery_report` hit exactly this in its first draft and was
+fixed there (only queries `custom_invoice_ref` when the reported value parses as a non-zero int,
+see `_safe_nonzero_int`) — but this same landmine is waiting for **any other/future code** that
+queries this field with a string filter without the same guard.
+
+### Likely intent
+"Invoice Ref" suggests a free-text physical receipt/invoice number a cashier types in
+(`custom_invoice_ref` is read from the POS payload in `sales_invoice.py`, see Module 8's
+`custom_invoice_ref` input field) — which argues it should probably be `Data`, not `Int`. Whether
+receipt numbers are always numeric in this business in practice is unconfirmed.
+
+### Suggested fix (when picked up)
+1. Export the existing Custom Field to `klik_pos/klik_pos/custom/sales_invoice.json` so it
+   survives a fresh install (same fix pattern as the Phase 8 print format).
+2. Decide whether `Int` is actually correct (all physical receipt numbers are numeric — fine as
+   is, just needs the export) or whether it should be migrated to `Data` (if letters/leading
+   zeros/mixed formats are possible) — check with the user/real usage data before changing the
+   type, since that's a schema migration on a field already holding live data.
+3. Regardless of (2): audit any other place that filters this field by a string and add the same
+   non-zero-int guard used in `match_delivery_report`.
+
+### Related
+[Todo 022](todo/022.md) / [Phase 9](phases/phase-09.md) — where this was found and worked around.
