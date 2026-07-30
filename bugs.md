@@ -1,8 +1,8 @@
-# Known Bugs Backlog
+# Known Bugs & Follow-up Tasks Backlog
 
-Bugs discovered incidentally while working through `implementation_plan.md` that are out of
-scope for the todo that surfaced them. Not part of the phased todo numbering — pick these up
-whenever, independent of phase order.
+Bugs discovered incidentally while working through `implementation_plan.md` (out of scope for the
+todo that surfaced them), plus standalone follow-up tasks that don't fit the phased todo numbering.
+Pick these up whenever, independent of phase order.
 
 ---
 
@@ -112,3 +112,53 @@ receipt numbers are always numeric in this business in practice is unconfirmed.
 
 ### Related
 [Todo 022](todo/022.md) / [Phase 9](phases/phase-09.md) — where this was found and worked around.
+
+---
+
+## TASK-001: Integrate the Telegram delivery bot with the Module 10 endpoints
+
+**Status:** ⬜ Not started
+**Added:** 2026-07-30, after Phase 9 (Module 10, Todos 019–024) was implemented and
+backend-verified. User confirmed the reconciliation UI looks fine but has **not yet connected the
+actual bot** (`hd-delivery-telegram`) — everything tested so far used synthetic payloads via
+`bench console`/`bench execute`, not a real bot submission.
+
+### What's already done (KlikPOS side — Phase 9, complete)
+- `Delivery Report` staging DocType (Todo 019).
+- Reconciled delivery fields on Sales Invoice (Todo 020).
+- Ingestion endpoint `klik_pos.api.delivery.submit_delivery_report` (Todo 021).
+- Invoice-number auto-match (exact/normalized/fuzzy) (Todo 022).
+- Reconciliation endpoints: `confirm_delivery_match`, `reject_delivery_match`,
+  `rematch_delivery_report` (Todo 023).
+- Frontend queue at `/deliveries/reconcile` (Todo 024) — visually confirmed working by the user,
+  but only against manually-submitted test data.
+
+### What's still needed (bot side — not part of this repo)
+- Point `hd-delivery-telegram`'s delivery-submission code at
+  `POST /api/method/klik_pos.api.delivery.submit_delivery_report`, sending the exact payload
+  shape `submit_delivery_report` expects: `bot_delivery_id`, `reported_invoice_no`,
+  `completion_status` (`Full`/`Partial`), `payment_status` (`Paid`/`Unpaid`/`Partial`),
+  `delivery_driver`, `driver_telegram_id`, `delivery_timestamp`, `gps_latitude`/`gps_longitude`.
+  (`photos`/`voice_note` file upload is Phase 13 scope, not required for a first connection.)
+- Create a **dedicated Frappe user + API key/secret** for the bot to authenticate as (the endpoint
+  is deliberately not `allow_guest` — see Todo 021 notes) with create-permission on
+  `Delivery Report` (currently System Manager only — either grant that role to the bot user or add
+  a narrower role with just this permission).
+- Confirm the bot's `delivery_timestamp` format parses cleanly via `frappe.utils.get_datetime`
+  (ISO 8601 or `YYYY-MM-DD HH:MM:SS` both work; verify what the bot actually sends).
+- End-to-end real test once wired up: submit a real delivery from the bot, confirm it lands in the
+  `/deliveries/reconcile` queue with a sensible auto-match, then walk through Confirm/Reject/
+  Re-match against it.
+
+### Risks
+- The bot repo (`hd-delivery-telegram`) is a separate codebase — this task is 100% bot-side wiring
+  plus a one-time Frappe user/API-key setup on the KlikPOS side, no further KlikPOS code changes
+  expected unless the real payload shape turns up a mismatch with what `submit_delivery_report`
+  currently validates.
+- If the bot's actual timestamp/GPS field names differ from what's assumed above, either adjust
+  the bot's outgoing payload to match, or (if the bot's shape can't change) adapt
+  `submit_delivery_report`'s field mapping — don't silently rename fields on one side without
+  checking the other.
+
+### Related
+[Phase 9](phases/phase-09.md) (system boundary: "bot collects, KlikPOS confirms") / [Todo 021](todo/021.md).
