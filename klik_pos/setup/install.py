@@ -98,7 +98,34 @@ def ensure_az_coil_custom_fields():
         ignore_validate=True,
     )
 
+def ensure_pos_print_format_field():
+    """Create the POS Profile field that erpnext_telegram_integration's
+    send_document_to_telegram reads (get_pos_print_format) to pick which print
+    format to render for Telegram PDF/image attachments. That app references
+    the field by name but never ships a fixture for it, so without this it
+    silently falls back to the 'Standard' print format instead of whatever the
+    POS Profile is actually configured to use.
+    """
+    if frappe.db.exists("Custom Field", "POS Profile-custom_pos_printformat"):
+        return
+
+    create_custom_field(
+        "POS Profile",
+        {
+            "fieldname": "custom_pos_printformat",
+            "label": "Telegram Print Format",
+            "fieldtype": "Link",
+            "options": "Print Format",
+            "insert_after": "print_format",
+            "module": "KLiK PoS",
+            "description": "Print format used when sending invoices to Telegram (erpnext_telegram_integration.get_pos_print_format). Falls back to 'Standard' if left blank.",
+        },
+        ignore_validate=True,
+    )
+
+
 def after_install():
     ensure_sales_invoice_reserve_stock_field()
     ensure_stock_reservation_is_enabled()
     ensure_az_coil_custom_fields()
+    ensure_pos_print_format_field()

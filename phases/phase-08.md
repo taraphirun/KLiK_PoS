@@ -29,11 +29,28 @@ Actual work done:
   (section renders with correct figures), and an in-memory item with `custom_description` set
   (renders correctly, doesn't error when blank).
 
-## Known follow-up (not done, flagged for the user)
-This print format is not currently wired as the *default* anywhere — the `Phirun` POS Profile's
-`print_format` field is empty, so nothing currently forces its use at print time. Left alone
-pending the user's decision (setting a live profile's print default is an operational choice, not
-a code fix).
+## Follow-up 1: wired as the default (2026-07-30)
+Flagged that the print format wasn't set as a default anywhere; user asked to set it now. Set
+`Phirun` POS Profile's native `print_format` field to `DS POS Invoice KLiK` (drives the klik_spa
+print/print-preview flow). Verified working in the browser (print + print preview).
+
+## Follow-up 2: Telegram sending used a different print format entirely (2026-07-30)
+User reported print/preview worked but "send to Telegram" didn't use the same template. Root
+cause: `erpnext_telegram_integration`'s `send_document_to_telegram` picks its print format via its
+own `get_pos_print_format()`, which reads a *different* field —
+`POS Profile.custom_pos_printformat` — not the native `print_format` field klik_spa uses. That
+field doesn't exist as a real column in this site (`custom_pos_printformat` — unknown column); the
+telegram app references it in code but never ships a fixture/custom field for it, so it always hit
+the except branch and silently fell back to Frappe's generic `Standard` print format.
+
+Fixed on the klik_pos side (since klik_pos already owns other custom fields on POS Profile):
+- Added `ensure_pos_print_format_field()` in `klik_pos/setup/install.py` (Link field to Print
+  Format, `insert_after: print_format`), wired into `after_install()` for fresh installs, plus a
+  new patch (`patches/v16_0/add_pos_print_format_field.py`) for this and future existing sites.
+- Ran `bench migrate` to create the field on this site, then set `Phirun`'s
+  `custom_pos_printformat` to `DS POS Invoice KLiK`.
+- Verified via `bench console`: `get_pos_print_format()` now resolves to `DS POS Invoice KLiK`
+  (was silently `Standard` before), and `generate_invoice_pdf()` produces a real PDF using it.
 
 ## Todos
 - [x] [018.md](../todo/018.md): Create backend custom print format JSON
