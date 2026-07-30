@@ -2260,6 +2260,45 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                     </p>
                   </div>
                 )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Additional Discount</label>
+                  <div className="flex gap-2">
+                    <select
+                      value={discountMode}
+                      onChange={(e) => {
+                        const mode = e.target.value as "amount" | "percentage";
+                        setDiscountMode(mode);
+                        if (mode === "amount") {
+                          setAdditionalDiscountPercentage(0);
+                        } else {
+                          setAdditionalDiscountAmount(0);
+                        }
+                      }}
+                      disabled={invoiceSubmitted || isProcessingPayment}
+                      className={`px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}
+                    >
+                      <option value="amount">Amount</option>
+                      <option value="percentage">Percent</option>
+                    </select>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={discountMode === "amount" ? additionalDiscountAmount : additionalDiscountPercentage}
+                      onChange={(e) => {
+                        const value = Math.max(0, Number(e.target.value || 0));
+                        if (discountMode === "amount") {
+                          setAdditionalDiscountAmount(value);
+                        } else {
+                          setAdditionalDiscountPercentage(Math.min(value, 100));
+                        }
+                      }}
+                      onWheel={(e) => e.currentTarget.blur()}
+                      disabled={invoiceSubmitted || isProcessingPayment}
+                      className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}
+                    />
+                  </div>
+                </div>
 
                 {/* <TaxSection
                   selectedCustomer={selectedCustomer}
