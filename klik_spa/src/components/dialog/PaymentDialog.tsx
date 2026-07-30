@@ -1973,6 +1973,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                       step="0.01"
                       value={deliveryCharge}
                       onChange={(e) => setDeliveryCharge(Math.max(0, Number(e.target.value || 0)))}
+                      onWheel={(e) => e.currentTarget.blur()}
                       disabled={invoiceSubmitted || isProcessingPayment}
                       className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}
                     />
@@ -2016,6 +2017,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                           setAdditionalDiscountPercentage(Math.min(value, 100));
                         }
                       }}
+                      onWheel={(e) => e.currentTarget.blur()}
                       disabled={invoiceSubmitted || isProcessingPayment}
                       className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}
                     />
@@ -2247,6 +2249,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
                       step="0.01"
                       value={deliveryCharge}
                       onChange={(e) => setDeliveryCharge(Math.max(0, Number(e.target.value || 0)))}
+                      onWheel={(e) => e.currentTarget.blur()}
                       disabled={invoiceSubmitted || isProcessingPayment}
                       className={`w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-beveren-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : ""}`}
                     />
