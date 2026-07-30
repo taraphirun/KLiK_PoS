@@ -1,7 +1,7 @@
 # Phase 9: Delivery Tracking & Payment Reconciliation (Telegram Delivery Bot)
 **Module 10**
 
-**Status:** ⬜ Not started
+**Status:** 🔷 In progress
 
 ## Objective
 Capture delivery outcomes reported by a Telegram delivery bot and reconcile them against
@@ -69,7 +69,7 @@ Telegram Bot ──POST──▶ [Ingestion API] ──▶ [Delivery Report] (st
 ```
 
 ## Todos
-- [ ] [019.md](../todo/019.md): New `Delivery Report` staging DocType (bot data + reconciliation state)
+- [x] [019.md](../todo/019.md): New `Delivery Report` staging DocType (bot data + reconciliation state)
 - [ ] [020.md](../todo/020.md): Custom fields on Sales Invoice for reconciled delivery data
 - [ ] [021.md](../todo/021.md): Bot ingestion API endpoint + payload validation
 - [ ] [022.md](../todo/022.md): Auto-match logic (exact invoice no → fuzzy customer/amount/date) with confidence scoring

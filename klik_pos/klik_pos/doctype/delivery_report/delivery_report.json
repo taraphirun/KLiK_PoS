@@ -1,0 +1,223 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "format:DR-{MM}-{####}",
+ "creation": "2026-07-30 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "bot_delivery_id",
+  "reported_invoice_no",
+  "column_break_bot_1",
+  "completion_status",
+  "payment_status",
+  "section_break_driver",
+  "delivery_driver",
+  "driver_telegram_id",
+  "column_break_driver_1",
+  "delivery_timestamp",
+  "section_break_location",
+  "gps_latitude",
+  "gps_longitude",
+  "column_break_location_1",
+  "photos",
+  "voice_note",
+  "section_break_reconciliation",
+  "reconciliation_status",
+  "match_confidence",
+  "column_break_reconciliation_1",
+  "matched_invoice",
+  "amount_collected",
+  "payment_entry",
+  "section_break_audit",
+  "raw_payload"
+ ],
+ "fields": [
+  {
+   "description": "The bot's row UUID. Idempotency key for ingestion/sync - re-sending the same delivery must not create a duplicate.",
+   "fieldname": "bot_delivery_id",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Bot Delivery ID",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "description": "Invoice number as typed by the driver - may be wrong, matched against real invoices during reconciliation.",
+   "fieldname": "reported_invoice_no",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Reported Invoice No"
+  },
+  {
+   "fieldname": "column_break_bot_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Full",
+   "fieldname": "completion_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Completion Status",
+   "options": "Full\nPartial"
+  },
+  {
+   "default": "Unpaid",
+   "fieldname": "payment_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Payment Status",
+   "options": "Paid\nUnpaid\nPartial"
+  },
+  {
+   "fieldname": "section_break_driver",
+   "fieldtype": "Section Break",
+   "label": "Delivery Details"
+  },
+  {
+   "description": "Free text for now - Phase 10 migrates this to a Link(Driver) once the Driver doctype exists.",
+   "fieldname": "delivery_driver",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Delivery Driver"
+  },
+  {
+   "fieldname": "driver_telegram_id",
+   "fieldtype": "Data",
+   "label": "Driver Telegram ID"
+  },
+  {
+   "fieldname": "column_break_driver_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "delivery_timestamp",
+   "fieldtype": "Datetime",
+   "label": "Delivery Timestamp"
+  },
+  {
+   "fieldname": "section_break_location",
+   "fieldtype": "Section Break",
+   "label": "Location & Attachments"
+  },
+  {
+   "fieldname": "gps_latitude",
+   "fieldtype": "Float",
+   "label": "GPS Latitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "gps_longitude",
+   "fieldtype": "Float",
+   "label": "GPS Longitude",
+   "precision": "6"
+  },
+  {
+   "fieldname": "column_break_location_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "List of Frappe File URLs uploaded from the bot's photo_file_ids on sync.",
+   "fieldname": "photos",
+   "fieldtype": "JSON",
+   "label": "Photos"
+  },
+  {
+   "fieldname": "voice_note",
+   "fieldtype": "Attach",
+   "label": "Voice Note"
+  },
+  {
+   "fieldname": "section_break_reconciliation",
+   "fieldtype": "Section Break",
+   "label": "Reconciliation"
+  },
+  {
+   "default": "Unmatched",
+   "fieldname": "reconciliation_status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Reconciliation Status",
+   "options": "Unmatched\nSuggested\nConfirmed\nRejected"
+  },
+  {
+   "description": "Confidence score (0-1) set by auto-match.",
+   "fieldname": "match_confidence",
+   "fieldtype": "Float",
+   "label": "Match Confidence",
+   "precision": "2"
+  },
+  {
+   "fieldname": "column_break_reconciliation_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Set on match/confirm - the reconciled invoice. Left blank until a human confirms the match.",
+   "fieldname": "matched_invoice",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Matched Invoice",
+   "options": "Sales Invoice"
+  },
+  {
+   "description": "Amount confirmed as collected at the delivery location (for Partial payment reconciliation).",
+   "fieldname": "amount_collected",
+   "fieldtype": "Currency",
+   "label": "Amount Collected"
+  },
+  {
+   "description": "Set if the mark-as-paid step posted a Payment Entry.",
+   "fieldname": "payment_entry",
+   "fieldtype": "Link",
+   "label": "Payment Entry",
+   "options": "Payment Entry",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_audit",
+   "fieldtype": "Section Break",
+   "label": "Audit"
+  },
+  {
+   "description": "Full original bot payload, preserved untouched even after fields above are edited during reconciliation.",
+   "fieldname": "raw_payload",
+   "fieldtype": "JSON",
+   "label": "Raw Payload",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-30 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "KLiK PoS",
+ "name": "Delivery Report",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "bot_delivery_id,reported_invoice_no,delivery_driver",
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
