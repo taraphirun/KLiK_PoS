@@ -1,4 +1,5 @@
 import { extractErrorMessage } from "../utils/errorExtraction";
+import { getRealtimeSocket } from "../utils/realtime";
 
 export type ReconciliationStatus = "Unmatched" | "Suggested" | "Confirmed" | "Rejected";
 export type CompletionStatus = "Full" | "Partial";
@@ -132,4 +133,31 @@ export async function rematchDeliveryReport(
     report_name: reportName,
     invoice_name: invoiceName,
   });
+}
+
+/** Matches the payload published by Delivery Report's on_update hook (Todo 031) - a minimal,
+ * map-oriented projection, not the full DeliveryReport shape. */
+export interface DeliveryRealtimeUpdate {
+  name: string;
+  gps_latitude: number;
+  gps_longitude: number;
+  delivery_driver_name: string | null;
+  completion_status: CompletionStatus;
+  payment_status: PaymentStatus;
+  reconciliation_status: ReconciliationStatus;
+  matched_invoice: string | null;
+  reported_invoice_no: string | null;
+  delivery_timestamp: string | null;
+}
+
+const DELIVERY_REALTIME_EVENT = "delivery_report_update";
+
+/** Subscribes to live Delivery Report updates (Todo 031/032). Returns an unsubscribe function -
+ * call it on unmount, the socket connection itself is shared/reused (see getRealtimeSocket). */
+export function subscribeToDeliveryUpdates(callback: (update: DeliveryRealtimeUpdate) => void): () => void {
+  const socket = getRealtimeSocket();
+  socket.on(DELIVERY_REALTIME_EVENT, callback);
+  return () => {
+    socket.off(DELIVERY_REALTIME_EVENT, callback);
+  };
 }

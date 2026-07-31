@@ -222,9 +222,34 @@ def ensure_delivery_reconciliation_fields():
     )
 
 
+def ensure_google_maps_api_key_field():
+    """POS Profile field holding the Google Maps JavaScript API key for the Live Delivery Map
+    (Module 13 / Todo 032). A JS API key is meant to run client-side (restrict it by HTTP
+    referrer in Google Cloud Console, not treat it as a server secret) - Data, not Password, so
+    it round-trips through the existing posDetails-on-frontend pattern this app already uses for
+    other POS Profile custom fields (e.g. custom_az_coil_item_groups) without special-casing.
+    """
+    if frappe.db.exists("Custom Field", "POS Profile-custom_google_maps_api_key"):
+        return
+
+    create_custom_field(
+        "POS Profile",
+        {
+            "fieldname": "custom_google_maps_api_key",
+            "label": "Google Maps API Key",
+            "fieldtype": "Data",
+            "insert_after": "print_format",
+            "module": "KLiK PoS",
+            "description": "Google Maps JavaScript API key for the Live Delivery Map. Restrict this key to your site's domain(s) in Google Cloud Console.",
+        },
+        ignore_validate=True,
+    )
+
+
 def after_install():
     ensure_sales_invoice_reserve_stock_field()
     ensure_stock_reservation_is_enabled()
     ensure_az_coil_custom_fields()
     ensure_pos_print_format_field()
     ensure_delivery_reconciliation_fields()
+    ensure_google_maps_api_key_field()

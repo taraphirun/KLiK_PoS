@@ -1,4 +1,4 @@
-import { Receipt, FileText, Grid3X3, BarChart3, Users, Banknote, Truck, UserCheck } from "lucide-react"
+import { Receipt, FileText, Grid3X3, BarChart3, Users, Banknote, Truck, UserCheck, Map as MapIcon } from "lucide-react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useUserInfo } from "../hooks/useUserInfo"
 import { usePOSProfileStore } from "../stores/posProfileStore"
@@ -20,6 +20,7 @@ export default function BottomNavigation() {
     { icon: FileText, path: "/closing_shift", label: "Closing" },
     { icon: Truck, path: "/deliveries/reconcile", label: "Deliveries", requiresSalesDashboard: true },
     { icon: UserCheck, path: "/drivers", label: "Drivers", requiresSalesDashboard: true },
+    { icon: MapIcon, path: "/deliveries/map", label: "Live Map", requiresSalesDashboard: true },
 
   ]
 

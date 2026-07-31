@@ -26,15 +26,19 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 8 — Keyboard Navigation & UI Usability | 7 | 016–017 | ✅ Done (Cmd/Ctrl+F, Escape, custom_invoice_ref, grid arrow-nav + Shift+Enter quantity dialog) |
 | 1 — Custom Print Format & Status Indicators | 8 | 018 | ✅ Done (existing DB-only print format exported to repo; custom_description + credit info added) |
 | 10 — Delivery Tracking & Payment Reconciliation | 9 | 019–024 | ✅ Done (backend fully verified; frontend not yet browser-checked, see Todo 024) |
-| 11 — Driver Management & Free-Text→Link | 10 | 025–028 | ⬜ Not started |
-| 12 — Deliveries & Conflicts UI | 11 | 029–030 | ⬜ Not started |
-| 13 — Live Delivery Map | 12 | 031–032 | ⬜ Not started |
+| 11 — Delivery Driver Management & Free-Text→Link | 10 | 025–028 | ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked, see Todo 027) |
+| 12 — Deliveries & Conflicts UI | 11 | 029–030 | ❌ Dropped (2026-07-31, see phases/phase-11.md) |
+| 13 — Live Delivery Map | 12 | 031–032 | ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked or given a real Google Maps API key, see Todo 032) |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
 
-**Next up:** Phase 9 (Module 10) is fully implemented — user should browser-verify
-`/deliveries/reconcile` before moving on. Module 11 (Driver Management, Phase 10) is the next
-unblocked track. (Phase 6 completed 2026-07-30; Phase 7 completed 2026-07-30; Phase 8 completed
-2026-07-30; Phase 9 completed 2026-07-30.)
+**Next up:** Phases 9, 10, and 12 (Modules 10, 11, 13) are fully implemented — user should
+browser-verify `/deliveries/reconcile`, `/drivers`, and `/deliveries/map` (once a Google Maps API
+key is set on the POS Profile) before moving on. Module 12 is dropped (see phase-11.md). Module 14
+(Offline-First Bot Repoint & Legacy Retirement, Phase 13) is bot-repo work, not KlikPOS-side - the
+next unblocked track in *this* repo depends on what the user wants to tackle from there. (Phase 6
+completed 2026-07-30; Phase 7 completed 2026-07-30; Phase 8 completed 2026-07-30; Phase 9 completed
+2026-07-30; Phase 10 completed 2026-07-30; Phase 11 dropped 2026-07-31; Phase 12 completed
+2026-07-31.)
 
 ---
 
@@ -320,37 +324,37 @@ Detailed specification lives in [phases/phase-09.md](file:///home/phirun/dev/KLi
 
 ---
 
-### Module 11: Driver Management & Free-Text → Link Migration
+### Module 11: Delivery Driver Management & Free-Text → Link Migration
 
-Detailed specification lives in [phases/phase-10.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-10.md) (Todos 025–028). Introduces a `Driver` master in KlikPOS and migrates the Phase 9 free-text driver fields to `Link`. Integrates with the existing delivery bot project (`/home/phirun/dev/hd-delivery-telegram`), which already owns driver identity (Telegram id / chat id) in its own PostgreSQL `Driver` table.
+Detailed specification lives in [phases/phase-10.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-10.md) (Todos 025–028). Introduces a `Delivery Driver` master in KlikPOS (named to avoid colliding with ERPNext core's own `Driver` doctype) and migrates the Phase 9 free-text driver fields to `Link`. Integrates with the existing delivery bot project (`/home/phirun/dev/hd-delivery-telegram`), which already owns driver identity (Telegram id / chat id) in its own PostgreSQL `Driver` table.
 
-#### 1. Driver DocType
-- **[NEW] `klik_pos/klik_pos/doctype/driver/`**: `driver_name`, `phone_number`, `telegram_user_id`, `telegram_username`, `chat_id`, `status` (Active/Pending/Rejected), `bot_driver_id` (cross-system sync key).
+#### 1. Delivery Driver DocType
+- **[NEW] `klik_pos/klik_pos/doctype/delivery_driver/`**: `driver_name`, `phone_number`, `telegram_user_id`, `telegram_username`, `chat_id`, `status` (Active/Pending/Rejected), `bot_driver_id` (cross-system sync key).
 
-#### 2. Driver API + Bot Sync Bridge
+#### 2. Delivery Driver API + Bot Sync Bridge
 - **[NEW] `klik_pos/api/driver.py`**: `list_drivers`, `upsert_driver`, `set_driver_status`, and `sync_driver_from_bot` (bot attaches Telegram identity). Source-of-truth default: **Frappe is master**, bot syncs from it (see phase-10 for the alternative mirror mode).
 
-#### 3. Driver Management UI
+#### 3. Delivery Driver Management UI
 - **[NEW] `klik_spa/src/pages/DriverManagementPage.tsx`** + `klik_spa/src/services/driver.ts`: side-menu page to list/create/approve/reject/suspend drivers — a native port of the bot's `/drivers` screen.
 
 #### 4. Field Migration
-- **[MODIFY]** `delivery_report.json` and `sales_invoice.json`: convert `delivery_driver` / `custom_delivery_driver` from `Data` to `Link(Driver)` with a backfill patch.
+- **[MODIFY]** `delivery_report.json` and `sales_invoice.json`: convert `delivery_driver` / `custom_delivery_driver` from `Data` to `Link(Delivery Driver)` with a backfill patch.
 
 > **Broader UI-integration note** (updated): The delivery bot's collection path is now a thin structured Telegram (aiogram FSM) flow with **no OCR/AI** — the Document AI/GenAI/ocr-service code is legacy. This removes the main obstacle to consolidation, so **full consolidation into Frappe is now viable** and is the recommended direction for a single system-of-record. The one piece that cannot become a KlikPOS web screen is the **Telegram bot process itself** — it stays as a Python service but repoints from Postgres/MinIO to KlikPOS whitelisted APIs + Frappe File, becoming a thin data-entry client.
 >
-> Recommended migration is **strangler-fig, not big-bang**: (1) model the bot's entities as Frappe doctypes (Delivery Report = Module 10, Driver = Module 11); (2) natively port UI screens into `klik_spa` (reconciliation, drivers first; then deliveries list, live map via Google Maps + Frappe realtime); (3) repoint the aiogram bot to write to KlikPOS APIs; (4) retire NestJS + Postgres + Redis/BullMQ + MinIO + ocr-service. Modules 10–14 implement this path in order.
+> Recommended migration is **strangler-fig, not big-bang**: (1) model the bot's entities as Frappe doctypes (Delivery Report = Module 10, Delivery Driver = Module 11); (2) natively port UI screens into `klik_spa` (reconciliation, drivers first; then deliveries list, live map via Google Maps + Frappe realtime); (3) repoint the aiogram bot to write to KlikPOS APIs; (4) retire NestJS + Postgres + Redis/BullMQ + MinIO + ocr-service. Modules 10–14 implement this path in order.
 >
-> **Out of scope (decided)**: The bot's `Customer` and `Address` entities are **not** ported — ERPNext already owns Customer and Address natively; a Delivery Report derives its customer/address from the **matched Sales Invoice**. The bot's `Booklet` feature is a **legacy transition-only aid and is dropped** — no Booklet doctype, field, or UI in KlikPOS. Only **Delivery** and **Driver** entities move.
+> **Out of scope (decided)**: The bot's `Customer` and `Address` entities are **not** ported — ERPNext already owns Customer and Address natively; a Delivery Report derives its customer/address from the **matched Sales Invoice**. The bot's `Booklet` feature is a **legacy transition-only aid and is dropped** — no Booklet doctype, field, or UI in KlikPOS. Only **Delivery** and **Delivery Driver** entities move.
 
 ---
 
-### Module 12: Deliveries & Conflicts UI in KlikPOS
+### Module 12: Deliveries & Conflicts UI in KlikPOS — **DROPPED (2026-07-31)**
 
-Detailed spec: [phases/phase-11.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-11.md) (Todos 029–030). Native port of the bot's deliveries list + conflicts/duplicates + low-confidence screens, operating over the Frappe `Delivery Report` doctype and reusing the Module 10 reconciliation endpoints.
+Detailed spec (historical): [phases/phase-11.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-11.md) (Todos 029–030). Was a native port of the bot's deliveries list + conflicts/duplicates + low-confidence screens. Dropped: its original justification was disambiguating OCR/AI misreads, but the bot flow is fully structured (no OCR/AI, see Module 10's system boundary) so that ambiguity doesn't exist. Its "duplicate `reported_invoice_no`" conflict heuristic was also wrong given legitimate partial delivery: a single invoice can validly receive multiple real Delivery Reports over time (partial, then the remainder) — the planned dedup UI would have flagged that as a conflict to merge/reject instead of the normal case it is. That scenario is now handled directly in Module 10's reconciliation flow instead (see phase-09.md's 2026-07-31 addendum).
 
-### Module 13: Live Delivery Map
+### Module 13: Live Delivery Map — **DONE (2026-07-31)**
 
-Detailed spec: [phases/phase-12.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-12.md) (Todos 031–032). Port of the bot's `/live` map: Google Maps (`@vis.gl/react-google-maps`) plotting delivery GPS, driven by Frappe `publish_realtime` instead of NestJS/socket.io.
+Detailed spec: [phases/phase-12.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-12.md) (Todos 031–032). Port of the bot's `/live` map: Google Maps (`@vis.gl/react-google-maps`) plotting delivery GPS, driven by Frappe `publish_realtime` instead of NestJS/socket.io. Google Maps API key lives on POS Profile (`custom_google_maps_api_key`, decided with the user). Not yet checked in a live browser or with a real API key entered — see Todo 032 notes for full detail, including two accepted deviations (no marker clustering, no route-level code-splitting for the map's bundle weight).
 
 ### Module 14: Offline-First Bot Repoint & Legacy Retirement
 

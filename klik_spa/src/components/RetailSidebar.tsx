@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Receipt, Grid3X3, BarChart3, Users, MonitorX, Banknote, Truck, UserCheck } from "lucide-react"
+import { Receipt, Grid3X3, BarChart3, Users, MonitorX, Banknote, Truck, UserCheck, Map as MapIcon } from "lucide-react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useUserInfo } from "../hooks/useUserInfo"
 import { usePOSProfileStore } from "../stores/posProfileStore";
@@ -69,6 +69,7 @@ export default function RetailSidebar() {
     { icon: MonitorX, path: "/closing_shift", label: "Closing Shift" },
     { icon: Truck, path: "/deliveries/reconcile", label: "Deliveries", requiresSalesDashboard: true },
     { icon: UserCheck, path: "/drivers", label: "Drivers", requiresSalesDashboard: true },
+    { icon: MapIcon, path: "/deliveries/map", label: "Live Map", requiresSalesDashboard: true },
 
   ]
 

@@ -1,7 +1,8 @@
 # Phase 12: Live Delivery Map
 **Module 13**
 
-**Status:** ⬜ Not started
+**Status:** ✅ Done (backend fully verified; frontend build/typecheck clean, not yet checked in a
+live browser or with a real Google Maps API key — see Todo 032 notes)
 
 ## Objective
 Port the bot frontend's `/live` map dashboard into KlikPOS: a real-time map plotting delivery GPS
@@ -14,8 +15,8 @@ points (and drivers), driven by Frappe realtime instead of the bot's socket.io/N
 - Click a pin → the delivery detail / reconciliation actions (reuse Phase 9/11 components).
 
 ## Todos
-- [ ] [031.md](../todo/031.md): Realtime delivery events (Frappe `publish_realtime`)
-- [ ] [032.md](../todo/032.md): Live map page in KlikPOS
+- [x] [031.md](../todo/031.md): Realtime delivery events (Frappe `publish_realtime`)
+- [x] [032.md](../todo/032.md): Live map page in KlikPOS
 
 ## Notes
 - Replaces the bot's socket.io channel with Frappe's built-in realtime (`frappe.publish_realtime`

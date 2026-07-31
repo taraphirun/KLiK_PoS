@@ -19,6 +19,7 @@ import InvoiceViewPage from "../pages/InvoiceViewPage";
 import CustomerDetailsPage from "../pages/CustomerPageDetails";
 import DeliveryReconciliationPage from "../pages/DeliveryReconciliationPage";
 import DriverManagementPage from "../pages/DriverManagementPage";
+import LiveDeliveryMapPage from "../pages/LiveDeliveryMapPage";
 
 const router = createBrowserRouter([
   {
@@ -96,6 +97,10 @@ const router = createBrowserRouter([
       {
         path: "drivers",
         element: <ProtectedRoute element={<DriverManagementPage />} />,
+      },
+      {
+        path: "deliveries/map",
+        element: <ProtectedRoute element={<LiveDeliveryMapPage />} />,
       },
     ],
   },

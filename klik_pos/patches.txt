@@ -11,3 +11,4 @@ klik_pos.patches.v16_0.add_price_list_switching_to_pos_profile
 klik_pos.patches.v16_0.add_pos_print_format_field
 klik_pos.patches.v16_0.add_delivery_reconciliation_fields
 klik_pos.patches.v16_0.backfill_delivery_driver_links
+klik_pos.patches.v16_0.add_google_maps_api_key_field

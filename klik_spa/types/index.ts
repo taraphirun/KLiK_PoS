@@ -395,6 +395,7 @@ export interface POSProfile {
   custom_scale_barcodes_start_with?: string
   custom_prevent_invoice_reprinting?: boolean | number
   custom_az_coil_item_groups?: Array<{ item_group: string }>
+  custom_google_maps_api_key?: string
   // Add other fields as needed
 }
 
