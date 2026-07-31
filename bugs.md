@@ -117,7 +117,16 @@ receipt numbers are always numeric in this business in practice is unconfirmed.
 
 ## TASK-001: Integrate the Telegram delivery bot with the Module 10 endpoints
 
-**Status:** ⬜ Not started
+**Status:** ✅ Superseded by Module 14 (Todos 033–035, `phases/phase-13.md`) — 2026-07-31. Rather
+than a minimal direct connection, the bot now writes to a local SQLite outbox first and a sync
+worker forwards to `submit_delivery_report` (+ new `upload_delivery_file`/`attach_delivery_media`
+for photos/voice), verified end-to-end against the real KlikPOS site. Every item below is now
+done; kept here for history rather than deleted. One thing this task's scope didn't cover and
+Module 14 doesn't either yet: **no delivery has been submitted from a real Telegram conversation**
+— all verification so far is `bench execute`/direct-script-driven against the sync worker and
+KlikPOS APIs, not a live driver walking through the FSM in Telegram. Worth a real walkthrough
+before considering the bot fully live.
+
 **Added:** 2026-07-30, after Phase 9 (Module 10, Todos 019–024) was implemented and
 backend-verified. User confirmed the reconciliation UI looks fine but has **not yet connected the
 actual bot** (`hd-delivery-telegram`) — everything tested so far used synthetic payloads via

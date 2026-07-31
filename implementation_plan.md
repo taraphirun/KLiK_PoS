@@ -29,16 +29,19 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 11 — Delivery Driver Management & Free-Text→Link | 10 | 025–028 | ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked, see Todo 027) |
 | 12 — Deliveries & Conflicts UI | 11 | 029–030 | ❌ Dropped (2026-07-31, see phases/phase-11.md) |
 | 13 — Live Delivery Map | 12 | 031–032 | ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked or given a real Google Maps API key, see Todo 032) |
-| 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | ⬜ Not started |
+| 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | 🔷 In progress (033–035 done + verified live against KlikPOS, in `hd-delivery-telegram`; 036 - actual cutover/decommission - deliberately deferred, see phase-13.md) |
 
-**Next up:** Phases 9, 10, and 12 (Modules 10, 11, 13) are fully implemented — user should
-browser-verify `/deliveries/reconcile`, `/drivers`, and `/deliveries/map` (once a Google Maps API
-key is set on the POS Profile) before moving on. Module 12 is dropped (see phase-11.md). Module 14
-(Offline-First Bot Repoint & Legacy Retirement, Phase 13) is bot-repo work, not KlikPOS-side - the
-next unblocked track in *this* repo depends on what the user wants to tackle from there. (Phase 6
-completed 2026-07-30; Phase 7 completed 2026-07-30; Phase 8 completed 2026-07-30; Phase 9 completed
+**Next up:** Phases 9, 10, 12, and (mostly) 13 are implemented — user should browser-verify
+`/deliveries/reconcile`, `/drivers`, and `/deliveries/map` (once a Google Maps API key is set on
+the POS Profile) in KlikPOS, and confirm the bot's live delivery flow actually reaches KlikPOS in
+practice (a real Telegram delivery, not just the manual `bench execute`/sync-worker tests run so
+far). Module 12 is dropped (see phase-11.md). Module 14's remaining piece (Todo 036: parallel-run
+monitoring, historical data backfill, then decommissioning NestJS/Postgres/Redis/MinIO/
+ocr-service) is intentionally not started - operationally risky, needs a monitored window, not
+something to rush. (Phase 6 completed 2026-07-30; Phase 7 completed 2026-07-30; Phase 8 completed
+2026-07-30; Phase 9 completed
 2026-07-30; Phase 10 completed 2026-07-30; Phase 11 dropped 2026-07-31; Phase 12 completed
-2026-07-31.)
+2026-07-31; Phase 13 in progress as of 2026-07-31.)
 
 ---
 
@@ -354,11 +357,11 @@ Detailed spec (historical): [phases/phase-11.md](file:///home/phirun/dev/KLiK_Po
 
 ### Module 13: Live Delivery Map — **DONE (2026-07-31)**
 
-Detailed spec: [phases/phase-12.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-12.md) (Todos 031–032). Port of the bot's `/live` map: Google Maps (`@vis.gl/react-google-maps`) plotting delivery GPS, driven by Frappe `publish_realtime` instead of NestJS/socket.io. Google Maps API key lives on POS Profile (`custom_google_maps_api_key`, decided with the user). Not yet checked in a live browser or with a real API key entered — see Todo 032 notes for full detail, including two accepted deviations (no marker clustering, no route-level code-splitting for the map's bundle weight).
+Detailed spec: [phases/phase-12.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-12.md) (Todos 031–032). Port of the bot's `/live` map: Google Maps (`@vis.gl/react-google-maps`) plotting delivery GPS, driven by Frappe `publish_realtime` instead of NestJS/socket.io. Google Maps API key lives on POS Profile (`custom_google_maps_api_key`, decided with the user). Redesigned 2026-07-31 after the user pointed at the bot's own `/live` dashboard (split map+sidebar layout, distance-based clustering, custom controls, live feed) as UI worth adopting - see Todo 032 notes for the full redesign detail and a real container-sizing bug found and fixed along the way. Key + layout confirmed working by the user in-browser.
 
-### Module 14: Offline-First Bot Repoint & Legacy Retirement
+### Module 14: Offline-First Bot Repoint & Legacy Retirement — **IN PROGRESS (Todos 033–035 done, 036 deferred)**
 
-Detailed spec: [phases/phase-13.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-13.md) (Todos 033–036). The bot becomes **offline-first**: every delivery is written to a **local SQLite** outbox immediately (so drivers keep working when ERPNext is down), then a **sync worker** forwards `Not Synced` rows to the KlikPOS ingestion API (idempotent on `bot_delivery_id`) and uploads photos/voice to Frappe File. The bot UI is reduced to a per-delivery **Synced / Not Synced** status. Final step retires NestJS + Postgres + Redis/BullMQ + MinIO + ocr-service. These todos live in the bot repo (`hd-delivery-telegram`); the KlikPOS-side contract is the Module 10 APIs.
+Detailed spec: [phases/phase-13.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-13.md) (Todos 033–036). The bot becomes **offline-first**: every delivery is written to a **local SQLite** outbox immediately (so drivers keep working when ERPNext is down), then a **sync worker** forwards `Not Synced` rows to the KlikPOS ingestion API (idempotent on `bot_delivery_id`) and uploads photos/voice to Frappe File. The bot UI is reduced to a per-delivery **Synced / Not Synced** status (plus a new `/syncstatus` admin command). Final step retires NestJS + Postgres + Redis/BullMQ + MinIO + ocr-service - **not attempted this pass** (operationally risky, needs a monitored parallel-run window; the legacy Postgres dual-write is kept running alongside the new KlikPOS sync for now). These todos live in the bot repo (`hd-delivery-telegram`); the KlikPOS-side contract is the Module 10 APIs plus two new endpoints added for Todo 035 (`upload_delivery_file`, `attach_delivery_media`). Full round trip (SQLite → sync worker → real KlikPOS Delivery Report with attached photo + voice note) verified end-to-end; two real bugs found and fixed in the process (a MySQL datetime-format rejection, and Frappe's stock file-upload endpoint excluding audio formats for non-Desk-access users) - see Todo 034/035 notes.
 
 > **Offline-first invariant**: the bot never blocks a driver. Local SQLite is the durable capture store; KlikPOS is authoritative once synced. Idempotency on `bot_delivery_id` (Module 10, Todo 021) is what makes retry-after-downtime safe.
 
