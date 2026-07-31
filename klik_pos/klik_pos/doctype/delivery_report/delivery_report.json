@@ -12,7 +12,9 @@
   "completion_status",
   "payment_status",
   "section_break_driver",
+  "reported_driver_name",
   "delivery_driver",
+  "delivery_driver_name",
   "driver_telegram_id",
   "column_break_driver_1",
   "delivery_timestamp",
@@ -79,11 +81,26 @@
    "label": "Delivery Details"
   },
   {
-   "description": "Free text for now - Phase 10 migrates this to a Link(Driver) once the Driver doctype exists.",
-   "fieldname": "delivery_driver",
+   "description": "Verbatim driver name/handle as reported by the bot payload, before matching. Kept even after delivery_driver resolves to a Link, so an unmatched or mismatched report is still visible for manual review (Todo 028).",
+   "fieldname": "reported_driver_name",
    "fieldtype": "Data",
+   "label": "Reported Driver Name"
+  },
+  {
+   "description": "Resolved from reported_driver_name / driver_telegram_id at ingestion (submit_delivery_report) or by the Todo 028 backfill patch for older rows. Blank if no Delivery Driver record matched - not auto-guessed to avoid a wrong link with no signal to catch it.",
+   "fieldname": "delivery_driver",
+   "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "Delivery Driver"
+   "label": "Delivery Driver",
+   "link_filters": "[[\"Delivery Driver\",\"status\",\"=\",\"Active\"]]",
+   "options": "Delivery Driver"
+  },
+  {
+   "fetch_from": "delivery_driver.driver_name",
+   "fieldname": "delivery_driver_name",
+   "fieldtype": "Data",
+   "label": "Delivery Driver Name",
+   "read_only": 1
   },
   {
    "fieldname": "driver_telegram_id",
@@ -223,7 +240,7 @@
  ],
  "row_format": "Dynamic",
  "rows_threshold_for_grid_search": 20,
- "search_fields": "bot_delivery_id,reported_invoice_no,delivery_driver",
+ "search_fields": "bot_delivery_id,reported_invoice_no,reported_driver_name",
  "sort_field": "creation",
  "sort_order": "DESC",
  "states": [],

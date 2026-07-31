@@ -75,7 +75,6 @@ Telegram Bot ──POST──▶ [Ingestion API] ──▶ [Delivery Report] (st
 - [x] [022.md](../todo/022.md): Auto-match logic (exact → normalized → fuzzy invoice no) with confidence scoring — attribute/customer/amount matching dropped, see todo notes
 - [x] [023.md](../todo/023.md): Reconciliation API (confirm / reject / re-match) + mark-as-paid automation
 - [x] [024.md](../todo/024.md): Frontend reconciliation page
-- [ ] [024.md](../todo/024.md): Frontend reconciliation page
 
 ## Key design decisions
 - **Staging over direct write**: bot data never touches a Sales Invoice until confirmed. This
@@ -87,3 +86,47 @@ Telegram Bot ──POST──▶ [Ingestion API] ──▶ [Delivery Report] (st
   confirmation, except optionally for high-confidence matches gated behind a POS Profile flag.
 - **Idempotency**: re-sending the same bot report (same invoice + driver + timestamp) must not
   create duplicate Delivery Reports or double-post payments.
+
+## Addendum (2026-07-31): multiple deliveries per invoice
+
+Raised by the user while reviewing what was originally planned as Module 12 (now **dropped**, see
+`phases/phase-11.md`): a single invoice can legitimately receive **more than one confirmed
+Delivery Report** - a Partial delivery now, the remainder later. Module 12's planned "duplicate
+`reported_invoice_no`" conflict view would have flagged that normal case as an error. This
+addendum makes the existing reconciliation flow (Todo 023/024) handle it correctly instead of
+building a separate conflicts screen for it.
+
+**What was already safe:** payment posting (`create_payment_entry` in `confirm_delivery_match`)
+always checks the invoice's *live* `outstanding_amount`, so a second confirm against a
+partially-paid invoice can't over-allocate or double-charge - no change needed there.
+
+**What was fixed** (`klik_pos/api/delivery.py`):
+- `confirm_delivery_match` previously overwrote `custom_delivery_status` /
+  `custom_delivery_driver` / `custom_delivered_at` / GPS / `custom_delivery_report` unconditionally
+  on every confirm. Since the reconciliation queue sorts newest-bot-submission-first, staff could
+  naturally confirm a later "Full" delivery before an earlier "Partial" one for the same invoice -
+  which would silently regress the invoice back to "Partially Delivered" with stale driver/GPS
+  data. Fixed with two guards, both decided with the user: `DELIVERY_STATUS_RANK` makes
+  `custom_delivery_status` monotonic (never regress), and `_is_newer_or_first_delivery` only lets
+  the snapshot fields move forward by `delivery_timestamp`, not by confirm order.
+- `get_delivery_reports` now computes a `group_key` per row (`matched_invoice`, else
+  `reported_invoice_no`) and, via one extra aggregate query, a cross-status `group_total_count` /
+  `group_flagged` (flagged = more than one report for that invoice across ANY status, or contains
+  a Partial delivery). Rows are sorted so flagged groups float to the top and stay adjacent -
+  directly surfacing exactly the multi-delivery situations that need a human's attention, instead
+  of a separate conflicts view.
+
+**Frontend** (`DeliveryReconciliationPage.tsx`): reports are now rendered via `groupReports()` +
+`GroupCluster` instead of a flat list - a flagged group renders as a bordered cluster with an
+"Invoice X · N delivery reports" header; an unflagged singleton renders exactly as before (no
+visual change). If a group has members outside the current status tab (e.g. an already-Confirmed
+first delivery while viewing the Pending queue), a "show more" link fetches them on demand via the
+same `get_delivery_reports` call across all statuses, reusing the existing endpoint rather than
+adding a new one.
+
+Verified via `bench execute` against real invoices: simulated a Partial delivery (confirmed,
+posted a partial payment) followed by a Full delivery for the remainder (confirmed, posted the
+rest), then confirmed a third, older-timestamped Partial report *after* the Full one to prove the
+regression guards hold; separately verified `get_delivery_reports` groups/flags/sorts correctly
+against a mix of a 3-report flagged group and an unrelated single-report control. All test data
+cleaned up afterward. `npx tsc --noEmit` and `yarn build` both clean.

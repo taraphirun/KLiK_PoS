@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   CheckCircle2,
+  ChevronDown,
   Loader2,
   MapPin,
   RefreshCcw,
@@ -230,8 +231,16 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-gray-900 dark:text-white">
-              {report.delivery_driver || "Unknown driver"}
+              {report.delivery_driver_name || report.reported_driver_name || "Unknown driver"}
             </span>
+            {report.reported_driver_name && !report.delivery_driver_name && (
+              <span
+                title="Reported by the bot but not linked to a Delivery Driver record yet"
+                className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+              >
+                unlinked
+              </span>
+            )}
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(report.reconciliation_status)}`}>
               {report.reconciliation_status}
             </span>
@@ -356,6 +365,97 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
   );
 }
 
+interface ReportGroup {
+  key: string;
+  reports: DeliveryReport[];
+  totalCount: number;
+  flagged: boolean;
+}
+
+/** Chunks the (already server-sorted, same-key-adjacent) list into groups. Reports.tsx renders
+ * these instead of a flat list so multi-delivery invoices - partial now, remainder later - are
+ * visually clustered instead of scattered (2026-07-31 addendum). */
+function groupReports(reports: DeliveryReport[]): ReportGroup[] {
+  const groups: ReportGroup[] = [];
+  for (const report of reports) {
+    const last = groups[groups.length - 1];
+    if (last && last.key === report.group_key) {
+      last.reports.push(report);
+    } else {
+      groups.push({
+        key: report.group_key,
+        reports: [report],
+        totalCount: report.group_total_count,
+        flagged: report.group_flagged,
+      });
+    }
+  }
+  return groups;
+}
+
+const ALL_STATUSES = "Unmatched,Suggested,Confirmed,Rejected";
+
+interface GroupClusterProps {
+  group: ReportGroup;
+  onChanged: () => void;
+}
+
+function GroupCluster({ group, onChanged }: GroupClusterProps) {
+  const [extraReports, setExtraReports] = useState<DeliveryReport[] | null>(null);
+  const [isLoadingExtra, setIsLoadingExtra] = useState(false);
+
+  const visibleNames = new Set(group.reports.map((r) => r.name));
+  const hiddenCount = group.totalCount - group.reports.length;
+  const others = (extraReports || []).filter((r) => !visibleNames.has(r.name));
+
+  // Plain, unwrapped card for the ordinary case: one report, no siblings anywhere, not itself a
+  // Partial delivery worth flagging.
+  if (group.reports.length === 1 && !group.flagged) {
+    return <ReportCard report={group.reports[0]} onChanged={onChanged} />;
+  }
+
+  const handleShowMore = async () => {
+    setIsLoadingExtra(true);
+    try {
+      const response = await getDeliveryReports(ALL_STATUSES, group.key, 0, 50);
+      setExtraReports((response.data || []).filter((r) => !visibleNames.has(r.name)));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load other deliveries for this invoice");
+    } finally {
+      setIsLoadingExtra(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border-2 border-amber-300 bg-amber-50/40 p-3 dark:border-amber-700 dark:bg-amber-950/10">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
+        <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+          Invoice {group.key} · {group.totalCount} delivery report{group.totalCount === 1 ? "" : "s"}
+        </span>
+        {hiddenCount > 0 && !extraReports && (
+          <button
+            type="button"
+            onClick={handleShowMore}
+            disabled={isLoadingExtra}
+            className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 hover:underline disabled:opacity-50 dark:text-amber-300"
+          >
+            {isLoadingExtra ? <Loader2 size={12} className="animate-spin" /> : <ChevronDown size={12} />}
+            {hiddenCount} more (other status) — show
+          </button>
+        )}
+      </div>
+      <div className="space-y-3">
+        {group.reports.map((report) => (
+          <ReportCard key={report.name} report={report} onChanged={onChanged} />
+        ))}
+        {others.map((report) => (
+          <ReportCard key={report.name} report={report} onChanged={onChanged} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function DeliveryReconciliationPage() {
   const [activeTab, setActiveTab] = useState<QueueTab>("pending");
   const [search, setSearch] = useState("");
@@ -455,8 +555,8 @@ export default function DeliveryReconciliationPage() {
           </div>
         ) : (
           <div className="space-y-3">
-            {reports.map((report) => (
-              <ReportCard key={report.name} report={report} onChanged={fetchReports} />
+            {groupReports(reports).map((group) => (
+              <GroupCluster key={group.key} group={group} onChanged={fetchReports} />
             ))}
           </div>
         )}

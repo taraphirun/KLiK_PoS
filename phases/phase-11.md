@@ -1,7 +1,23 @@
 # Phase 11: Deliveries & Conflicts UI in KlikPOS
 **Module 12**
 
-**Status:** ⬜ Not started
+**Status:** ❌ Dropped (2026-07-31)
+
+## Why dropped
+This phase existed for two reasons, both gone:
+1. **OCR/AI disambiguation.** The original bot design used OCR/AI to read invoice numbers off
+   photos, which produces genuinely ambiguous reads needing a human conflicts queue. Module 10
+   settled on a fully structured Telegram flow instead (see its system boundary: "bot collects,
+   KlikPOS confirms," no OCR/AI) — there's no OCR ambiguity left to resolve.
+2. **The "duplicates" conflict type was wrong.** The Conflicts view below was going to flag
+   "multiple Delivery Reports with the same `reported_invoice_no`" as a duplicate needing
+   merge/reject. But an invoice can legitimately receive **more than one real delivery** — a
+   Partial delivery now, the remainder later — so that heuristic would have flagged the normal
+   partial-delivery case as an error requiring cleanup. That was caught 2026-07-31 while auditing
+   Module 10 for exactly this scenario (see phase-09.md's addendum) — the reconciliation flow now
+   handles multiple deliveries per invoice directly instead.
+
+Todos 029/030 below are kept as historical record, not implemented.
 
 ## Objective
 Port the bot frontend's delivery-facing screens into the KlikPOS SPA so deliveries are viewed and

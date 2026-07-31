@@ -10,6 +10,14 @@ from klik_pos.api.sales_invoice import create_payment_entry
 # completion_status (Delivery Report) -> custom_delivery_status (Sales Invoice, Todo 020).
 DELIVERY_STATUS_MAP = {"Full": "Delivered", "Partial": "Partially Delivered"}
 
+# A single invoice can legitimately receive more than one confirmed Delivery Report - a Partial
+# delivery now, the remainder later (2026-07-31 addendum, see phase-09.md). This rank makes
+# custom_delivery_status monotonic (never regress) regardless of confirm order: the reconciliation
+# queue sorts newest bot-submission first, so staff can easily confirm a later Full delivery before
+# an earlier Partial one for the same invoice - without this, that ordering would silently
+# downgrade "Delivered" back to "Partially Delivered".
+DELIVERY_STATUS_RANK = {"Pending": 0, "Not Delivered": 0, "Partially Delivered": 1, "Delivered": 2}
+
 ALLOWED_COMPLETION_STATUSES = {"Full", "Partial"}
 ALLOWED_PAYMENT_STATUSES = {"Paid", "Unpaid", "Partial"}
 REQUIRED_FIELDS = ("bot_delivery_id", "reported_invoice_no", "completion_status", "payment_status")
@@ -41,6 +49,30 @@ def _validate_delivery_payload(data):
             f"Invalid payment_status '{data.get('payment_status')}', "
             f"expected one of {sorted(ALLOWED_PAYMENT_STATUSES)}"
         )
+
+
+def resolve_driver(name_hint, telegram_id):
+    """Resolve a bot-reported driver name/Telegram id to a Delivery Driver record (Todo 028).
+
+    Telegram identity is trusted first (unique, bot-verified - see sync_driver_from_bot);
+    falls back to an exact driver_name match (case-insensitive under Frappe's default DB
+    collation). No fuzzy matching, unlike invoice matching: a wrong invoice match gets caught at
+    confirm time by a human looking at the invoice; a wrong driver link has no equivalent
+    reconciliation-blocking symptom, so a wrong guess here is worse than leaving it blank for
+    manual review. Returns None (never guesses) if nothing matches - the raw text is preserved
+    separately (reported_driver_name / raw_payload), so nothing is lost by leaving this blank.
+    """
+    telegram_id = str(telegram_id or "").strip()
+    if telegram_id:
+        match = frappe.db.get_value("Delivery Driver", {"telegram_user_id": telegram_id}, "name")
+        if match:
+            return match
+
+    name_hint = (name_hint or "").strip()
+    if not name_hint:
+        return None
+
+    return frappe.db.get_value("Delivery Driver", {"driver_name": name_hint}, "name")
 
 
 def _safe_nonzero_int(value):
@@ -222,7 +254,8 @@ def submit_delivery_report(data):
                 "reported_invoice_no": data.get("reported_invoice_no"),
                 "completion_status": data.get("completion_status"),
                 "payment_status": data.get("payment_status"),
-                "delivery_driver": data.get("delivery_driver"),
+                "reported_driver_name": data.get("delivery_driver"),
+                "delivery_driver": resolve_driver(data.get("delivery_driver"), data.get("driver_telegram_id")),
                 "driver_telegram_id": data.get("driver_telegram_id"),
                 "delivery_timestamp": get_datetime(data["delivery_timestamp"])
                 if data.get("delivery_timestamp")
@@ -258,6 +291,20 @@ def submit_delivery_report(data):
         return {"success": False, "message": str(e)}
 
 
+def _is_newer_or_first_delivery(existing_delivered_at, new_delivered_at):
+    """True if the invoice has no prior delivery snapshot yet, or this report's delivery_timestamp
+    is not older than the one already recorded. Guards the same out-of-order-confirm scenario as
+    DELIVERY_STATUS_RANK, but for the driver/GPS/delivered-at snapshot fields: those should reflect
+    the chronologically latest delivery, not whichever report a human happened to confirm last.
+    Conservative when timestamps are missing - an untimed report never overwrites an existing
+    timed snapshot, since there's no way to tell if it's actually more recent."""
+    if not existing_delivered_at:
+        return True
+    if not new_delivered_at:
+        return False
+    return get_datetime(new_delivered_at) >= get_datetime(existing_delivered_at)
+
+
 def _parse_bool(value, default=None):
     if value is None:
         return default
@@ -286,6 +333,16 @@ def confirm_delivery_match(report_name, invoice_name=None, mark_paid=None, amoun
     Design rule (decided 2026-07-30): completion_status and payment_status are independent axes -
     a Partially Delivered order can still be fully paid and vice versa. mark-as-paid keys purely
     off payment_status; completion_status only drives custom_delivery_status.
+
+    Multiple deliveries per invoice (decided 2026-07-31): confirming a Delivery Report is NOT
+    limited to one-per-invoice - a Partial delivery followed later by a second report for the
+    remainder is the normal case, not a conflict (see phase-09.md addendum / dropped Module 12).
+    Payment posting already handles this safely as-is (always checks live outstanding_amount, so
+    it can't over-allocate across multiple confirms). The delivery *snapshot* fields
+    (custom_delivery_status/driver/delivered_at/gps/report) need the guards below because the
+    reconciliation queue sorts newest bot-submission first: it's natural for staff to confirm a
+    later Full delivery before an earlier Partial one for the same invoice, which without a guard
+    would silently regress the invoice back to a less-complete state.
     """
     try:
         report = frappe.get_doc("Delivery Report", report_name)
@@ -317,12 +374,21 @@ def confirm_delivery_match(report_name, invoice_name=None, mark_paid=None, amoun
         if invoice.docstatus != 1:
             frappe.throw(f"Sales Invoice {target_invoice_name} is not submitted")
 
-        invoice.custom_delivery_status = DELIVERY_STATUS_MAP.get(report.completion_status, "Pending")
-        invoice.custom_delivery_driver = report.delivery_driver
-        invoice.custom_delivered_at = report.delivery_timestamp
-        invoice.custom_delivery_gps_latitude = report.gps_latitude
-        invoice.custom_delivery_gps_longitude = report.gps_longitude
-        invoice.custom_delivery_report = report.name
+        # An invoice can legitimately be confirmed against more than one Delivery Report (partial
+        # delivery, then the remainder) - both guards below keep a second confirm from clobbering
+        # a further-along state with an earlier one, regardless of which order they're confirmed
+        # in (2026-07-31 addendum, see phase-09.md).
+        new_status = DELIVERY_STATUS_MAP.get(report.completion_status, "Pending")
+        if DELIVERY_STATUS_RANK.get(new_status, 0) >= DELIVERY_STATUS_RANK.get(invoice.custom_delivery_status, 0):
+            invoice.custom_delivery_status = new_status
+
+        if _is_newer_or_first_delivery(invoice.custom_delivered_at, report.delivery_timestamp):
+            invoice.custom_delivery_driver = report.delivery_driver
+            invoice.custom_delivered_at = report.delivery_timestamp
+            invoice.custom_delivery_gps_latitude = report.gps_latitude
+            invoice.custom_delivery_gps_longitude = report.gps_longitude
+            invoice.custom_delivery_report = report.name
+
         invoice.save(ignore_permissions=True)
 
         payment_entry_name = None
@@ -411,7 +477,9 @@ DELIVERY_REPORT_LIST_FIELDS = [
     "reported_invoice_no",
     "completion_status",
     "payment_status",
+    "reported_driver_name",
     "delivery_driver",
+    "delivery_driver_name",
     "driver_telegram_id",
     "delivery_timestamp",
     "gps_latitude",
@@ -428,13 +496,60 @@ DELIVERY_REPORT_LIST_FIELDS = [
 ]
 
 
+def _group_key(row):
+    """Same-invoice grouping key (2026-07-31 addendum, decided with the user): matched_invoice
+    once resolved, else the raw reported_invoice_no. A fallback to row.name only guards the
+    defensive case of a manually-created Delivery Report with neither set (never happens via
+    submit_delivery_report - reported_invoice_no is required there)."""
+    return row.get("matched_invoice") or row.get("reported_invoice_no") or row.get("name")
+
+
+def _group_info_for_keys(group_keys):
+    """Cross-status aggregate per group key: total report count and whether any is Partial.
+    Deliberately looks across ALL reconciliation_status values, not just the caller's current
+    filter - a Suggested report is still "part of a group" even if its sibling was already
+    Confirmed and would otherwise be filtered out of the Pending queue (decided with the user)."""
+    if not group_keys:
+        return {}
+
+    placeholders = ", ".join(["%s"] * len(group_keys))
+    rows = frappe.db.sql(
+        f"""
+        SELECT
+            COALESCE(matched_invoice, reported_invoice_no) AS group_key,
+            COUNT(*) AS total_count,
+            SUM(CASE WHEN completion_status = 'Partial' THEN 1 ELSE 0 END) AS partial_count
+        FROM `tabDelivery Report`
+        WHERE COALESCE(matched_invoice, reported_invoice_no) IN ({placeholders})
+        GROUP BY COALESCE(matched_invoice, reported_invoice_no)
+        """,
+        tuple(group_keys),
+        as_dict=True,
+    )
+    return {r.group_key: r for r in rows}
+
+
 @frappe.whitelist()
 def get_delivery_reports(status=None, search="", start=0, limit=100):
-    """List Delivery Reports for the reconciliation queue (Todo 024 frontend), newest first.
+    """List Delivery Reports for the reconciliation queue (Todo 024 frontend).
 
     status: comma-separated reconciliation_status values. Defaults to the actionable queue
     (Unmatched + Suggested) - pass e.g. "Confirmed,Rejected" to view resolved history instead.
-    search: matches bot_delivery_id / reported_invoice_no / delivery_driver / matched_invoice.
+    search: matches bot_delivery_id / reported_invoice_no / reported_driver_name / delivery_driver_name /
+    matched_invoice.
+
+    Ordering (2026-07-31 addendum, decided with the user): rows are grouped by invoice
+    (_group_key) and sorted so "flagged" groups - more than one report for that invoice across ANY
+    status, or containing a Partial delivery - float to the top, ahead of ordinary single-Full-
+    delivery reports. Within a group, rows stay adjacent and newest first. Each row carries
+    group_key/group_total_count/group_flagged so the frontend can visually cluster same-invoice
+    cards and indicate when a group has members outside the current status filter (e.g. an
+    already-Confirmed first delivery not shown in the default Pending queue).
+
+    Sorting requires the full filtered/searched result set in memory before paginating (can't
+    ORDER BY the flagged-priority computed above in SQL without a second query anyway) - acceptable
+    given Delivery Report's low volume (bounded by delivery throughput, not sales data), same
+    assumption the rest of this module already makes.
     """
     try:
         start = int(start or 0)
@@ -450,24 +565,39 @@ def get_delivery_reports(status=None, search="", start=0, limit=100):
             or_filters = [
                 ["bot_delivery_id", "like", term],
                 ["reported_invoice_no", "like", term],
-                ["delivery_driver", "like", term],
+                ["reported_driver_name", "like", term],
+                ["delivery_driver_name", "like", term],
                 ["matched_invoice", "like", term],
             ]
 
-        # Delivery Report is a low-volume staging table (bounded by delivery throughput, not
-        # sales data), so a plain count of matching names is cheap enough - no need for the
-        # dict-syntax aggregate query here.
-        total_count = len(frappe.get_all("Delivery Report", filters=filters, or_filters=or_filters, pluck="name"))
-
-        data = frappe.get_all(
-            "Delivery Report",
-            filters=filters,
-            or_filters=or_filters,
-            fields=DELIVERY_REPORT_LIST_FIELDS,
-            order_by="creation desc",
-            limit_start=start,
-            limit_page_length=limit,
+        all_matches = frappe.get_all(
+            "Delivery Report", filters=filters, or_filters=or_filters, fields=DELIVERY_REPORT_LIST_FIELDS
         )
+        total_count = len(all_matches)
+
+        for row in all_matches:
+            row["group_key"] = _group_key(row)
+
+        group_info = _group_info_for_keys({row["group_key"] for row in all_matches})
+
+        def is_flagged(row):
+            info = group_info.get(row["group_key"])
+            total = info.total_count if info else 1
+            has_partial = bool(info and info.partial_count) or row.get("completion_status") == "Partial"
+            return total > 1 or has_partial
+
+        for row in all_matches:
+            info = group_info.get(row["group_key"])
+            row["group_total_count"] = info.total_count if info else 1
+            row["group_flagged"] = is_flagged(row)
+
+        # Stable sorts compose: apply lowest-priority key first so each later sort's tie-breaks
+        # preserve the ordering already established by the ones before it.
+        all_matches.sort(key=lambda r: r["creation"], reverse=True)  # newest first within a group
+        all_matches.sort(key=lambda r: r["group_key"])  # cluster same-invoice rows together
+        all_matches.sort(key=lambda r: 0 if r["group_flagged"] else 1)  # flagged groups float to top
+
+        data = all_matches[start : start + limit]
 
         return {"success": True, "data": data, "total_count": total_count, "start": start, "limit": limit}
 

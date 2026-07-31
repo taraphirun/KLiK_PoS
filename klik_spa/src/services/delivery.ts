@@ -10,7 +10,12 @@ export interface DeliveryReport {
   reported_invoice_no?: string;
   completion_status: CompletionStatus;
   payment_status: PaymentStatus;
-  delivery_driver?: string;
+  /** Verbatim driver name/handle as reported by the bot, before matching (Todo 028). */
+  reported_driver_name?: string;
+  /** Resolved Delivery Driver docname (Link), or blank if unmatched. */
+  delivery_driver?: string | null;
+  /** Fetched display name for delivery_driver - use this for UI, not the raw docname. */
+  delivery_driver_name?: string | null;
   driver_telegram_id?: string;
   delivery_timestamp?: string;
   gps_latitude?: number;
@@ -24,6 +29,14 @@ export interface DeliveryReport {
   match_notes?: string | null;
   payment_entry?: string | null;
   creation: string;
+  /** Same-invoice grouping key: matched_invoice, else reported_invoice_no (2026-07-31). */
+  group_key: string;
+  /** Count of Delivery Reports sharing group_key, across ALL reconciliation statuses - may be
+   * higher than how many of that group appear in the current filtered list. */
+  group_total_count: number;
+  /** True if group_total_count > 1 or any report in the group is a Partial delivery - these
+   * groups sort to the top of the list (server-side) and should be visually clustered. */
+  group_flagged: boolean;
 }
 
 export interface DeliveryReportsResponse {

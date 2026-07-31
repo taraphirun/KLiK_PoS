@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react"
-import { Receipt, Grid3X3, BarChart3, Users, MonitorX, Banknote, Truck } from "lucide-react"
+import { Receipt, Grid3X3, BarChart3, Users, MonitorX, Banknote, Truck, UserCheck } from "lucide-react"
 import { useNavigate, useLocation } from "react-router-dom"
 import { useUserInfo } from "../hooks/useUserInfo"
 import { usePOSProfileStore } from "../stores/posProfileStore";
 import { getDeliveryReports } from "../services/delivery";
+import { getDrivers } from "../services/driver";
 
 const PENDING_DELIVERY_POLL_MS = 60000;
+const PENDING_DRIVER_POLL_MS = 60000;
 
 // Inside your component
 export default function RetailSidebar() {
@@ -16,6 +18,7 @@ export default function RetailSidebar() {
 
   const canAccessSalesDashboard = userInfo?.is_admin_user ?? false
   const [pendingDeliveryCount, setPendingDeliveryCount] = useState(0)
+  const [pendingDriverCount, setPendingDriverCount] = useState(0)
 
   useEffect(() => {
     if (!canAccessSalesDashboard) return
@@ -37,6 +40,26 @@ export default function RetailSidebar() {
     }
   }, [canAccessSalesDashboard])
 
+  useEffect(() => {
+    if (!canAccessSalesDashboard) return
+    let isCurrent = true
+    const fetchCount = () => {
+      getDrivers("Pending")
+        .then((response) => {
+          if (isCurrent) setPendingDriverCount(response.total_count || 0)
+        })
+        .catch(() => {
+          // Nav badge is best-effort - a failed poll just skips this refresh.
+        })
+    }
+    fetchCount()
+    const interval = window.setInterval(fetchCount, PENDING_DRIVER_POLL_MS)
+    return () => {
+      isCurrent = false
+      window.clearInterval(interval)
+    }
+  }, [canAccessSalesDashboard])
+
   const menuItems = [
     { icon: Grid3X3, path: "/pos", label: "POS" },
      { icon: Receipt, path: "/invoice", label: "InvoiceHistory" },
@@ -45,6 +68,7 @@ export default function RetailSidebar() {
     { icon: BarChart3, path: "/dashboard", label: "Dashboard", requiresSalesDashboard: true },
     { icon: MonitorX, path: "/closing_shift", label: "Closing Shift" },
     { icon: Truck, path: "/deliveries/reconcile", label: "Deliveries", requiresSalesDashboard: true },
+    { icon: UserCheck, path: "/drivers", label: "Drivers", requiresSalesDashboard: true },
 
   ]
 
@@ -97,7 +121,13 @@ export default function RetailSidebar() {
             return null; // Don't render this menu item if the user doesn't have permission
            }
            
-          const showPendingBadge = item.path === "/deliveries/reconcile" && pendingDeliveryCount > 0
+          const badgeCount =
+            item.path === "/deliveries/reconcile"
+              ? pendingDeliveryCount
+              : item.path === "/drivers"
+              ? pendingDriverCount
+              : 0
+          const showPendingBadge = badgeCount > 0
           return (
           <button
             key={index}
@@ -117,7 +147,7 @@ export default function RetailSidebar() {
             <item.icon size={20} />
             {showPendingBadge && (
               <span className="absolute top-1 right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
-                {pendingDeliveryCount > 99 ? "99+" : pendingDeliveryCount}
+                {badgeCount > 99 ? "99+" : badgeCount}
               </span>
             )}
           </button>
