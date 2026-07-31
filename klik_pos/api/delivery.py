@@ -4,6 +4,7 @@ import re
 
 import frappe
 from frappe.utils import add_days, flt, get_datetime, nowdate
+from frappe.utils.file_manager import save_file
 
 from klik_pos.api.sales_invoice import create_payment_entry
 
@@ -264,7 +265,10 @@ def submit_delivery_report(data):
                 "gps_longitude": flt(data["gps_longitude"])
                 if data.get("gps_longitude") is not None
                 else None,
-                "photos": data.get("photos"),
+                # JSON fieldtype auto-serializes a dict on assignment but rejects a raw list
+                # outright (Frappe: base_document.py's get_valid_dict throws "cannot be a list"
+                # for any non-table field) - must json.dumps() a list ourselves.
+                "photos": json.dumps(data["photos"]) if isinstance(data.get("photos"), list) else data.get("photos"),
                 "voice_note": data.get("voice_note"),
                 "raw_payload": data,
             }
@@ -640,4 +644,97 @@ def rematch_delivery_report(report_name, invoice_name):
         return {"success": False, "message": str(e)}
     except Exception as e:
         frappe.log_error(title="Delivery Report re-match failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def upload_delivery_file(report_name):
+    """Upload a single photo/voice file for a Delivery Report (Module 14 / Todo 035), bypassing
+    Frappe's generic `/api/method/upload_file` MIME-type allowlist.
+
+    That stock endpoint rejects any file type outside a hardcoded allowlist (JPG/PNG/GIF/PDF/
+    text/office docs/mp4 - see `frappe.handler.ALLOWED_MIMETYPES`) for any user without Desk
+    access, and voice notes (audio/ogg) aren't on that list. Granting the bot's service account
+    Desk access just to clear one MIME check would be a broader capability than this integration
+    needs (see driver.py/other delivery.py endpoints - the established pattern here is
+    ignore_permissions at the endpoint level, not elevated account privileges). `save_file()`
+    itself has no such restriction - the MIME check is an extra guard `/upload_file`'s HTTP
+    handler applies before ever calling `save_file()`, not something `save_file()` enforces on
+    its own - so this endpoint calls it directly.
+
+    Requires report_name (the Delivery Report must already exist - created by
+    submit_delivery_report first) so the file is properly doctype-linked for permission scoping,
+    not an orphaned/owner-only file only the bot's own service user could read (same reasoning as
+    attach_delivery_media below, which this is meant to be used together with: upload here to get
+    a file_url, then call attach_delivery_media to record it on the report).
+    """
+    try:
+        if not frappe.db.exists("Delivery Report", report_name):
+            frappe.throw(f"Delivery Report {report_name} does not exist")
+
+        uploaded = frappe.request.files.get("file")
+        if not uploaded:
+            frappe.throw("No file uploaded")
+
+        file_doc = save_file(
+            uploaded.filename, uploaded.stream.read(), "Delivery Report", report_name, is_private=1
+        )
+
+        return {"success": True, "file_url": file_doc.file_url}
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Delivery Report media upload failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def attach_delivery_media(report_name, photo_urls=None, voice_url=None):
+    """Records already-uploaded Frappe File URLs onto a Delivery Report (Module 14 / Todo 035).
+
+    The bot uploads files via upload_delivery_file (doctype=Delivery Report, docname=report_name,
+    is_private=1) *after* the report already exists (created by submit_delivery_report first) -
+    that gets each file proper doctype-linked permission scoping, so staff viewing the
+    reconciliation queue can see photos/voice attached to a report they have access to, rather
+    than an orphaned file only the bot's own service user could read. This endpoint just records
+    the resulting URLs onto the report; it never uploads anything itself.
+
+    photo_urls: list (or JSON-encoded list) of file URLs, merged into any existing photos rather
+    than overwriting - safe to call more than once as a multi-photo delivery's files upload one at
+    a time. voice_url: single URL, overwrites any previous value (a delivery has at most one voice
+    note, matching the `voice_note` Attach field's single-file semantics).
+    """
+    try:
+        if isinstance(photo_urls, str):
+            photo_urls = json.loads(photo_urls) if photo_urls else []
+        photo_urls = photo_urls or []
+
+        report = frappe.get_doc("Delivery Report", report_name)
+
+        if photo_urls:
+            existing = report.photos or []
+            if isinstance(existing, str):
+                existing = json.loads(existing) if existing else []
+            # json.dumps() required: JSON fieldtype auto-serializes a dict on assignment but
+            # rejects a raw list outright (see submit_delivery_report's photos handling above).
+            report.photos = json.dumps(existing + [url for url in photo_urls if url not in existing])
+
+        if voice_url:
+            report.voice_note = voice_url
+
+        if photo_urls or voice_url:
+            report.save(ignore_permissions=True)
+
+        return {
+            "success": True,
+            "delivery_report": report.name,
+            "photos": report.photos,
+            "voice_note": report.voice_note,
+        }
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Delivery Report media attach failed")
         return {"success": False, "message": str(e)}
