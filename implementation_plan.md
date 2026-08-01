@@ -2,6 +2,9 @@
 
 This document details the exact technical changes (functions, state variables, API endpoints, and UI elements) required to port all custom features from `main` to a fresh `upstream/version-16` branch.
 
+> **Looking for how the delivery bot integration actually works (flows, architecture, config), not
+> its build history?** See [`DELIVERY_BOT_INTEGRATION.md`](DELIVERY_BOT_INTEGRATION.md).
+
 ---
 
 ## Preparation
