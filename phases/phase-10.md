@@ -2,7 +2,8 @@
 **Module 11**
 
 **Status:** ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked
-— see Todo 027)
+— see Todo 027). Bot-side wiring for the two-way sync (Todo 026's design) completed 2026-08-01 —
+see addendum below.
 
 ## Objective
 Introduce a first-class `Delivery Driver` master in KlikPOS (Frappe) so drivers can be created,
@@ -55,3 +56,35 @@ delivery screens (deliveries list, conflicts, live map) are **also ported native
 `Customer`/`Address` are not ported (native to ERPNext) and `Booklet` is dropped (legacy). Keep the
 `Delivery Driver` sync API generic enough that the bot can reconcile drivers regardless of which UI
 created them.
+
+## Addendum (2026-08-01): bot-side wiring for the two-way sync
+
+Todo 026 built `sync_driver_from_bot`/`set_driver_status`/`list_drivers` on the KlikPOS side, but
+the bot never actually called them - a driver approved via the bot's own Telegram buttons never
+reached KlikPOS, and an approval made from KlikPOS's `/drivers` page never reached the bot. Fixed
+in `hd-delivery-telegram/delivery-bot`:
+
+- **Push** (`driver_sync.push_driver_to_klikpos`): called right after a `/register` signup, and
+  again from the bot's own Telegram approve/reject buttons (`cb_reg_approve`/`cb_reg_reject`) -
+  creates/updates the KlikPOS `Delivery Driver` record and pushes any status change immediately.
+  Best-effort throughout: a KlikPOS-side failure is logged, never raised, so the bot's own
+  registration/approval flow keeps working standalone exactly as before regardless of KlikPOS's
+  reachability.
+- **Poll** (`driver_sync.poll_klikpos_status`, background loop, default 60s interval): the
+  mechanism that makes this phase's "Frappe is master" decision actually true for the bot -
+  fetches current KlikPOS driver statuses via `list_drivers`, and for any driver whose status
+  differs from the bot's local Postgres `Driver.status`, pulls it down (updates local Postgres +
+  the in-memory `allowed_drivers` set) and DMs the driver so they know to (re)try `/start`. This
+  is what makes an approval made *from* KlikPOS's `/drivers` page actually unblock the driver in
+  the bot - previously nothing propagated that decision back at all.
+- Matching is by `telegram_user_id` for the poll direction (the field the poll needs to act on
+  locally anyway) and `bot_driver_id` (the bot's own Postgres `Driver.id` UUID) for the push
+  direction, both handled by `sync_driver_from_bot`'s existing bot_driver_id-then-telegram_user_id
+  match order (Todo 026) - no KlikPOS-side changes were needed for any of this, only the bot side.
+
+Verified end-to-end against the real KlikPOS site (not just logic-tested): registered a driver
+locally → pushed to KlikPOS as `Pending` → approved *from the KlikPOS side* (`set_driver_status`
+called directly, bypassing the bot entirely, simulating admin action in `/drivers`) → poll picked
+it up → local Postgres status flipped to `ACTIVE`, driver added to `allowed_drivers`, notification
+DM sent. Repeated for the reject/suspend path (`REJECTED`, removed from `allowed_drivers`,
+different notification text). All test data cleaned up on both sides after each run.
