@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
+  FilePlus2,
   Loader2,
   MapPin,
   RefreshCcw,
@@ -20,6 +21,8 @@ import {
   rematchDeliveryReport,
   type DeliveryReport,
 } from "../services/delivery";
+import CreateInvoiceFromReportModal from "../components/delivery/CreateInvoiceFromReportModal";
+import DeliveryPhotoStrip from "../components/delivery/DeliveryPhotoStrip";
 import { getOutstandingSalesInvoices, type OutstandingSalesInvoice } from "../services/paymentEntry";
 import { formatCurrencyWithSymbol } from "../utils/currency";
 
@@ -171,6 +174,7 @@ interface ReportCardProps {
 function ReportCard({ report, onChanged }: ReportCardProps) {
   const navigate = useNavigate();
   const [showRematch, setShowRematch] = useState(false);
+  const [showCreateInvoice, setShowCreateInvoice] = useState(false);
   const [amountCollected, setAmountCollected] = useState(String(report.amount_collected || ""));
   const [markPaid, setMarkPaid] = useState(report.payment_status !== "Unpaid");
   const [isConfirming, setIsConfirming] = useState(false);
@@ -178,6 +182,9 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
 
   const isResolved = report.reconciliation_status === "Confirmed" || report.reconciliation_status === "Rejected";
   const canConfirm = Boolean(report.matched_invoice) && !isResolved;
+  // Only offer a backfill when there's genuinely nothing to match against yet - a Suggested row
+  // already has a real invoice, so Create Invoice would be redundant (and confusing) there.
+  const canCreateInvoice = !report.matched_invoice && !isResolved;
 
   const handleConfirm = async () => {
     if (report.payment_status === "Partial" && markPaid) {
@@ -263,6 +270,11 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
             {" · "}
             {report.completion_status} delivery, {report.payment_status} payment
           </div>
+          {(report.photos || report.voice_note) && (
+            <div className="mt-2">
+              <DeliveryPhotoStrip photos={report.photos} voiceNote={report.voice_note} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -332,6 +344,17 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
           )}
 
           <div className="ml-auto flex items-center gap-2">
+            {canCreateInvoice && (
+              <button
+                type="button"
+                onClick={() => setShowCreateInvoice(true)}
+                title="No matching invoice exists yet - create one from what's on the paper slip"
+                className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+              >
+                <FilePlus2 size={14} />
+                Create Invoice
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setShowRematch((v) => !v)}
@@ -360,6 +383,17 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
             </button>
           </div>
         </div>
+      )}
+
+      {showCreateInvoice && (
+        <CreateInvoiceFromReportModal
+          report={report}
+          onClose={() => setShowCreateInvoice(false)}
+          onCreated={() => {
+            setShowCreateInvoice(false);
+            onChanged();
+          }}
+        />
       )}
     </div>
   );

@@ -21,7 +21,10 @@ export interface DeliveryReport {
   delivery_timestamp?: string;
   gps_latitude?: number;
   gps_longitude?: number;
-  photos?: string[] | null;
+  /** Raw JSON-encoded array of Frappe private-file URLs (e.g. '["/private/files/x.jpg"]'), NOT a
+   * parsed array - frappe.get_all() returns JSON fieldtype columns as their raw string value.
+   * Use parseDeliveryPhotos() rather than reading this directly. */
+  photos?: string | null;
   voice_note?: string;
   matched_invoice?: string | null;
   amount_collected?: number;
@@ -125,6 +128,19 @@ export async function rejectDeliveryMatch(
   });
 }
 
+/** Parses DeliveryReport.photos (a raw JSON string, or already an array if a caller constructed
+ * one in memory - e.g. realtime updates) into a plain string[]. Never throws. */
+export function parseDeliveryPhotos(photos?: string | string[] | null): string[] {
+  if (!photos) return [];
+  if (Array.isArray(photos)) return photos;
+  try {
+    const parsed = JSON.parse(photos);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function rematchDeliveryReport(
   reportName: string,
   invoiceName: string
@@ -132,6 +148,43 @@ export async function rematchDeliveryReport(
   return postJson("klik_pos.api.delivery.rematch_delivery_report", {
     report_name: reportName,
     invoice_name: invoiceName,
+  });
+}
+
+export interface BackfillInvoiceItem {
+  item_code: string;
+  quantity: number;
+  price: number;
+}
+
+/** Payload for create_invoice_from_delivery_report (Todo 038) - a paper-transition backfill, so
+ * only what a fast table entry needs: customer, items, and an optional posting_date override
+ * (defaults server-side to today if omitted). Not the full POS checkout payload shape. */
+export interface BackfillInvoiceData {
+  customer: { id: string };
+  items: BackfillInvoiceItem[];
+  posting_date?: string;
+}
+
+export async function createInvoiceFromDeliveryReport(
+  reportName: string,
+  invoiceData: BackfillInvoiceData,
+  paymentStatus: PaymentStatus,
+  amountCollected?: number,
+  dueDate?: string
+): Promise<{
+  success: boolean;
+  invoice_name?: string;
+  reconciliation_status?: string;
+  payment_entry?: string | null;
+  message?: string;
+}> {
+  return postJson("klik_pos.api.delivery.create_invoice_from_delivery_report", {
+    report_name: reportName,
+    invoice_data: invoiceData,
+    payment_status: paymentStatus,
+    amount_collected: amountCollected,
+    due_date: dueDate,
   });
 }
 

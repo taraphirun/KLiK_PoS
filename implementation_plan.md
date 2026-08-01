@@ -33,6 +33,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 12 — Deliveries & Conflicts UI | 11 | 029–030 | ❌ Dropped (2026-07-31, see phases/phase-11.md) |
 | 13 — Live Delivery Map | 12 | 031–032 | ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked or given a real Google Maps API key, see Todo 032) |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | 🔷 In progress (033–035 done + verified live against KlikPOS, in `hd-delivery-telegram`; 036 - actual cutover/decommission - deliberately deferred, see phase-13.md) |
+| 15 — Backfill Invoice Creation from Reconciliation | 14 | 038–040 | ✅ Done (verified live end-to-end incl. browser, see phases/phase-14.md) |
 
 **Next up:** Phases 9, 10, 12, and (mostly) 13 are implemented — user should browser-verify
 `/deliveries/reconcile`, `/drivers`, and `/deliveries/map` (once a Google Maps API key is set on
@@ -367,6 +368,22 @@ Detailed spec: [phases/phase-12.md](file:///home/phirun/dev/KLiK_PoS/phases/phas
 Detailed spec: [phases/phase-13.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-13.md) (Todos 033–036). The bot becomes **offline-first**: every delivery is written to a **local SQLite** outbox immediately (so drivers keep working when ERPNext is down), then a **sync worker** forwards `Not Synced` rows to the KlikPOS ingestion API (idempotent on `bot_delivery_id`) and uploads photos/voice to Frappe File. The bot UI is reduced to a per-delivery **Synced / Not Synced** status (plus a new `/syncstatus` admin command). Final step retires NestJS + Postgres + Redis/BullMQ + MinIO + ocr-service - **not attempted this pass** (operationally risky, needs a monitored parallel-run window; the legacy Postgres dual-write is kept running alongside the new KlikPOS sync for now). These todos live in the bot repo (`hd-delivery-telegram`); the KlikPOS-side contract is the Module 10 APIs plus two new endpoints added for Todo 035 (`upload_delivery_file`, `attach_delivery_media`). Full round trip (SQLite → sync worker → real KlikPOS Delivery Report with attached photo + voice note) verified end-to-end; two real bugs found and fixed in the process (a MySQL datetime-format rejection, and Frappe's stock file-upload endpoint excluding audio formats for non-Desk-access users) - see Todo 034/035 notes.
 
 > **Offline-first invariant**: the bot never blocks a driver. Local SQLite is the durable capture store; KlikPOS is authoritative once synced. Idempotency on `bot_delivery_id` (Module 10, Todo 021) is what makes retry-after-downtime safe.
+
+### Module 15: Backfill Invoice Creation from Reconciliation — **DONE (2026-08-01)**
+
+Detailed spec: [phases/phase-14.md](file:///home/phirun/dev/KLiK_PoS/phases/phase-14.md) (Todos 038–040). During the paper → ERPNext transition, a delivery can be reported for an invoice that was never entered into KlikPOS — `Delivery Report` has no Sales Invoice to match against and no matching one can be created via the normal reconciliation flow (`confirm_delivery_match` requires the invoice to already exist). Adds a "Create Invoice" action on Unmatched rows: a lightweight modal (reused `CustomerSearchSection` + a simple item table, not the full POS cart UI) collects what's on the paper slip, creates+submits the Sales Invoice via the existing `queue_sales_invoice` engine unchanged (tax/stock/payment logic not reimplemented), then links it via the existing `confirm_delivery_match`. Decided with the user (2026-08-01): `posting_date` defaults to the Delivery Report's `delivery_timestamp` (editable) rather than today, stock is deducted normally (no bypass), inline customer creation is allowed (reuses `AddCustomerModal`), and an active POS Opening Entry is still required (keeps pricing/tax/warehouse resolution POS-Profile-bound, no new session-less code path).
+
+Todo 039 added a Payment Status (Paid/Partial/Unpaid) + Due Date choice to the modal, since an
+invoice created with no payment info always left the full amount outstanding and correctly (but
+unhelpfully) tripped ERPNext's credit-limit check on every backfill - `queue_sales_invoice` gained
+an opt-in `pay_in_full` flag that bakes payment into the same submission (a Payment Entry posted
+afterward can't help, since the credit check runs during that same `on_submit`).
+
+Todo 040 added a delivery-photo viewer (thumbnail strip + `yet-another-react-lightbox` zoomable
+lightbox, pinch/wheel/drag) - staff need to see what was actually delivered to enter the right
+items, which nothing in KlikPOS showed before this. Also fixed a real latent bug found along the
+way: `Delivery Report.photos` comes back from the list API as a raw JSON string, not a parsed
+array - the frontend type was simply wrong and nothing had rendered the field before to notice.
 
 ---
 

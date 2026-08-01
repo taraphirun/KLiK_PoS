@@ -7,7 +7,7 @@ from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 from erpnext.stock.get_item_details import get_item_details
 from frappe import _
 from frappe.exceptions import ValidationError
-from frappe.utils import cint, flt, nowdate
+from frappe.utils import cint, flt, get_datetime, nowdate
 
 
 import erpnext.accounts.party
@@ -1285,6 +1285,9 @@ def queue_sales_invoice(data):
 		if not data:
 			frappe.throw("No data provided for invoice creation")
 
+		if isinstance(data, str):
+			data = json.loads(data)
+
 		(
 			customer,
 			items,
@@ -1335,7 +1338,29 @@ def queue_sales_invoice(data):
 			additional_discount_amount=additional_discount_amount,
 			additional_discount_percentage=additional_discount_percentage,
 			apply_discount_on=apply_discount_on,
+			posting_date=data.get("posting_date"),
 		)
+
+		if data.get("pay_in_full"):
+			# Opt-in, never sent by normal POS checkout. Lets a caller settle an invoice in full at
+			# submission time without having to pre-compute the tax-inclusive grand_total itself
+			# (e.g. Delivery Reconciliation's backfill flow, Todo 038/039 - a quick item-table entry
+			# with no live tax preview). doc.grand_total is only known once build_sales_invoice_doc
+			# has run calculate_taxes_and_totals(), which is why this happens here and not earlier.
+			amount_paid = flt(doc.grand_total)
+			# _set_pos_profile_fields (inside build_sales_invoice_doc, already run) decided is_pos
+			# from amount_paid as it stood BEFORE this override - which was 0, since the whole point
+			# here is not knowing the amount in advance. A non-POS invoice always submits with
+			# paid_amount=0 regardless of what's assigned below (ERPNext only trusts the `payments`
+			# child table / paid_amount for is_pos=1 invoices), so is_pos has to be corrected too,
+			# not just paid_amount/payments.
+			doc.is_pos = 1
+			if doc.payments:
+				doc.payments[0].amount = amount_paid
+			else:
+				default_mode = _get_default_payment_mode()
+				if default_mode:
+					doc.append("payments", {"mode_of_payment": default_mode, "amount": amount_paid})
 
 		validate_required_salesperson(doc)
 
@@ -1904,6 +1929,7 @@ def build_sales_invoice_doc(
 	additional_discount_amount=0.0,
 	additional_discount_percentage=0.0,
 	apply_discount_on="Grand Total",
+	posting_date=None,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -1942,7 +1968,7 @@ def build_sales_invoice_doc(
 	_validate_product_bundle_components(items, pos_profile)
 
 	# Set posting details
-	_set_posting_fields(doc)
+	_set_posting_fields(doc, posting_date)
 
 	# Set POS opening entry
 	_set_pos_opening_entry(doc)
@@ -2526,10 +2552,20 @@ def _check_customer_type_for_pos(customer):
 	return 1 if (customer_doc.customer_type or "").strip().lower() == "individual" else 0
 
 
-def _set_posting_fields(doc):
-	"""Set posting date, time and related fields."""
-	doc.posting_date = frappe.utils.nowdate()
-	doc.posting_time = frappe.utils.nowtime()
+def _set_posting_fields(doc, posting_date=None):
+	"""Set posting date, time and related fields.
+
+	posting_date, when given, backdates the invoice (e.g. a paper-transition backfill created from
+	Delivery Reconciliation - Todo 038 - where the delivery already happened before ERPNext had a
+	record of it). Normal POS checkout never passes this, so it keeps defaulting to now.
+	"""
+	if posting_date:
+		dt = get_datetime(posting_date)
+		doc.posting_date = dt.date()
+		doc.posting_time = dt.time()
+	else:
+		doc.posting_date = frappe.utils.nowdate()
+		doc.posting_time = frappe.utils.nowtime()
 	doc.set_posting_time = 1
 
 

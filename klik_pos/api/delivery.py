@@ -6,7 +6,7 @@ import frappe
 from frappe.utils import add_days, flt, get_datetime, nowdate
 from frappe.utils.file_manager import save_file
 
-from klik_pos.api.sales_invoice import create_payment_entry
+from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment_entry, queue_sales_invoice
 
 # completion_status (Delivery Report) -> custom_delivery_status (Sales Invoice, Todo 020).
 DELIVERY_STATUS_MAP = {"Full": "Delivered", "Partial": "Partially Delivered"}
@@ -737,4 +737,133 @@ def attach_delivery_media(report_name, photo_urls=None, voice_url=None):
         return {"success": False, "message": str(e)}
     except Exception as e:
         frappe.log_error(title="Delivery Report media attach failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def create_invoice_from_delivery_report(
+    report_name, invoice_data, payment_status=None, amount_collected=None, due_date=None
+):
+    """Backfill a missing Sales Invoice directly from an Unmatched Delivery Report (Module 15 /
+    Todo 038/039) - for the paper -> ERPNext transition, where a delivery was reported but the
+    invoice itself was never entered into KlikPOS, so there's nothing for the normal
+    reconciliation flow to match against (confirm_delivery_match requires the invoice to already
+    exist).
+
+    invoice_data is the base payload queue_sales_invoice already accepts (customer, items,
+    optional posting_date) - payment shaping is layered on here from payment_status rather than
+    left to the caller, because getting it wrong trips ERPNext's own credit-limit check in
+    confusing ways (see below).
+
+    payment_status ("Paid" / "Partial" / "Unpaid", Delivery Report's own enum) decides how the
+    invoice is paid, and is written onto the Delivery Report too so the record reflects what staff
+    actually declared at backfill time, not whatever was originally reported (Todo 039):
+      - "Paid": invoice_data["pay_in_full"] = True. ERPNext's credit-limit check runs on submit
+        AFTER this invoice's own GL entries post (see SalesInvoice.on_submit), so it sees this
+        invoice's own outstanding_amount - baking full payment into the *same submission* (via
+        queue_sales_invoice's pay_in_full support) is what keeps a fully-paid backfill from
+        tripping the check, not a Payment Entry posted afterward (which would still leave this
+        invoice's own outstanding at its full grand_total at submit time).
+      - "Partial": needs amount_collected (>0) and a configured default payment mode (POS Payment
+        Method on the active POS Profile) - same reasoning, baked into the submission so the
+        credit check sees only the genuinely remaining outstanding.
+      - "Unpaid": standard is_credit_sale path, requires due_date - full grand_total stays
+        outstanding, so the credit-limit check applies in full. This is intentional, not a gap:
+        an unpaid backfill is real, uncapped credit exposure exactly like any other credit sale.
+    due_date is required for "Unpaid" (ERPNext requires it for any credit sale) and optional for
+    "Partial" (defaults to today, same as normal checkout); not applicable to "Paid".
+
+    Background submission is forced off: confirm_delivery_match requires a submitted
+    (docstatus=1) invoice, which only queue_sales_invoice's synchronous path guarantees
+    immediately - a background-queued invoice would still be a Draft at this point.
+
+    confirm_delivery_match is always called with mark_paid=False: payment (if any) was already
+    baked into the invoice's own submission above via pay_in_full/amountPaid, so a second Payment
+    Entry from confirm_delivery_match's own payment-posting path would double it up. This means
+    the response's payment_entry is always None here even when payment_status is Paid/Partial -
+    the paid trail lives on the invoice's own payments table, not a separate Payment Entry.
+    """
+    try:
+        report = frappe.get_doc("Delivery Report", report_name)
+
+        if report.reconciliation_status == "Confirmed":
+            frappe.throw(
+                "Delivery Report is already confirmed against an invoice - use re-match instead"
+            )
+
+        if isinstance(invoice_data, str):
+            invoice_data = json.loads(invoice_data)
+        invoice_data = dict(invoice_data or {})
+        invoice_data["enable_background_submission"] = False
+        # Without businessType, _determine_is_pos defaults to is_pos=0 - a non-POS invoice, where
+        # the `payments` child table (what pay_in_full/amountPaid below rely on to actually record
+        # payment at submission time) isn't the operative paid-amount source at all, silently
+        # leaving the invoice looking unpaid regardless of payment_status. B2C matches how this
+        # app's normal walk-in checkout already behaves; only defaulted, never overrides a caller.
+        invoice_data.setdefault("businessType", "B2C")
+
+        if payment_status:
+            if payment_status not in ALLOWED_PAYMENT_STATUSES:
+                frappe.throw(f"Invalid payment_status '{payment_status}'")
+
+            report.payment_status = payment_status
+
+            if payment_status == "Paid":
+                invoice_data["pay_in_full"] = True
+
+            elif payment_status == "Partial":
+                amount_collected = flt(amount_collected)
+                if amount_collected <= 0:
+                    frappe.throw("amount_collected must be set (> 0) for a Partial payment status")
+                default_mode = _get_default_payment_mode()
+                if not default_mode:
+                    frappe.throw(
+                        "No default payment mode is configured on this POS Profile - add one "
+                        "before recording a Partial payment here"
+                    )
+                report.amount_collected = amount_collected
+                invoice_data["isCreditSale"] = False
+                invoice_data["amountPaid"] = amount_collected
+                invoice_data["paymentMethods"] = [{"method": default_mode, "amount": amount_collected}]
+                if due_date:
+                    invoice_data["dueDate"] = due_date
+
+            else:  # Unpaid
+                if not due_date:
+                    frappe.throw("due_date is required when payment_status is Unpaid")
+                invoice_data["isCreditSale"] = True
+                invoice_data["dueDate"] = due_date
+
+            report.save(ignore_permissions=True)
+
+        invoice_result = queue_sales_invoice(invoice_data)
+        if not invoice_result.get("success"):
+            return invoice_result
+
+        invoice_name = invoice_result.get("invoice_name")
+        confirm_result = confirm_delivery_match(report.name, invoice_name=invoice_name, mark_paid=False)
+        if not confirm_result.get("success"):
+            return {
+                "success": False,
+                "message": (
+                    f"Invoice {invoice_name} was created but could not be linked to the Delivery "
+                    f"Report: {confirm_result.get('message')}. The invoice was not discarded - "
+                    f"use re-match to link it manually."
+                ),
+                "invoice_name": invoice_name,
+            }
+
+        return {
+            "success": True,
+            "invoice_name": invoice_name,
+            "invoice": invoice_result.get("invoice"),
+            "delivery_report": confirm_result.get("delivery_report"),
+            "reconciliation_status": confirm_result.get("reconciliation_status"),
+            "payment_entry": confirm_result.get("payment_entry"),
+        }
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Create invoice from Delivery Report failed")
         return {"success": False, "message": str(e)}
