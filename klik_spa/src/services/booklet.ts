@@ -36,19 +36,41 @@ export type DailyPageStatus =
 export interface DailyPageRow {
   number: number;
   status: DailyPageStatus;
-  booklet?: string | null;
-  booklet_number?: string | null;
   invoice?: string | null;
   delivery_report?: string | null;
   void_reason?: string | null;
 }
 
+/** One booklet's worth of the day's checklist (Module 17 follow-up, 2026-08-02) - touched numbers
+ * are clustered by their real-or-implied booklet so a day spanning two far-apart invoice numbers
+ * doesn't synthesize a huge fake gap between unrelated booklets. `start_number`/`end_number` is
+ * the interior span actually touched within this booklet today; `bucket_start`/`bucket_end` is
+ * the booklet's full range (registered, or implied from pages_per_booklet if not yet registered)
+ * - used for the "Register this booklet" shortcut. */
+export interface DailyGroup {
+  booklet?: string | null;
+  booklet_number: string;
+  is_registered: boolean;
+  start_number: number;
+  end_number: number;
+  bucket_start: number;
+  bucket_end: number;
+  rows: DailyPageRow[];
+}
+
 export type ClosingStatus = "Closed" | "Reopened" | "Needs Re-review";
+
+export interface ClosingGroupSummary {
+  booklet?: string | null;
+  booklet_number: string;
+  is_registered: boolean;
+  start_number: number;
+  end_number: number;
+}
 
 export interface DailyClosing {
   status: ClosingStatus;
-  start_number: number;
-  end_number: number;
+  groups_summary: ClosingGroupSummary[];
   delivered_count: number;
   partially_delivered_count: number;
   self_pickup_count: number;
@@ -74,9 +96,7 @@ export interface UnreferencedInvoice {
 export interface DailyReconciliation {
   success: boolean;
   date: string;
-  start_number: number | null;
-  end_number: number | null;
-  data: DailyPageRow[];
+  groups: DailyGroup[];
   summary: {
     delivered_count: number;
     partially_delivered_count: number;

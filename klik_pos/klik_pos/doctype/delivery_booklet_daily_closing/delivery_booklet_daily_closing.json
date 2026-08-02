@@ -8,9 +8,7 @@
  "field_order": [
   "closing_date",
   "status",
-  "column_break_dc_1",
-  "start_number",
-  "end_number",
+  "groups_summary",
   "section_break_summary",
   "delivered_count",
   "partially_delivered_count",
@@ -48,20 +46,10 @@
    "options": "Closed\nReopened\nNeeds Re-review"
   },
   {
-   "fieldname": "column_break_dc_1",
-   "fieldtype": "Column Break"
-  },
-  {
-   "description": "Lowest invoice/page number touched on this date, snapshotted at close time.",
-   "fieldname": "start_number",
-   "fieldtype": "Int",
-   "label": "Start Number"
-  },
-  {
-   "description": "Highest invoice/page number touched on this date, snapshotted at close time.",
-   "fieldname": "end_number",
-   "fieldtype": "Int",
-   "label": "End Number"
+   "description": "Snapshot at close time of every booklet group touched this date - [{booklet, booklet_number, is_registered, start_number, end_number}, ...] (Module 17 follow-up, 2026-08-02: a single day can span multiple disjoint booklets, so one start/end pair is no longer enough - see _classify_daily_checklist's grouping logic in booklet.py).",
+   "fieldname": "groups_summary",
+   "fieldtype": "JSON",
+   "label": "Groups Summary"
   },
   {
    "fieldname": "section_break_summary",

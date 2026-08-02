@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
+  BookOpen,
   CalendarCheck,
   CheckCircle2,
   FilePlus2,
@@ -31,6 +32,7 @@ import {
   reopenDailyReconciliation,
   unlinkInvoicePage,
   unmarkPageVoid,
+  type DailyGroup,
   type DailyPageRow,
   type DailyPageStatus,
   type DailyReconciliation,
@@ -62,7 +64,6 @@ const CLOSABLE: DailyPageStatus[] = ["Void", "Delivered", "Partially Delivered",
 
 interface RowActionsProps {
   row: DailyPageRow;
-  date: string;
   onChanged: () => void;
   onCreateInvoiceForPage: (row: DailyPageRow) => void;
   onCreateInvoiceFromReport: (row: DailyPageRow) => void;
@@ -70,7 +71,7 @@ interface RowActionsProps {
 
 type ConfirmKind = "self-pickup" | "delivered" | "unlink" | "void" | "unvoid";
 
-function RowActions({ row, date, onChanged, onCreateInvoiceForPage, onCreateInvoiceFromReport }: RowActionsProps) {
+function RowActions({ row, onChanged, onCreateInvoiceForPage, onCreateInvoiceFromReport }: RowActionsProps) {
   const [isBusy, setIsBusy] = useState(false);
   const [confirmKind, setConfirmKind] = useState<ConfirmKind | null>(null);
 
@@ -458,6 +459,113 @@ function UnreferencedInvoiceRowActions({ invoice, unresolvedNumbers, date, onCha
   );
 }
 
+interface BookletGroupCardProps {
+  group: DailyGroup;
+  onChanged: () => void;
+  onCreateInvoiceForPage: (row: DailyPageRow) => void;
+  onCreateInvoiceFromReport: (row: DailyPageRow) => void;
+}
+
+/** One booklet's worth of the checklist (Module 17 follow-up, 2026-08-02) - the whole page used to
+ * show one flat table spanning min-to-max across the entire day, which synthesized a huge fake gap
+ * whenever two unrelated invoice numbers landed far apart (e.g. 1222 and 2222 on the same day).
+ * Now grouped by booklet, each with its own interior span. */
+function BookletGroupCard({ group, onChanged, onCreateInvoiceForPage, onCreateInvoiceFromReport }: BookletGroupCardProps) {
+  const navigate = useNavigate();
+
+  const handleRegister = () => {
+    navigate("/deliveries/booklets", {
+      state: {
+        bookletNumber: group.booklet_number,
+        startNumber: group.bucket_start,
+        endNumber: group.bucket_end,
+      },
+    });
+  };
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-gray-50 px-4 py-2 dark:border-gray-700 dark:bg-gray-900/50">
+        <div className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+          <BookOpen size={14} className="text-gray-400" />
+          Booklet #{group.booklet_number}
+          <span className="font-normal text-gray-400">
+            (pages {group.start_number}-{group.end_number}
+            {(group.start_number !== group.bucket_start || group.end_number !== group.bucket_end) &&
+              ` of booklet range ${group.bucket_start}-${group.bucket_end}`}
+            )
+          </span>
+          {!group.is_registered && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+              not yet registered
+            </span>
+          )}
+        </div>
+        {!group.is_registered && (
+          <button
+            type="button"
+            onClick={handleRegister}
+            className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            <BookOpen size={12} />
+            Register this booklet
+          </button>
+        )}
+      </div>
+      <table className="w-full text-sm">
+        <thead className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400">
+          <tr>
+            <th className="px-4 py-2 font-medium">#</th>
+            <th className="px-4 py-2 font-medium">Status</th>
+            <th className="px-4 py-2 font-medium">Reference</th>
+            <th className="px-4 py-2 font-medium">Action</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100 bg-white dark:divide-gray-700 dark:bg-gray-800">
+          {group.rows.map((row) => (
+            <tr key={row.number}>
+              <td className="px-4 py-2 font-medium text-gray-900 dark:text-white">{row.number}</td>
+              <td className="px-4 py-2">
+                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(row.status)}`}>
+                  {row.status}
+                </span>
+                {row.status === "Void" && row.void_reason && (
+                  <div className="mt-0.5 text-xs text-gray-400">{row.void_reason}</div>
+                )}
+              </td>
+              <td className="px-4 py-2">
+                {row.invoice ? (
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/invoice/${row.invoice}`)}
+                    className="text-beveren-600 hover:underline dark:text-beveren-400"
+                  >
+                    {row.invoice}
+                  </button>
+                ) : row.delivery_report ? (
+                  <span className="inline-flex items-center gap-1 text-gray-500 dark:text-gray-400">
+                    <Truck size={12} /> {row.delivery_report}
+                  </span>
+                ) : (
+                  <span className="text-gray-400">—</span>
+                )}
+              </td>
+              <td className="px-4 py-2">
+                <RowActions
+                  row={row}
+                  onChanged={onChanged}
+                  onCreateInvoiceForPage={onCreateInvoiceForPage}
+                  onCreateInvoiceFromReport={onCreateInvoiceFromReport}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function DailyReconciliationPage() {
   const navigate = useNavigate();
   const { userInfo } = useUserInfo();
@@ -493,9 +601,9 @@ export default function DailyReconciliationPage() {
     fetchData();
   }, [fetchData]);
 
-  const rows = result?.data || [];
-  const blocking = rows.filter((r) => !CLOSABLE.includes(r.status));
-  const unresolvedNumbers = rows.filter((r) => r.status === "Unresolved").map((r) => r.number);
+  const groups = result?.groups || [];
+  const allRows = groups.flatMap((g) => g.rows);
+  const unresolvedNumbers = allRows.filter((r) => r.status === "Unresolved").map((r) => r.number);
   const closing = result?.closing;
   const isClosed = closing?.status === "Closed";
   const needsReview = closing?.status === "Needs Re-review";
@@ -546,8 +654,10 @@ export default function DailyReconciliationPage() {
               <div>
                 <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Daily Reconciliation</h1>
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  {result?.start_number
-                    ? `Pages ${result.start_number}-${result.end_number}`
+                  {groups.length > 0
+                    ? `${groups.length} booklet group${groups.length === 1 ? "" : "s"}: ${groups
+                        .map((g) => `#${g.booklet_number} (${g.start_number}-${g.end_number})`)
+                        .join(", ")}`
                     : "Nothing touched on this date yet"}
                 </p>
               </div>
@@ -566,7 +676,7 @@ export default function DailyReconciliationPage() {
               ) : (
                 <button
                   type="button"
-                  disabled={isClosing || rows.length === 0}
+                  disabled={isClosing || groups.length === 0}
                   onClick={handleClose}
                   className="inline-flex items-center gap-1 rounded-lg bg-beveren-600 px-3 py-2 text-sm font-medium text-white hover:bg-beveren-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                 >
@@ -625,68 +735,20 @@ export default function DailyReconciliationPage() {
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
             {error}
           </div>
-        ) : rows.length === 0 ? (
+        ) : groups.length === 0 ? (
           <div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
             No invoices or delivery reports touched {date}.
           </div>
         ) : (
-          <div className="overflow-hidden rounded-lg border border-gray-200 dark:border-gray-700">
-            <table className="w-full text-sm">
-              <thead className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400">
-                <tr>
-                  <th className="px-4 py-2 font-medium">#</th>
-                  <th className="px-4 py-2 font-medium">Status</th>
-                  <th className="px-4 py-2 font-medium">Booklet</th>
-                  <th className="px-4 py-2 font-medium">Reference</th>
-                  <th className="px-4 py-2 font-medium">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 bg-white dark:divide-gray-700 dark:bg-gray-800">
-                {rows.map((row) => (
-                  <tr key={row.number}>
-                    <td className="px-4 py-2 font-medium text-gray-900 dark:text-white">{row.number}</td>
-                    <td className="px-4 py-2">
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(row.status)}`}>
-                        {row.status}
-                      </span>
-                      {row.status === "Void" && row.void_reason && (
-                        <div className="mt-0.5 text-xs text-gray-400">{row.void_reason}</div>
-                      )}
-                    </td>
-                    <td className="px-4 py-2 text-gray-500 dark:text-gray-400">
-                      {row.booklet_number ? `#${row.booklet_number}` : "—"}
-                    </td>
-                    <td className="px-4 py-2">
-                      {row.invoice ? (
-                        <button
-                          type="button"
-                          onClick={() => navigate(`/invoice/${row.invoice}`)}
-                          className="text-beveren-600 hover:underline dark:text-beveren-400"
-                        >
-                          {row.invoice}
-                        </button>
-                      ) : row.delivery_report ? (
-                        <span className="inline-flex items-center gap-1 text-gray-500 dark:text-gray-400">
-                          <Truck size={12} /> {row.delivery_report}
-                        </span>
-                      ) : (
-                        <span className="text-gray-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-2">
-                      <RowActions
-                        row={row}
-                        date={date}
-                        onChanged={fetchData}
-                        onCreateInvoiceForPage={setPageModalRow}
-                        onCreateInvoiceFromReport={setReportModalRow}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          groups.map((group) => (
+            <BookletGroupCard
+              key={group.booklet || group.booklet_number}
+              group={group}
+              onChanged={fetchData}
+              onCreateInvoiceForPage={setPageModalRow}
+              onCreateInvoiceFromReport={setReportModalRow}
+            />
+          ))
         )}
 
         {Boolean(result?.unreferenced_invoices?.length) && (

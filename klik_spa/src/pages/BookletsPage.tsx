@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import {
   BookOpen,
   CheckCircle2,
@@ -507,15 +508,41 @@ function BookletRow({ booklet, onChanged }: { booklet: DeliveryBooklet; onChange
   );
 }
 
+interface BookletPrefillState {
+  bookletNumber?: string;
+  startNumber?: number;
+  endNumber?: number;
+}
+
 export default function BookletsPage() {
+  const location = useLocation();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
   const [booklets, setBooklets] = useState<DeliveryBooklet[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [formInitial, setFormInitial] = useState<BookletFormState>(EMPTY_FORM);
   const [showSettings, setShowSettings] = useState(false);
   const [settings, setSettings] = useState<BookletSettings | null>(null);
+
+  // Arrived via the Daily Reconciliation page's "Register this booklet" shortcut (Module 17
+  // follow-up, 2026-08-02) - prefills the New Booklet form with the computed range rather than
+  // making staff retype it. Only reads location.state once on mount.
+  useEffect(() => {
+    const prefill = location.state as BookletPrefillState | undefined;
+    if (prefill?.bookletNumber) {
+      setFormInitial({
+        booklet_number: prefill.bookletNumber,
+        start_number: String(prefill.startNumber ?? ""),
+        end_number: String(prefill.endNumber ?? ""),
+        is_vip: false,
+        customer: null,
+      });
+      setShowForm(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const fetchBooklets = useCallback(async () => {
     setIsLoading(true);
@@ -565,7 +592,10 @@ export default function BookletsPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setShowForm(true)}
+                onClick={() => {
+                  setFormInitial(EMPTY_FORM);
+                  setShowForm(true);
+                }}
                 className="inline-flex items-center gap-1 rounded-lg bg-beveren-600 px-3 py-2 text-sm font-medium text-white hover:bg-beveren-700"
               >
                 <Plus size={16} />
@@ -629,7 +659,7 @@ export default function BookletsPage() {
 
       {showForm && (
         <BookletFormDialog
-          initial={EMPTY_FORM}
+          initial={formInitial}
           pagesPerBooklet={settings?.pages_per_booklet || 50}
           onCancel={() => setShowForm(false)}
           onSaved={() => {

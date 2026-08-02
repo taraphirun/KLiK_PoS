@@ -1,4 +1,5 @@
 import json
+import math
 import re
 
 import frappe
@@ -464,12 +465,88 @@ _SUMMARY_COUNT_FIELD = {
 }
 
 
+def _resolve_booklet_bucket(number, pages_per_booklet, registered_booklets):
+    """Which booklet a page number belongs to, for clustering (Module 17 follow-up, 2026-08-02) -
+    prompted by a real report of two invoices ~1000 apart on the same day producing ~1000 fake
+    "Unresolved" rows in between, because the old logic took one min/max across the whole day
+    regardless of booklet boundaries.
+
+    Prefers an actual registered Delivery Booklet (any status) covering the number. Falls back to
+    an *implied* bucket computed from pages_per_booklet - sequential integer booklet numbering,
+    page 1 of booklet 1 = page number 1 - validated live against this shop's real registered
+    booklets (#45 covers exactly 2201-2250 with pages_per_booklet=50, matching the formula
+    exactly), so a booklet doesn't need to be registered yet for its pages to cluster correctly.
+
+    Returns (key, booklet_name_or_None, booklet_number, is_registered, bucket_start, bucket_end).
+    """
+    for b in registered_booklets:
+        if b.start_number <= number <= b.end_number:
+            return b.name, b.name, b.booklet_number, True, b.start_number, b.end_number
+
+    idx = math.ceil(number / pages_per_booklet)
+    bucket_start = (idx - 1) * pages_per_booklet + 1
+    bucket_end = idx * pages_per_booklet
+    return f"__implied_{idx}", None, str(idx), False, bucket_start, bucket_end
+
+
+def _classify_number(n, invoice_by_number, report_by_number, void_by_number):
+    """Per-number classification - Void / Delivered / Partially Delivered / Self Pickup / Pending
+    Fulfillment / Reported-No-Invoice / Unresolved. Factored out of _classify_daily_checklist so
+    it's called once per number regardless of how numbers are grouped into booklets."""
+    invoice = invoice_by_number.get(n)
+    report = report_by_number.get(n)
+    void_entry = void_by_number.get(n)
+
+    resolved_delivery_status = None
+    if invoice:
+        resolved_delivery_status = invoice.custom_delivery_status
+    elif report and report.reconciliation_status == "Confirmed" and report.matched_invoice:
+        # Confirmed via the normal reconciliation flow (Module 10/15) but not discoverable via
+        # custom_invoice_ref above - e.g. an older backfilled invoice from before the ref-stamping
+        # fix existed. Falls back to a direct lookup rather than misreporting a fully resolved
+        # delivery as "Reported, No Invoice".
+        resolved_delivery_status = frappe.db.get_value(
+            "Sales Invoice", report.matched_invoice, "custom_delivery_status"
+        )
+        invoice = frappe._dict(name=report.matched_invoice)
+
+    if void_entry:
+        status = "Void"
+    elif resolved_delivery_status is not None:
+        status = (
+            resolved_delivery_status
+            if resolved_delivery_status in ("Delivered", "Partially Delivered", "Self Pickup")
+            else "Pending Fulfillment"
+        )
+    elif report:
+        status = "Reported, No Invoice"
+    else:
+        status = "Unresolved"
+
+    row = {
+        "number": n,
+        "status": status,
+        "invoice": invoice.name if invoice else None,
+        "delivery_report": report.name if report else None,
+        "void_reason": void_entry.reason if void_entry else None,
+    }
+    return status, row
+
+
 def _classify_daily_checklist(date):
     """Core of the daily reconciliation checklist - shared by get_daily_reconciliation (read) and
     close_daily_reconciliation (which needs the identical fresh computation to validate against).
 
-    Returns (rows, start_number, end_number, counts) - rows/start/end are None (counts all-zero)
-    if nothing was touched on this date at all (not an error, just an empty day).
+    Clusters every touched number by its (real-or-implied) booklet (see _resolve_booklet_bucket),
+    then computes the interior min/max *within each cluster separately* - not one min/max across
+    the whole day, which would span every gap between unrelated booklets (the bug this was
+    rewritten to fix, 2026-08-02). Most of an unfinished booklet is legitimately "not written yet,"
+    not a gap - same reasoning get_booklet_gaps already uses for its own interior-only definition.
+
+    Returns (groups, counts). Each group: booklet/booklet_number/is_registered/start_number/
+    end_number (interior span actually touched)/bucket_start/bucket_end (the booklet's full
+    range, registered or implied - for the "Register this booklet" UI shortcut)/rows. groups is
+    empty (counts all-zero) if nothing was touched on this date at all.
     """
     invoices = frappe.get_all(
         "Sales Invoice",
@@ -496,81 +573,70 @@ def _classify_daily_checklist(date):
             report_by_number[n] = r
 
     numbers_today = set(invoice_by_number) | set(report_by_number)
+    counts = {v: 0 for v in _SUMMARY_COUNT_FIELD.values()}
     if not numbers_today:
-        return [], None, None, {v: 0 for v in _SUMMARY_COUNT_FIELD.values()}
+        return [], counts
 
-    start_number, end_number = min(numbers_today), max(numbers_today)
-
-    booklets = frappe.get_all(
-        "Delivery Booklet",
-        filters={"start_number": ["<=", end_number], "end_number": [">=", start_number]},
-        fields=["name", "booklet_number", "start_number", "end_number"],
+    settings = get_booklet_settings()
+    pages_per_booklet = settings["pages_per_booklet"]
+    registered_booklets = frappe.get_all(
+        "Delivery Booklet", fields=["name", "booklet_number", "start_number", "end_number"]
     )
+
+    buckets = {}
+    for n in numbers_today:
+        key, booklet_name, booklet_number, is_registered, bucket_start, bucket_end = _resolve_booklet_bucket(
+            n, pages_per_booklet, registered_booklets
+        )
+        bucket = buckets.setdefault(
+            key,
+            {
+                "booklet": booklet_name,
+                "booklet_number": booklet_number,
+                "is_registered": is_registered,
+                "bucket_start": bucket_start,
+                "bucket_end": bucket_end,
+                "numbers": set(),
+            },
+        )
+        bucket["numbers"].add(n)
+
+    registered_names = [b["booklet"] for b in buckets.values() if b["booklet"]]
     void_rows = (
         frappe.get_all(
             "Delivery Booklet Void Entry",
-            filters={"parent": ["in", [b.name for b in booklets]]},
+            filters={"parent": ["in", registered_names]},
             fields=["parent", "page_number", "reason"],
         )
-        if booklets
+        if registered_names
         else []
     )
     void_by_number = {v.page_number: v for v in void_rows}
 
-    def _covering_booklet(n):
-        return next((b for b in booklets if b.start_number <= n <= b.end_number), None)
+    groups = []
+    for bucket in sorted(buckets.values(), key=lambda b: b["bucket_start"]):
+        start_number, end_number = min(bucket["numbers"]), max(bucket["numbers"])
+        rows = []
+        for n in range(start_number, end_number + 1):
+            status, row = _classify_number(n, invoice_by_number, report_by_number, void_by_number)
+            if status in _SUMMARY_COUNT_FIELD:
+                counts[_SUMMARY_COUNT_FIELD[status]] += 1
+            rows.append(row)
 
-    rows = []
-    counts = {v: 0 for v in _SUMMARY_COUNT_FIELD.values()}
-
-    for n in range(start_number, end_number + 1):
-        booklet = _covering_booklet(n)
-        invoice = invoice_by_number.get(n)
-        report = report_by_number.get(n)
-        void_entry = void_by_number.get(n)
-
-        resolved_delivery_status = None
-        if invoice:
-            resolved_delivery_status = invoice.custom_delivery_status
-        elif report and report.reconciliation_status == "Confirmed" and report.matched_invoice:
-            # Confirmed via the normal reconciliation flow (Module 10/15) but not discoverable via
-            # custom_invoice_ref above - e.g. an older backfilled invoice from before this ref-
-            # stamping fix existed. Falls back to a direct lookup rather than misreporting a fully
-            # resolved delivery as "Reported, No Invoice".
-            resolved_delivery_status = frappe.db.get_value(
-                "Sales Invoice", report.matched_invoice, "custom_delivery_status"
-            )
-            invoice = frappe._dict(name=report.matched_invoice)
-
-        if void_entry:
-            status = "Void"
-        elif resolved_delivery_status is not None:
-            status = (
-                resolved_delivery_status
-                if resolved_delivery_status in ("Delivered", "Partially Delivered", "Self Pickup")
-                else "Pending Fulfillment"
-            )
-        elif report:
-            status = "Reported, No Invoice"
-        else:
-            status = "Unresolved"
-
-        if status in _SUMMARY_COUNT_FIELD:
-            counts[_SUMMARY_COUNT_FIELD[status]] += 1
-
-        rows.append(
+        groups.append(
             {
-                "number": n,
-                "status": status,
-                "booklet": booklet.name if booklet else None,
-                "booklet_number": booklet.booklet_number if booklet else None,
-                "invoice": invoice.name if invoice else None,
-                "delivery_report": report.name if report else None,
-                "void_reason": void_entry.reason if void_entry else None,
+                "booklet": bucket["booklet"],
+                "booklet_number": bucket["booklet_number"],
+                "is_registered": bucket["is_registered"],
+                "start_number": start_number,
+                "end_number": end_number,
+                "bucket_start": bucket["bucket_start"],
+                "bucket_end": bucket["bucket_end"],
+                "rows": rows,
             }
         )
 
-    return rows, start_number, end_number, counts
+    return groups, counts
 
 
 def _get_unreferenced_invoices(date):
@@ -588,6 +654,25 @@ def _get_unreferenced_invoices(date):
     )
 
 
+def _flatten_rows(groups):
+    return [row for group in groups for row in group["rows"]]
+
+
+def _groups_summary(groups):
+    """Compact per-group snapshot for storage on Delivery Booklet Daily Closing and for the
+    drift comparison in get_daily_reconciliation's lazy re-review check."""
+    return [
+        {
+            "booklet": g["booklet"],
+            "booklet_number": g["booklet_number"],
+            "is_registered": g["is_registered"],
+            "start_number": g["start_number"],
+            "end_number": g["end_number"],
+        }
+        for g in groups
+    ]
+
+
 @frappe.whitelist()
 def get_daily_reconciliation(date=None):
     """End-of-day checklist (Module 17): every invoice/page number touched on `date` (defaults to
@@ -602,16 +687,16 @@ def get_daily_reconciliation(date=None):
     """
     try:
         date = getdate(date) if date else getdate(nowdate())
-        rows, start_number, end_number, counts = _classify_daily_checklist(date)
+        groups, counts = _classify_daily_checklist(date)
         unreferenced_invoices = _get_unreferenced_invoices(date)
+        current_summary = _groups_summary(groups)
 
         closing = frappe.db.get_value(
             "Delivery Booklet Daily Closing",
             str(date),
             [
                 "status",
-                "start_number",
-                "end_number",
+                "groups_summary",
                 "delivered_count",
                 "partially_delivered_count",
                 "self_pickup_count",
@@ -626,14 +711,12 @@ def get_daily_reconciliation(date=None):
         )
 
         if closing and closing.status == "Closed":
-            drifted = (closing.start_number, closing.end_number) != (start_number, end_number) or any(
+            stored_summary = json.loads(closing.groups_summary) if closing.groups_summary else []
+            drifted = stored_summary != current_summary or any(
                 closing.get(field) != counts[field] for field in _SUMMARY_COUNT_FIELD.values()
             )
             if drifted:
-                reason = (
-                    f"New activity detected for {date}: range/counts changed since closing "
-                    f"(was {closing.start_number}-{closing.end_number}, now {start_number}-{end_number})"
-                )
+                reason = f"New activity detected for {date}: booklet groups/counts changed since closing"
                 frappe.db.set_value(
                     "Delivery Booklet Daily Closing",
                     str(date),
@@ -643,12 +726,13 @@ def get_daily_reconciliation(date=None):
                 closing.status = "Needs Re-review"
                 closing.needs_review_reason = reason
 
+        if closing and closing.groups_summary:
+            closing.groups_summary = json.loads(closing.groups_summary)
+
         return {
             "success": True,
             "date": str(date),
-            "start_number": start_number,
-            "end_number": end_number,
-            "data": rows,
+            "groups": groups,
             "summary": counts,
             "closing": closing,
             "unreferenced_invoices": unreferenced_invoices,
@@ -656,7 +740,7 @@ def get_daily_reconciliation(date=None):
 
     except Exception as e:
         frappe.log_error(title="Daily reconciliation checklist failed")
-        return {"success": False, "message": str(e), "data": []}
+        return {"success": False, "message": str(e), "groups": []}
 
 
 @frappe.whitelist()
@@ -667,12 +751,12 @@ def close_daily_reconciliation(date=None):
     response, so a stale frontend can't sign off on data that's since changed."""
     try:
         date = getdate(date) if date else getdate(nowdate())
-        rows, start_number, end_number, counts = _classify_daily_checklist(date)
+        groups, counts = _classify_daily_checklist(date)
 
-        if not rows:
+        if not groups:
             frappe.throw(f"Nothing was touched on {date} - there is no range to close")
 
-        blocking = [r["number"] for r in rows if r["status"] not in CLOSABLE_STATUSES]
+        blocking = [row["number"] for row in _flatten_rows(groups) if row["status"] not in CLOSABLE_STATUSES]
         if blocking:
             frappe.throw(
                 f"{len(blocking)} number(s) still need action before {date} can be closed: "
@@ -684,8 +768,7 @@ def close_daily_reconciliation(date=None):
             "Delivery Booklet Daily Closing"
         )
         doc.closing_date = date
-        doc.start_number = start_number
-        doc.end_number = end_number
+        doc.groups_summary = json.dumps(_groups_summary(groups))
         for field, value in counts.items():
             setattr(doc, field, value)
         doc.status = "Closed"
@@ -753,8 +836,8 @@ def link_invoice_to_page(invoice_name, page_number, date=None):
         if invoice.custom_invoice_ref:
             frappe.throw(f"{invoice_name} already has a reference ({invoice.custom_invoice_ref})")
 
-        rows, _, _, _ = _classify_daily_checklist(date)
-        row = next((r for r in rows if r["number"] == page_number), None)
+        groups, _ = _classify_daily_checklist(date)
+        row = next((r for r in _flatten_rows(groups) if r["number"] == page_number), None)
         if not row or row["status"] != "Unresolved":
             frappe.throw(
                 f"Page {page_number} is not Unresolved for {date} - only an Unresolved page can "

@@ -35,7 +35,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | 🔷 In progress (033–035 done + verified live against KlikPOS, in `hd-delivery-telegram`; 036 - actual cutover/decommission - deliberately deferred, see phase-13.md) |
 | 15 — Backfill Invoice Creation from Reconciliation | 14 | 038–040 | ✅ Done (verified live end-to-end incl. browser, see phases/phase-14.md) |
 | 16 — Delivery Booklet Registry & Lifecycle | 15 | 041–044 | ✅ Done (klik_pos side verified live via bench console + build/typecheck; bot side (hd-delivery-telegram) import/logic-verified, not yet run live - see phases/phase-15.md) |
-| 17 — Daily Booklet Page Reconciliation | 16 | 045–051 | ✅ Done (backend verified live via bench console; frontend build/typecheck clean, not yet browser-checked - see phases/phase-16.md) |
+| 17 — Daily Booklet Page Reconciliation | 16 | 045–052 | ✅ Done (backend verified live via bench console; frontend build/typecheck clean, not yet browser-checked - see phases/phase-16.md) |
 
 **Next up:** Phases 9, 10, 12, and (mostly) 13 are implemented — user should browser-verify
 `/deliveries/reconcile`, `/drivers`, `/deliveries/map`, and `/deliveries/booklets` (once a Google

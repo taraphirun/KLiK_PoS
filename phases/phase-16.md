@@ -160,3 +160,6 @@ Delivery Report DR-08-0099 (invoice 47) synced after closing").
   stays scoped to the physical booklet's min-max range only)
 - [x] [051.md](../todo/051.md): Link/unlink unreferenced invoices to Unresolved pages + confirm
   dialogs on every manual action (follow-up, 2026-08-02)
+- [x] [052.md](../todo/052.md): Group the daily checklist by booklet instead of one day-wide
+  min/max range (follow-up, 2026-08-02) - real bug: two invoices ~1000 apart on the same day
+  produced ~1000 fake "Unresolved" rows spanning unrelated booklets
