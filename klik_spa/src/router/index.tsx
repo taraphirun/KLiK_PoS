@@ -20,6 +20,7 @@ import CustomerDetailsPage from "../pages/CustomerPageDetails";
 import DeliveryReconciliationPage from "../pages/DeliveryReconciliationPage";
 import DriverManagementPage from "../pages/DriverManagementPage";
 import LiveDeliveryMapPage from "../pages/LiveDeliveryMapPage";
+import BookletsPage from "../pages/BookletsPage";
 
 const router = createBrowserRouter([
   {
@@ -101,6 +102,10 @@ const router = createBrowserRouter([
       {
         path: "deliveries/map",
         element: <ProtectedRoute element={<LiveDeliveryMapPage />} />,
+      },
+      {
+        path: "deliveries/booklets",
+        element: <ProtectedRoute element={<BookletsPage />} />,
       },
     ],
   },

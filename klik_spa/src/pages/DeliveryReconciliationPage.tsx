@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  BookOpen,
   CheckCircle2,
   ChevronDown,
   FilePlus2,
@@ -21,6 +22,7 @@ import {
   rematchDeliveryReport,
   type DeliveryReport,
 } from "../services/delivery";
+import { getCandidateBooklets, resolveBooklet, type DeliveryBooklet } from "../services/booklet";
 import CreateInvoiceFromReportModal from "../components/delivery/CreateInvoiceFromReportModal";
 import DeliveryPhotoStrip from "../components/delivery/DeliveryPhotoStrip";
 import { getOutstandingSalesInvoices, type OutstandingSalesInvoice } from "../services/paymentEntry";
@@ -166,6 +168,95 @@ function RematchPicker({ reportName, onCancel, onMatched }: RematchPickerProps) 
   );
 }
 
+interface ResolveBookletPickerProps {
+  reportName: string;
+  reportedInvoiceNo?: string;
+  onCancel: () => void;
+  onResolved: () => void;
+}
+
+/** Manual link for a Delivery Report whose reported invoice number matched no registered booklet
+ * range at ingestion (Module 16) - mirrors the NestJS dashboard's ResolveBookletModal. */
+function ResolveBookletPicker({ reportName, reportedInvoiceNo, onCancel, onResolved }: ResolveBookletPickerProps) {
+  const [candidates, setCandidates] = useState<DeliveryBooklet[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    let isCurrent = true;
+    getCandidateBooklets(reportedInvoiceNo || "")
+      .then((response) => {
+        if (isCurrent) setCandidates(response.data || []);
+      })
+      .catch(() => {
+        if (isCurrent) setCandidates([]);
+      })
+      .finally(() => {
+        if (isCurrent) setIsLoading(false);
+      });
+    return () => {
+      isCurrent = false;
+    };
+  }, [reportedInvoiceNo]);
+
+  const handlePick = async (bookletName: string) => {
+    setIsSubmitting(true);
+    try {
+      const result = await resolveBooklet(reportName, bookletName);
+      if (!result.success) throw new Error(result.message || "Failed to link booklet");
+      toast.success(`Linked to booklet #${bookletName}`);
+      onResolved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to link booklet");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+          Link invoice #{reportedInvoiceNo} to a booklet
+        </span>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded p-1 text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+        >
+          <X size={16} />
+        </button>
+      </div>
+      {isLoading ? (
+        <div className="flex items-center gap-2 p-2 text-sm text-gray-500 dark:text-gray-400">
+          <Loader2 size={14} className="animate-spin" /> Loading candidate booklets...
+        </div>
+      ) : candidates.length === 0 ? (
+        <div className="p-2 text-sm italic text-gray-500 dark:text-gray-400">
+          No registered booklet covers this invoice number - register one on the Booklets page first.
+        </div>
+      ) : (
+        <div className="space-y-1">
+          {candidates.map((booklet) => (
+            <button
+              key={booklet.name}
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => handlePick(booklet.name)}
+              className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm hover:bg-white disabled:opacity-50 dark:hover:bg-gray-800"
+            >
+              <span className="text-gray-900 dark:text-white">
+                Booklet #{booklet.booklet_number} ({booklet.start_number}-{booklet.end_number})
+              </span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">{booklet.status}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface ReportCardProps {
   report: DeliveryReport;
   onChanged: () => void;
@@ -175,6 +266,7 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
   const navigate = useNavigate();
   const [showRematch, setShowRematch] = useState(false);
   const [showCreateInvoice, setShowCreateInvoice] = useState(false);
+  const [showResolveBooklet, setShowResolveBooklet] = useState(false);
   const [amountCollected, setAmountCollected] = useState(String(report.amount_collected || ""));
   const [markPaid, setMarkPaid] = useState(report.payment_status !== "Unpaid");
   const [isConfirming, setIsConfirming] = useState(false);
@@ -251,6 +343,22 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(report.reconciliation_status)}`}>
               {report.reconciliation_status}
             </span>
+            {report.booklet_number && (
+              <span
+                title={`Booklet #${report.booklet_number} - ${report.booklet_status}`}
+                className="inline-flex items-center gap-1 rounded-full bg-beveren-100 px-2 py-0.5 text-xs font-medium text-beveren-700 dark:bg-beveren-900/30 dark:text-beveren-300"
+              >
+                <BookOpen size={11} /> #{report.booklet_number}
+              </span>
+            )}
+            {Boolean(report.is_booklet_out_of_range) && (
+              <span
+                title="Reported invoice number matches no registered booklet"
+                className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+              >
+                booklet out of range
+              </span>
+            )}
           </div>
           <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             {formatTimestamp(report.delivery_timestamp || report.creation)}
@@ -344,6 +452,16 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
           )}
 
           <div className="ml-auto flex items-center gap-2">
+            {Boolean(report.is_booklet_out_of_range) && (
+              <button
+                type="button"
+                onClick={() => setShowResolveBooklet((v) => !v)}
+                className="inline-flex items-center gap-1 rounded-lg border border-amber-300 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/30"
+              >
+                <BookOpen size={14} />
+                Resolve Booklet
+              </button>
+            )}
             {canCreateInvoice && (
               <button
                 type="button"
@@ -383,6 +501,18 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
             </button>
           </div>
         </div>
+      )}
+
+      {showResolveBooklet && !isResolved && (
+        <ResolveBookletPicker
+          reportName={report.name}
+          reportedInvoiceNo={report.reported_invoice_no}
+          onCancel={() => setShowResolveBooklet(false)}
+          onResolved={() => {
+            setShowResolveBooklet(false);
+            onChanged();
+          }}
+        />
       )}
 
       {showCreateInvoice && (

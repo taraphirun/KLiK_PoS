@@ -34,15 +34,19 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 13 — Live Delivery Map | 12 | 031–032 | ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked or given a real Google Maps API key, see Todo 032) |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | 🔷 In progress (033–035 done + verified live against KlikPOS, in `hd-delivery-telegram`; 036 - actual cutover/decommission - deliberately deferred, see phase-13.md) |
 | 15 — Backfill Invoice Creation from Reconciliation | 14 | 038–040 | ✅ Done (verified live end-to-end incl. browser, see phases/phase-14.md) |
+| 16 — Delivery Booklet Registry & Lifecycle | 15 | 041–044 | ✅ Done (klik_pos side verified live via bench console + build/typecheck; bot side (hd-delivery-telegram) import/logic-verified, not yet run live - see phases/phase-15.md) |
 
 **Next up:** Phases 9, 10, 12, and (mostly) 13 are implemented — user should browser-verify
-`/deliveries/reconcile`, `/drivers`, and `/deliveries/map` (once a Google Maps API key is set on
-the POS Profile) in KlikPOS, and confirm the bot's live delivery flow actually reaches KlikPOS in
-practice (a real Telegram delivery, not just the manual `bench execute`/sync-worker tests run so
-far). Module 12 is dropped (see phase-11.md). Module 14's remaining piece (Todo 036: parallel-run
-monitoring, historical data backfill, then decommissioning NestJS/Postgres/Redis/MinIO/
-ocr-service) is intentionally not started - operationally risky, needs a monitored window, not
-something to rush. (Phase 6 completed 2026-07-30; Phase 7 completed 2026-07-30; Phase 8 completed
+`/deliveries/reconcile`, `/drivers`, `/deliveries/map`, and `/deliveries/booklets` (once a Google
+Maps API key is set on the POS Profile for the map) in KlikPOS, and confirm the bot's live
+delivery flow actually reaches KlikPOS in practice (a real Telegram delivery, not just the manual
+`bench execute`/sync-worker tests run so far). Module 12 is dropped (see phase-11.md). Module 14's
+remaining piece (Todo 036: parallel-run monitoring, historical data backfill, then decommissioning
+NestJS/Postgres/Redis/MinIO/ocr-service) is intentionally not started - operationally risky, needs
+a monitored window, not something to rush; Module 16 (Phase 15) depends on none of that and is
+independently done. Module 16's bot-side half (`hd-delivery-telegram/delivery-bot/booklet_sync.py`)
+has never been run against a live Telegram bot process - see phase-15.md/todo/043.md's Known gaps.
+(Phase 6 completed 2026-07-30; Phase 7 completed 2026-07-30; Phase 8 completed
 2026-07-30; Phase 9 completed
 2026-07-30; Phase 10 completed 2026-07-30; Phase 11 dropped 2026-07-31; Phase 12 completed
 2026-07-31; Phase 13 in progress as of 2026-07-31.)
@@ -384,6 +388,28 @@ lightbox, pinch/wheel/drag) - staff need to see what was actually delivered to e
 items, which nothing in KlikPOS showed before this. Also fixed a real latent bug found along the
 way: `Delivery Report.photos` comes back from the list API as a raw JSON string, not a parsed
 array - the frontend type was simply wrong and nothing had rendered the field before to notice.
+
+### Module 16: Delivery Booklet Registry & Lifecycle — **DONE (2026-08-02)**
+
+Detailed spec: [phases/phase-15.md](phases/phase-15.md) (Todos 041–044). Ports the "booklet"
+feature from `hd-delivery-telegram`'s legacy NestJS/Next.js dashboard (a separate, still-actively
+-used deploy with its own Postgres DB - confirmed live via the user's own screenshot of a real
+"Booklet #71 is STALLED!" alert, contradicting a stale claim in `DELIVERY_BOT_INTEGRATION.md` that
+this stack was retired) into KlikPOS proper. A booklet is the registry entry for a physical paper
+invoice book: a number range, optionally dedicated to one VIP customer, with a lifecycle (Active →
+Stalled → Ready for Review → Closed). New `Delivery Booklet` + `Delivery Booklet Settings`
+DocTypes, `klik_pos/api/booklet.py` (CRUD, candidate/resolve for out-of-range reports, interior gap
+detection, an hourly `check_booklet_lifecycle` scheduler job), ingestion-time matching wired into
+`submit_delivery_report`, and a new Booklets management page + reconciliation-page surfacing
+(booklet badge, resolve action, VIP-customer prefill on the Create Invoice modal) in `klik_spa`.
+
+Decided with the user (2026-08-02): full port (not just read-only display), no data migration
+(pre-production), a hard cutover once live (KlikPOS becomes the only place booklets are managed),
+same permissions as the rest of reconciliation. The stall/ready-for-review Telegram alerts
+deliberately stay bot-owned: KlikPOS only computes status, and `hd-delivery-telegram/delivery-bot`
+gained a `booklet_sync.py` that polls `list_booklets` and alerts on a transition - mirroring
+`driver_sync.py`'s existing poll pattern (Phase 10 addendum) rather than a new klik_pos → bot
+webhook, once that precedent was pointed out (the bot has no inbound HTTP surface at all today).
 
 ---
 

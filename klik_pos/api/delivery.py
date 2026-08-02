@@ -6,6 +6,8 @@ import frappe
 from frappe.utils import add_days, flt, get_datetime, nowdate
 from frappe.utils.file_manager import save_file
 
+from klik_pos.api.booklet import _extract_number as _extract_invoice_number
+from klik_pos.api.booklet import match_booklet_for_invoice
 from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment_entry, queue_sales_invoice
 
 # completion_status (Delivery Report) -> custom_delivery_status (Sales Invoice, Todo 020).
@@ -274,6 +276,17 @@ def submit_delivery_report(data):
             }
         )
 
+        # Booklet matching (Module 16) - best-effort, mirrors invoice matching below: a numeric
+        # reported_invoice_no that falls outside every known booklet range is flagged for manual
+        # review (Todo 041/042) rather than left silently unset, same reasoning as
+        # is_booklet_out_of_range's own docstring on the doctype field.
+        reported_no = data.get("reported_invoice_no")
+        booklet_match = match_booklet_for_invoice(reported_no, data.get("delivery_timestamp"))
+        report.booklet = booklet_match
+        report.is_booklet_out_of_range = (
+            1 if (not booklet_match and _extract_invoice_number(reported_no) is not None) else 0
+        )
+
         match_delivery_report(report)
 
         try:
@@ -496,6 +509,8 @@ DELIVERY_REPORT_LIST_FIELDS = [
     "match_confidence",
     "match_notes",
     "payment_entry",
+    "booklet",
+    "is_booklet_out_of_range",
     "creation",
 ]
 
@@ -579,8 +594,27 @@ def get_delivery_reports(status=None, search="", start=0, limit=100):
         )
         total_count = len(all_matches)
 
+        booklet_names = {row["booklet"] for row in all_matches if row.get("booklet")}
+        booklet_info = (
+            {
+                b.name: b
+                for b in frappe.get_all(
+                    "Delivery Booklet",
+                    filters={"name": ["in", list(booklet_names)]},
+                    fields=["name", "booklet_number", "status", "is_vip", "customer"],
+                )
+            }
+            if booklet_names
+            else {}
+        )
         for row in all_matches:
             row["group_key"] = _group_key(row)
+            b = booklet_info.get(row.get("booklet"))
+            row["booklet_number"] = b.booklet_number if b else None
+            row["booklet_status"] = b.status if b else None
+            # Suggested customer for backfilling an invoice (Todo 044) - a hint the frontend can
+            # prefill and staff can still override, not an authoritative assignment.
+            row["booklet_customer"] = b.customer if (b and b.is_vip) else None
 
         group_info = _group_info_for_keys({row["group_key"] for row in all_matches})
 

@@ -1,0 +1,133 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:booklet_number",
+ "creation": "2026-08-02 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "booklet_number",
+  "status",
+  "column_break_reg_1",
+  "start_number",
+  "end_number",
+  "section_break_vip",
+  "is_vip",
+  "customer",
+  "section_break_lifecycle",
+  "closed_at",
+  "closed_by"
+ ],
+ "fields": [
+  {
+   "description": "Physical booklet number as written on the paper booklet cover, e.g. \"25\" or \"VIP-1\". Also the docname (autoname: field:booklet_number).",
+   "fieldname": "booklet_number",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Booklet Number",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "Active",
+   "description": "Active -> Stalled (no matching Delivery Report for the configured stall window) -> Ready for Review (pages filled or end number reached) -> Closed (staff signed off). Maintained by the hourly check_booklet_lifecycle scheduler job, not editable set-and-forget by staff except Closed.",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Active\nStalled\nReady for Review\nClosed"
+  },
+  {
+   "fieldname": "column_break_reg_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "First invoice number on this booklet's first page.",
+   "fieldname": "start_number",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Start Number",
+   "reqd": 1
+  },
+  {
+   "description": "Last invoice number on this booklet's last page.",
+   "fieldname": "end_number",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "End Number",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_vip",
+   "fieldtype": "Section Break",
+   "label": "VIP Assignment"
+  },
+  {
+   "default": "0",
+   "description": "A VIP booklet is dedicated to one recurring customer - any Delivery Report whose invoice number falls in this booklet's range auto-suggests that customer when backfilling an invoice (Module 16).",
+   "fieldname": "is_vip",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "VIP Booklet"
+  },
+  {
+   "depends_on": "eval:doc.is_vip",
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "label": "Customer",
+   "mandatory_depends_on": "eval:doc.is_vip",
+   "options": "Customer"
+  },
+  {
+   "fieldname": "section_break_lifecycle",
+   "fieldtype": "Section Break",
+   "label": "Closure"
+  },
+  {
+   "fieldname": "closed_at",
+   "fieldtype": "Datetime",
+   "label": "Closed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "closed_by",
+   "fieldtype": "Link",
+   "label": "Closed By",
+   "options": "User",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "KLiK PoS",
+ "name": "Delivery Booklet",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "booklet_number,status",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "booklet_number",
+ "track_changes": 1
+}

@@ -32,6 +32,17 @@ export interface DeliveryReport {
   match_confidence?: number;
   match_notes?: string | null;
   payment_entry?: string | null;
+  /** Delivery Booklet docname this report's invoice number was matched to at ingestion, or blank
+   * (see is_booklet_out_of_range) - Module 16. */
+  booklet?: string | null;
+  booklet_number?: string | null;
+  booklet_status?: string | null;
+  /** Set when reported_invoice_no is numeric but matched no known booklet range - needs manual
+   * resolution (see ResolveBookletButton). */
+  is_booklet_out_of_range?: 0 | 1;
+  /** Suggested customer (docname) when this report matched a VIP booklet - a hint the Create
+   * Invoice modal prefills but staff can still override, not an authoritative assignment. */
+  booklet_customer?: string | null;
   creation: string;
   /** Same-invoice grouping key: matched_invoice, else reported_invoice_no (2026-07-31). */
   group_key: string;

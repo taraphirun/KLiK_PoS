@@ -6,9 +6,11 @@ separate repo) work together. Complements `implementation_plan.md` (the phased b
 it was built or what's still owed. If code and this doc ever disagree, trust the code and fix this
 doc.
 
-**Companion repo:** `hd-delivery-telegram`, cloned locally at `/home/frappe/dev/hd-delivery-telegram`
-(GitHub `taraphirun/hd-delivery-telegram`). Two independent git repos, two independent deploys,
-connected only over HTTP via the API described below.
+**Companion repo:** `hd-delivery-telegram`, cloned locally at `/home/frappe/prod/hd-delivery-telegram`
+(GitHub `taraphirun/hd-delivery-telegram`) — corrected 2026-08-02, an earlier version of this doc
+(and this session's own environment config) pointed at a now-nonexistent `/home/frappe/dev/...`
+path. Two independent git repos, two independent deploys, connected only over HTTP via the API
+described below.
 
 ---
 
@@ -16,9 +18,16 @@ connected only over HTTP via the API described below.
 
 | | KlikPOS (this repo) | Delivery bot (`hd-delivery-telegram`) |
 |---|---|---|
-| Stack | Frappe/Python backend, React/Vite SPA (`klik_spa`) | Python/aiogram bot (`delivery-bot/`); a legacy NestJS backend + Next.js dashboard also exist but are unused (OCR pipeline, confirmed retired by the user) |
-| Owns | Sales Invoices, Delivery Reports, Delivery Drivers, reconciliation, payments | The Telegram conversation with drivers; a local SQLite outbox as a durable capture buffer |
-| Source of truth for | Delivery Report data once synced; Delivery Driver status | Nothing long-term — it's a thin, offline-first capture + relay client |
+| Stack | Frappe/Python backend, React/Vite SPA (`klik_spa`) | Python/aiogram bot (`delivery-bot/`); a legacy NestJS backend + Next.js dashboard (Postgres via Prisma, OCR service, MinIO) also exist as a separate deploy - **still actively used**, not retired (see correction below) |
+| Owns | Sales Invoices, Delivery Reports, Delivery Drivers, Delivery Booklets, reconciliation, payments | The Telegram conversation with drivers; a local SQLite outbox as a durable capture buffer; polls KlikPOS for driver/booklet status changes |
+| Source of truth for | Delivery Report data once synced; Delivery Driver status; Delivery Booklet registry/lifecycle (as of Module 16) | Nothing long-term — it's a thin, offline-first capture + relay client |
+
+> **Correction (2026-08-02, Module 16):** an earlier version of this doc claimed the legacy NestJS
+> dashboard was "unused, confirmed retired by the user." That was wrong - the user's own
+> screenshot showed a live, real "Booklet #71 is STALLED!" Telegram alert firing from that stack's
+> booklet-lifecycle cron. It remains a separate deploy with its own Postgres DB, still running,
+> still used for at least the booklet feature (until Module 16's KlikPOS-side booklet registry
+> fully replaces it - a hard cutover once verified, not yet done as of this doc).
 
 ```mermaid
 graph LR
@@ -30,6 +39,9 @@ graph LR
     DR -->|payment collected| PE["Payment Entry"]
     Bot -.->|driver identity push/poll, ~60s| DD["Delivery Driver"]
     Admin["Admin (KlikPOS /drivers)"] -.->|approve/reject| DD
+    KLB["klik_pos.api.booklet.check_booklet_lifecycle (hourly)"] --> DB["Delivery Booklet"]
+    Bot -.->|booklet status poll, ~300s| DB
+    Bot -->|Telegram alert on Stalled/Ready| TG["Reporting chat + admin DMs"]
 ```
 
 ---
@@ -141,6 +153,28 @@ data never overwrites a status or name change a human made in KlikPOS.
 All push/poll calls are best-effort: a KlikPOS-side failure is logged, never raised — the bot's own
 registration/approval flow keeps working standalone if KlikPOS happens to be unreachable.
 
+## Flow 5: Booklet lifecycle (KlikPOS → bot poll, Module 16)
+
+A `Delivery Booklet` is the registry entry for a physical paper invoice book: a number range,
+optionally dedicated to one VIP customer. `submit_delivery_report` resolves a report's
+`reported_invoice_no` against this registry at ingestion time (same idea as Sales Invoice
+matching), and `klik_pos.api.booklet.check_booklet_lifecycle` (hourly scheduler job) computes each
+open booklet's status: `Active` → `Stalled` (no matching report within the configured window) →
+`Ready for Review` (pages filled or end number reached) → `Closed` (staff sign-off, terminal).
+
+KlikPOS computes status only — it has no Telegram integration of its own. Turning a status change
+into a Telegram alert is the bot's job, via the same **poll, never push** pattern as Flow 4's
+driver sync: `delivery-bot/booklet_sync.py::poll_klikpos_booklets` (background loop, default 300s)
+fetches every booklet's current status via `list_booklets`, and alerts (broadcast to the reporting
+chat + DM every admin) only on an observed transition into `Stalled`/`Ready for Review` — a
+persistent SQLite table (`local_store.booklet_status`) remembers the last-seen status per booklet
+so a re-poll of an unchanged status, or a bot restart, doesn't re-fire the same alert.
+
+This direction was a deliberate choice, not the default: the user's first instinct was a
+klik_pos → bot webhook, but `driver_sync.py`'s existing "KlikPOS → bot is poll-only" precedent
+(Flow 4) was surfaced and the user switched to matching it — the bot has no inbound HTTP surface
+at all today, and a webhook would have added the first one just for this.
+
 ---
 
 ## Configuration
@@ -163,7 +197,7 @@ registration/approval flow keeps working standalone if KlikPOS happens to be unr
 ## Running the bot locally
 
 ```bash
-cd /home/frappe/dev/hd-delivery-telegram/delivery-bot
+cd /home/frappe/prod/hd-delivery-telegram/delivery-bot
 python3 -m venv venv && ./venv/bin/pip install -r requirements.txt   # first time only
 ./venv/bin/python bot.py
 ```
@@ -177,31 +211,40 @@ deployment) is already running it before starting a second instance.
 **KlikPOS** (`klik_pos/api/`):
 - `delivery.py` — `submit_delivery_report`, `get_delivery_reports`, `confirm_delivery_match`,
   `reject_delivery_match`, `rematch_delivery_report`, `upload_delivery_file`,
-  `attach_delivery_media`.
+  `attach_delivery_media`, `create_invoice_from_delivery_report`.
 - `driver.py` — `list_drivers`, `upsert_driver`, `set_driver_status`, `sync_driver_from_bot`.
-- Doctypes: `Delivery Report` (staging), `Delivery Driver`. Custom fields on `Sales Invoice`:
-  `custom_delivery_status`, `custom_delivery_driver` (Link), `custom_delivered_at`,
-  `custom_delivery_gps_latitude/longitude`, `custom_delivery_report`.
+- `booklet.py` — `list_booklets`, `upsert_booklet`, `close_booklet`, `delete_booklet`,
+  `get_candidate_booklets`, `resolve_booklet`, `get_booklet_gaps`, `get/update_booklet_settings`,
+  `check_booklet_lifecycle` (hourly scheduler job), `match_booklet_for_invoice` (ingestion helper).
+- Doctypes: `Delivery Report` (staging), `Delivery Driver`, `Delivery Booklet`,
+  `Delivery Booklet Settings`. Custom fields on `Sales Invoice`: `custom_delivery_status`,
+  `custom_delivery_driver` (Link), `custom_delivered_at`, `custom_delivery_gps_latitude/longitude`,
+  `custom_delivery_report`.
 - Frontend (`klik_spa/src/`): `pages/DeliveryReconciliationPage.tsx`, `pages/DriverManagementPage.tsx`,
-  `pages/LiveDeliveryMapPage.tsx`, `services/delivery.ts`, `services/driver.ts`,
-  `utils/realtime.ts` (socket.io client for live map updates).
+  `pages/LiveDeliveryMapPage.tsx`, `pages/BookletsPage.tsx`, `services/delivery.ts`,
+  `services/driver.ts`, `services/booklet.ts`, `utils/realtime.ts` (socket.io client for live map
+  updates), `components/delivery/CreateInvoiceFromReportModal.tsx`,
+  `components/delivery/DeliveryPhotoStrip.tsx`.
 
 **Bot** (`delivery-bot/`):
 - `bot.py` — the FSM, Telegram handlers, registration/approval.
-- `local_store.py` — SQLite outbox schema + CRUD.
+- `local_store.py` — SQLite outbox schema + CRUD, plus the `booklet_status` table booklet_sync.py
+  uses to track alert-worthy transitions.
 - `sync_worker.py` — delivery sync loop.
 - `driver_sync.py` — driver identity push/poll loop.
+- `booklet_sync.py` — booklet status poll + Telegram alert loop (Module 16, Flow 5).
 - `klikpos_client.py` — shared KlikPOS HTTP client config (base URL, auth headers).
 
 ## Known gaps (not bugs — deliberately unbuilt so far)
 
-- No KlikPOS UI to *view* attached delivery photos/voice notes (they're correctly stored and
-  attached, just no viewer built into the reconciliation page yet).
 - No driver-facing "my recent deliveries + sync status" list in the bot — only the admin
   `/syncstatus` command (aggregate counts + recent failures).
 - `Failed` sync rows need a manual SQLite edit to retry (see Flow 2).
+- Module 16's bot-side half (`booklet_sync.py`) has never been run against a live Telegram bot
+  process or exercised end-to-end against the real `hd.phirun.me` KlikPOS instance together - see
+  `todo/043.md`'s Known gaps.
 - Todo 036 (retiring the bot's legacy NestJS/Postgres/Redis/MinIO/ocr-service stack) is not
   started — needs a monitored parallel-run window first, see `phases/phase-13.md`.
 
 For the phased build history and current status of every module, see `implementation_plan.md` and
-`phases/phase-0{9,10,12,13}.md`. For active issues, see `bugs.md`.
+`phases/phase-0{9,10,12,13}.md` and `phases/phase-1{4,5}.md`. For active issues, see `bugs.md`.

@@ -68,6 +68,31 @@ export default function CreateInvoiceFromReportModal({
   const [isSearchingItems, setIsSearchingItems] = useState(false);
   const [showItemDropdown, setShowItemDropdown] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Prefill from a VIP booklet match (Module 16) - a hint only, staff can still pick a different
+  // customer below. Never overrides a customer the user already picked.
+  useEffect(() => {
+    if (!report.booklet_customer || customer) return;
+    let isCurrent = true;
+    fetch(
+      `/api/method/klik_pos.api.customer.get_customers?search=${encodeURIComponent(report.booklet_customer)}&limit=5`,
+      { credentials: "include" }
+    )
+      .then((response) => response.json())
+      .then((result) => {
+        if (!isCurrent) return;
+        const rows = (result.message?.data || []) as { name: string; customer_name?: string }[];
+        const match = rows.find((c) => c.name === report.booklet_customer);
+        if (match) {
+          setCustomer({ id: match.name, name: match.customer_name || match.name, customerName: match.customer_name } as Customer);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      isCurrent = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report.booklet_customer]);
   const searchBoxRef = useRef<HTMLDivElement>(null);
 
   // Independent local search against get_items - deliberately NOT the shared productStore, which

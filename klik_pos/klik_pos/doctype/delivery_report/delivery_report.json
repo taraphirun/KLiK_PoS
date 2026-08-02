@@ -32,6 +32,9 @@
   "matched_invoice",
   "amount_collected",
   "payment_entry",
+  "section_break_booklet",
+  "booklet",
+  "is_booklet_out_of_range",
   "section_break_audit",
   "raw_payload"
  ],
@@ -201,6 +204,26 @@
    "label": "Payment Entry",
    "options": "Payment Entry",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_break_booklet",
+   "fieldtype": "Section Break",
+   "label": "Booklet"
+  },
+  {
+   "description": "Resolved at ingestion (submit_delivery_report) by matching reported_invoice_no's numeric portion against an open Delivery Booklet's number range. Blank if no booklet range matched (see is_booklet_out_of_range) or reported_invoice_no isn't numeric.",
+   "fieldname": "booklet",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Booklet",
+   "options": "Delivery Booklet"
+  },
+  {
+   "default": "0",
+   "description": "Set when reported_invoice_no is numeric but falls outside every known booklet's range - needs a human to either register the missing booklet or manually link one (Module 16).",
+   "fieldname": "is_booklet_out_of_range",
+   "fieldtype": "Check",
+   "label": "Booklet Out of Range"
   },
   {
    "fieldname": "section_break_audit",

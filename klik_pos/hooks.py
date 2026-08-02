@@ -203,23 +203,11 @@ after_migrate = "klik_pos.setup.install.after_install"
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"klik_pos.tasks.all"
-# 	],
-# 	"daily": [
-# 		"klik_pos.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"klik_pos.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"klik_pos.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"klik_pos.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"hourly": [
+		"klik_pos.api.booklet.check_booklet_lifecycle"
+	],
+}
 
 # Testing
 # -------
