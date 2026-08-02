@@ -150,7 +150,7 @@ def ensure_delivery_reconciliation_fields():
                     "fieldname": "custom_delivery_status",
                     "label": "Delivery Status",
                     "fieldtype": "Select",
-                    "options": "Pending\nDelivered\nPartially Delivered\nNot Delivered",
+                    "options": "Pending\nDelivered\nPartially Delivered\nNot Delivered\nSelf Pickup",
                     "default": "Pending",
                     "insert_after": "custom_delivery_personnel_name",
                     "read_only": 1,

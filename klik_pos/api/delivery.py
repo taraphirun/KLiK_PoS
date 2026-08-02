@@ -3,7 +3,7 @@ import json
 import re
 
 import frappe
-from frappe.utils import add_days, flt, get_datetime, nowdate
+from frappe.utils import add_days, flt, get_datetime, now_datetime, nowdate
 from frappe.utils.file_manager import save_file
 
 from klik_pos.api.booklet import _extract_number as _extract_invoice_number
@@ -24,6 +24,12 @@ DELIVERY_STATUS_RANK = {"Pending": 0, "Not Delivered": 0, "Partially Delivered":
 ALLOWED_COMPLETION_STATUSES = {"Full", "Partial"}
 ALLOWED_PAYMENT_STATUSES = {"Paid", "Unpaid", "Partial"}
 REQUIRED_FIELDS = ("bot_delivery_id", "reported_invoice_no", "completion_status", "payment_status")
+
+# Module 17's "I know what happened, no bot report exists" manual override
+# (set_manual_delivery_status) - deliberately a subset of custom_delivery_status's own options,
+# excluding "Partially Delivered"/"Not Delivered"/"Pending" which only make sense coming from a
+# real (bot-verified or in-progress) delivery, not a manual end-of-day claim.
+MANUAL_DELIVERY_STATUSES = ("Delivered", "Self Pickup")
 
 # Auto-match tuning. Only invoice-number matching is implemented (exact / normalized / fuzzy) -
 # no customer or amount attribute matching, because Delivery Report has no bot-reported customer
@@ -774,6 +780,50 @@ def attach_delivery_media(report_name, photo_urls=None, voice_url=None):
         return {"success": False, "message": str(e)}
 
 
+def _apply_payment_status_to_invoice_data(invoice_data, payment_status, amount_collected=None, due_date=None):
+    """Shapes invoice_data (queue_sales_invoice's payload) from a payment_status declaration
+    (Paid/Partial/Unpaid) so the resulting submission bakes payment in correctly - see
+    create_invoice_from_delivery_report's docstring for why this must happen in the *same*
+    submission rather than a follow-up Payment Entry (ERPNext's credit-limit check runs on submit,
+    seeing only this invoice's own outstanding_amount at that point). Shared by
+    create_invoice_from_delivery_report (Module 15) and create_invoice_for_unreported_page
+    (Module 17) so the two backfill entry points can't drift apart.
+
+    Mutates and returns invoice_data. Also returns amount_collected (flt()'d) since "Partial"
+    validates and needs it - callers that track it elsewhere (e.g. onto a Delivery Report) don't
+    need to recompute flt() themselves.
+    """
+    if payment_status not in ALLOWED_PAYMENT_STATUSES:
+        frappe.throw(f"Invalid payment_status '{payment_status}'")
+
+    if payment_status == "Paid":
+        invoice_data["pay_in_full"] = True
+
+    elif payment_status == "Partial":
+        amount_collected = flt(amount_collected)
+        if amount_collected <= 0:
+            frappe.throw("amount_collected must be set (> 0) for a Partial payment status")
+        default_mode = _get_default_payment_mode()
+        if not default_mode:
+            frappe.throw(
+                "No default payment mode is configured on this POS Profile - add one "
+                "before recording a Partial payment here"
+            )
+        invoice_data["isCreditSale"] = False
+        invoice_data["amountPaid"] = amount_collected
+        invoice_data["paymentMethods"] = [{"method": default_mode, "amount": amount_collected}]
+        if due_date:
+            invoice_data["dueDate"] = due_date
+
+    else:  # Unpaid
+        if not due_date:
+            frappe.throw("due_date is required when payment_status is Unpaid")
+        invoice_data["isCreditSale"] = True
+        invoice_data["dueDate"] = due_date
+
+    return invoice_data, amount_collected
+
+
 @frappe.whitelist()
 def create_invoice_from_delivery_report(
     report_name, invoice_data, payment_status=None, amount_collected=None, due_date=None
@@ -835,39 +885,23 @@ def create_invoice_from_delivery_report(
         # leaving the invoice looking unpaid regardless of payment_status. B2C matches how this
         # app's normal walk-in checkout already behaves; only defaulted, never overrides a caller.
         invoice_data.setdefault("businessType", "B2C")
+        # Stamps the paper page number onto the invoice itself (Module 17) - without this, an
+        # invoice backfilled here is only discoverable via custom_delivery_report/matched_invoice,
+        # not by invoice ref, leaving it invisible to anything that looks Sales Invoice up by
+        # custom_invoice_ref (the daily reconciliation checklist's primary lookup). Only defaulted
+        # from the report's own reported_invoice_no, never overrides an explicit caller value.
+        if not invoice_data.get("custom_invoice_ref"):
+            ref_number = _extract_invoice_number(report.reported_invoice_no)
+            if ref_number is not None:
+                invoice_data["custom_invoice_ref"] = ref_number
 
         if payment_status:
-            if payment_status not in ALLOWED_PAYMENT_STATUSES:
-                frappe.throw(f"Invalid payment_status '{payment_status}'")
-
+            invoice_data, amount_collected = _apply_payment_status_to_invoice_data(
+                invoice_data, payment_status, amount_collected, due_date
+            )
             report.payment_status = payment_status
-
-            if payment_status == "Paid":
-                invoice_data["pay_in_full"] = True
-
-            elif payment_status == "Partial":
-                amount_collected = flt(amount_collected)
-                if amount_collected <= 0:
-                    frappe.throw("amount_collected must be set (> 0) for a Partial payment status")
-                default_mode = _get_default_payment_mode()
-                if not default_mode:
-                    frappe.throw(
-                        "No default payment mode is configured on this POS Profile - add one "
-                        "before recording a Partial payment here"
-                    )
+            if payment_status == "Partial":
                 report.amount_collected = amount_collected
-                invoice_data["isCreditSale"] = False
-                invoice_data["amountPaid"] = amount_collected
-                invoice_data["paymentMethods"] = [{"method": default_mode, "amount": amount_collected}]
-                if due_date:
-                    invoice_data["dueDate"] = due_date
-
-            else:  # Unpaid
-                if not due_date:
-                    frappe.throw("due_date is required when payment_status is Unpaid")
-                invoice_data["isCreditSale"] = True
-                invoice_data["dueDate"] = due_date
-
             report.save(ignore_permissions=True)
 
         invoice_result = queue_sales_invoice(invoice_data)
@@ -900,4 +934,103 @@ def create_invoice_from_delivery_report(
         return {"success": False, "message": str(e)}
     except Exception as e:
         frappe.log_error(title="Create invoice from Delivery Report failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def set_manual_delivery_status(invoice_name, status):
+    """Manual "I know what happened, no bot report exists" override for the daily reconciliation
+    checklist (Module 17) - Confirm Self-Pickup, or Confirm Delivered when the driver forgot to
+    submit a report but the delivery is known to have happened.
+
+    Deliberately a lower-trust, separate path from confirm_delivery_match's bot-verified flow (no
+    GPS/photo/driver identity behind this) - guarded against overriding an invoice that already
+    has a real Confirmed Delivery Report, pointing staff at the normal reconciliation flow instead
+    rather than letting this silently clobber a verified outcome. No extra audit trail beyond
+    Frappe's own track_changes history on Sales Invoice (decided with the user, 2026-08-02) - no
+    timeline comment stamped.
+    """
+    try:
+        if status not in MANUAL_DELIVERY_STATUSES:
+            frappe.throw(f"Invalid status '{status}', expected one of {MANUAL_DELIVERY_STATUSES}")
+
+        invoice = frappe.get_doc("Sales Invoice", invoice_name)
+        if invoice.docstatus != 1:
+            frappe.throw(f"Sales Invoice {invoice_name} is not submitted")
+
+        if invoice.custom_delivery_report:
+            report_status = frappe.db.get_value(
+                "Delivery Report", invoice.custom_delivery_report, "reconciliation_status"
+            )
+            if report_status == "Confirmed":
+                frappe.throw(
+                    f"{invoice_name} already has a confirmed Delivery Report - use the normal "
+                    f"reconciliation flow to change its outcome, not this manual override"
+                )
+
+        invoice.custom_delivery_status = status
+        invoice.custom_delivered_at = now_datetime()
+        invoice.save(ignore_permissions=True)
+
+        return {"success": True, "invoice_name": invoice.name, "status": invoice.custom_delivery_status}
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Manual delivery status set failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def create_invoice_for_unreported_page(page_number, invoice_data, payment_status=None, amount_collected=None, due_date=None):
+    """Backfill a Sales Invoice for a booklet page number with *neither* an invoice nor a Delivery
+    Report at all (Module 17's daily reconciliation "Unresolved" bucket - truly forgotten
+    end-to-end, unlike create_invoice_from_delivery_report which always has a report to hang the
+    invoice off). Ports the NestJS dashboard's old resolveMissing endpoint
+    (deliveries.controller.ts) into KlikPOS: creates+submits the invoice directly via
+    queue_sales_invoice with custom_invoice_ref set to the page number, no Delivery Report/
+    confirm_delivery_match involved - there's nothing to reconcile against, this manual entry IS
+    the record.
+
+    Requires a customer up front (decided with the user, 2026-08-02) - same rule as Module 15's
+    Create Invoice modal, no "unknown/walk-in, fix later" shortcut. payment_status shaping is the
+    same shared helper create_invoice_from_delivery_report uses, so the two backfill paths can't
+    drift apart on the credit-limit-safe payment baking logic.
+    """
+    try:
+        page_number = int(page_number)
+
+        if frappe.db.exists("Sales Invoice", {"custom_invoice_ref": page_number, "docstatus": 1}):
+            frappe.throw(f"A submitted Sales Invoice already exists with invoice ref {page_number}")
+
+        if isinstance(invoice_data, str):
+            invoice_data = json.loads(invoice_data)
+        invoice_data = dict(invoice_data or {})
+
+        if not (invoice_data.get("customer") or {}).get("id"):
+            frappe.throw("customer is required")
+
+        invoice_data["enable_background_submission"] = False
+        invoice_data.setdefault("businessType", "B2C")
+        invoice_data["custom_invoice_ref"] = page_number
+
+        if payment_status:
+            invoice_data, amount_collected = _apply_payment_status_to_invoice_data(
+                invoice_data, payment_status, amount_collected, due_date
+            )
+
+        invoice_result = queue_sales_invoice(invoice_data)
+        if not invoice_result.get("success"):
+            return invoice_result
+
+        return {
+            "success": True,
+            "invoice_name": invoice_result.get("invoice_name"),
+            "invoice": invoice_result.get("invoice"),
+        }
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Create invoice for unreported booklet page failed")
         return {"success": False, "message": str(e)}

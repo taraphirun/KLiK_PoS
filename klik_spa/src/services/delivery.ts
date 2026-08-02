@@ -199,6 +199,38 @@ export async function createInvoiceFromDeliveryReport(
   });
 }
 
+// Module 17 (phases/phase-16.md): the manual "I know what happened, no bot report exists"
+// override, and the no-Delivery-Report-at-all backfill path - used by the daily reconciliation
+// checklist for Pending Fulfillment and Unresolved rows respectively.
+
+export type ManualDeliveryStatus = "Delivered" | "Self Pickup";
+
+export async function setManualDeliveryStatus(
+  invoiceName: string,
+  status: ManualDeliveryStatus
+): Promise<{ success: boolean; invoice_name?: string; status?: string; message?: string }> {
+  return postJson("klik_pos.api.delivery.set_manual_delivery_status", {
+    invoice_name: invoiceName,
+    status,
+  });
+}
+
+export async function createInvoiceForUnreportedPage(
+  pageNumber: number,
+  invoiceData: BackfillInvoiceData,
+  paymentStatus?: PaymentStatus,
+  amountCollected?: number,
+  dueDate?: string
+): Promise<{ success: boolean; invoice_name?: string; message?: string }> {
+  return postJson("klik_pos.api.delivery.create_invoice_for_unreported_page", {
+    page_number: pageNumber,
+    invoice_data: invoiceData,
+    payment_status: paymentStatus,
+    amount_collected: amountCollected,
+    due_date: dueDate,
+  });
+}
+
 /** Matches the payload published by Delivery Report's on_update hook (Todo 031) - a minimal,
  * map-oriented projection, not the full DeliveryReport shape. */
 export interface DeliveryRealtimeUpdate {

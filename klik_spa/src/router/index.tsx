@@ -21,6 +21,7 @@ import DeliveryReconciliationPage from "../pages/DeliveryReconciliationPage";
 import DriverManagementPage from "../pages/DriverManagementPage";
 import LiveDeliveryMapPage from "../pages/LiveDeliveryMapPage";
 import BookletsPage from "../pages/BookletsPage";
+import DailyReconciliationPage from "../pages/DailyReconciliationPage";
 
 const router = createBrowserRouter([
   {
@@ -106,6 +107,10 @@ const router = createBrowserRouter([
       {
         path: "deliveries/booklets",
         element: <ProtectedRoute element={<BookletsPage />} />,
+      },
+      {
+        path: "deliveries/daily-reconcile",
+        element: <ProtectedRoute element={<DailyReconciliationPage />} />,
       },
     ],
   },

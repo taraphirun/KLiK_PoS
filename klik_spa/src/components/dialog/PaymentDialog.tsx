@@ -142,6 +142,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
   const [showDeliveryPersonnelModal, setShowDeliveryPersonnelModal] = useState(false);
   const [showSalespersonModal, setShowSalespersonModal] = useState(false);
   const [selectedDeliveryPersonnel, setSelectedDeliveryPersonnel] = useState<string | null>(null);
+  const [isSelfPickup, setIsSelfPickup] = useState(false);
   const [deliveryCharge, setDeliveryCharge] = useState(0);
   const [taxPin, setTaxPin] = useState("");
   const [backendTaxPreview, setBackendTaxPreview] = useState<BackendTaxPreview | null>(null);
@@ -629,6 +630,7 @@ export default function PaymentDialog(props: PaymentDialogProps) {
       tax_id: taxPin || null,
       customInvoiceRef: customInvoiceRef || null,
       custom_invoice_ref: customInvoiceRef || null,
+      selfPickup: isSelfPickup || null,
       loyalty: appliedLoyalty
         ? {
             loyalty_program: appliedLoyalty.loyalty_program,
@@ -2189,15 +2191,32 @@ export default function PaymentDialog(props: PaymentDialogProps) {
 
         <div className="border-t border-gray-200 dark:border-gray-700 p-6 flex-shrink-0 bg-white dark:bg-gray-800">
           <div className="flex items-center justify-between gap-4">
-            {isDeliveryRequired && (
-              <div className="flex-1 max-w-xs">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Delivery Personnel</label>
-                <button type="button" onClick={() => setShowDeliveryPersonnelModal(true)} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full px-4 py-2 text-left border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
-                  <span>{getSelectedDeliveryPersonnelName() || <span className="text-gray-500 dark:text-gray-400">Select Delivery Personnel</span>}</span>
-                  <ChevronDown size={16} className="text-gray-400 dark:text-gray-500 flex-shrink-0 ml-2" />
-                </button>
-              </div>
-            )}
+            <div className="flex-1 max-w-xs space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isSelfPickup}
+                  onChange={(e) => {
+                    setIsSelfPickup(e.target.checked);
+                    if (e.target.checked) setSelectedDeliveryPersonnel(null);
+                  }}
+                  disabled={invoiceSubmitted || isProcessingPayment}
+                  className="w-4 h-4 rounded border-gray-300 text-beveren-600 focus:ring-beveren-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                />
+                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Customer picking up now
+                </span>
+              </label>
+              {isDeliveryRequired && !isSelfPickup && (
+                <>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Delivery Personnel</label>
+                  <button type="button" onClick={() => setShowDeliveryPersonnelModal(true)} disabled={invoiceSubmitted || isProcessingPayment} className={`w-full px-4 py-2 text-left border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between ${invoiceSubmitted || isProcessingPayment ? "cursor-not-allowed opacity-50" : "cursor-pointer"}`}>
+                    <span>{getSelectedDeliveryPersonnelName() || <span className="text-gray-500 dark:text-gray-400">Select Delivery Personnel</span>}</span>
+                    <ChevronDown size={16} className="text-gray-400 dark:text-gray-500 flex-shrink-0 ml-2" />
+                  </button>
+                </>
+              )}
+            </div>
             <div className={`flex items-center gap-4 ${isDeliveryRequired ? "" : "w-full justify-between"}`}>
               <label className="flex items-center gap-2 cursor-pointer group">
                 <div className="relative">

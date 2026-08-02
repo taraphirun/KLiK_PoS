@@ -16,7 +16,9 @@
   "customer",
   "section_break_lifecycle",
   "closed_at",
-  "closed_by"
+  "closed_by",
+  "section_break_void",
+  "void_entries"
  ],
  "fields": [
   {
@@ -97,6 +99,18 @@
    "label": "Closed By",
    "options": "User",
    "read_only": 1
+  },
+  {
+   "fieldname": "section_break_void",
+   "fieldtype": "Section Break",
+   "label": "Void Pages"
+  },
+  {
+   "description": "Page numbers within this booklet's range marked void (paper page written, sale cancelled/never happened) - excluded from the daily reconciliation checklist (Module 17) once listed here.",
+   "fieldname": "void_entries",
+   "fieldtype": "Table",
+   "label": "Void Entries",
+   "options": "Delivery Booklet Void Entry"
   }
  ],
  "grid_page_length": 50,

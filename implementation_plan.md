@@ -35,6 +35,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | 🔷 In progress (033–035 done + verified live against KlikPOS, in `hd-delivery-telegram`; 036 - actual cutover/decommission - deliberately deferred, see phase-13.md) |
 | 15 — Backfill Invoice Creation from Reconciliation | 14 | 038–040 | ✅ Done (verified live end-to-end incl. browser, see phases/phase-14.md) |
 | 16 — Delivery Booklet Registry & Lifecycle | 15 | 041–044 | ✅ Done (klik_pos side verified live via bench console + build/typecheck; bot side (hd-delivery-telegram) import/logic-verified, not yet run live - see phases/phase-15.md) |
+| 17 — Daily Booklet Page Reconciliation | 16 | 045–051 | ✅ Done (backend verified live via bench console; frontend build/typecheck clean, not yet browser-checked - see phases/phase-16.md) |
 
 **Next up:** Phases 9, 10, 12, and (mostly) 13 are implemented — user should browser-verify
 `/deliveries/reconcile`, `/drivers`, `/deliveries/map`, and `/deliveries/booklets` (once a Google
@@ -410,6 +411,29 @@ deliberately stay bot-owned: KlikPOS only computes status, and `hd-delivery-tele
 gained a `booklet_sync.py` that polls `list_booklets` and alerts on a transition - mirroring
 `driver_sync.py`'s existing poll pattern (Phase 10 addendum) rather than a new klik_pos → bot
 webhook, once that precedent was pointed out (the bot has no inbound HTTP surface at all today).
+
+### Module 17: Daily Booklet Page Reconciliation — **DONE (2026-08-02)**
+
+Detailed spec: [phases/phase-16.md](phases/phase-16.md) (Todos 045–048). Module 16 built the
+booklet registry, but real usage revealed its gap detection was wrong for how this shop actually
+works: POS invoices are created *before* fulfillment now, so an existing invoice isn't proof a
+page is resolved (might still be awaiting delivery or pickup); self-pickup is a real distinct
+outcome, not a delivery variant; and some paper pages are void (written, sale never happened) or
+simply forgotten by the driver. This module adds the actual end-of-day workflow: every invoice/
+page number touched on a date, classified as Void / Delivered / Partially Delivered / Self Pickup
+/ Pending Fulfillment / Reported-No-Invoice / Unresolved, with matching resolve actions (Confirm
+Self-Pickup, Confirm Delivered manually, Create Invoice with or without a Delivery Report, Mark
+Void), and an explicit hard-blocked "Close Day" sign-off - "like daily account book closing," in
+the user's words - that can't succeed until every number is accounted for.
+
+Decided with the user (2026-08-02): Partially Delivered stays its own state, not folded into
+Delivered (prompted by asking how partial delivery is currently handled) - its remainder is a
+follow-up confirm on the same invoice, tracked by the existing reconciliation queue, not this
+checklist. Closing is reopenable but System Manager only, and late-arriving data for an
+already-closed day flags it "Needs Re-review" (detected lazily on next read) rather than silently
+changing history or blocking the sync. A real bug was found and fixed along the way: invoices
+backfilled via `create_invoice_from_delivery_report` never got `custom_invoice_ref` stamped, making
+them permanently invisible to this checklist's invoice lookup even once fully confirmed.
 
 ---
 

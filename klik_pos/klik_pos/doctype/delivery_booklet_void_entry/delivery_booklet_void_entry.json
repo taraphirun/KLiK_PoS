@@ -1,0 +1,62 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-02 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "page_number",
+  "reason",
+  "column_break_void_1",
+  "voided_by",
+  "voided_at"
+ ],
+ "fields": [
+  {
+   "fieldname": "page_number",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Page Number",
+   "reqd": 1
+  },
+  {
+   "fieldname": "reason",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Reason"
+  },
+  {
+   "fieldname": "column_break_void_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "voided_by",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Voided By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "voided_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Voided At",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-08-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "KLiK PoS",
+ "name": "Delivery Booklet Void Entry",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

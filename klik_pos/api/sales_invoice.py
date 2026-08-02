@@ -962,6 +962,7 @@ def validate_checkout_invoice(data):
 			additional_discount_amount,
 			additional_discount_percentage,
 			apply_discount_on,
+			self_pickup,
 		) = parse_invoice_data(data)
 
 		preview_doc = build_sales_invoice_doc(
@@ -986,6 +987,7 @@ def validate_checkout_invoice(data):
 			additional_discount_amount=additional_discount_amount,
 			additional_discount_percentage=additional_discount_percentage,
 			apply_discount_on=apply_discount_on,
+			self_pickup=self_pickup,
 		)
 
 		validate_required_salesperson(preview_doc)
@@ -1085,6 +1087,7 @@ def validate_before_submit(data):
 			additional_discount_amount,
 			additional_discount_percentage,
 			apply_discount_on,
+			self_pickup,
 		) = parse_invoice_data(data)
 
 		preview_doc = build_sales_invoice_doc(
@@ -1110,6 +1113,7 @@ def validate_before_submit(data):
 			additional_discount_amount=additional_discount_amount,
 			additional_discount_percentage=additional_discount_percentage,
 			apply_discount_on=apply_discount_on,
+			self_pickup=self_pickup,
 		)
 
 		paid_credit = flt(amount_paid) + flt(getattr(preview_doc, "loyalty_amount", 0))
@@ -1309,6 +1313,7 @@ def queue_sales_invoice(data):
 			additional_discount_amount,
 			additional_discount_percentage,
 			apply_discount_on,
+			self_pickup,
 		) = parse_invoice_data(data)
 
 		if not customer:
@@ -1338,6 +1343,7 @@ def queue_sales_invoice(data):
 			additional_discount_amount=additional_discount_amount,
 			additional_discount_percentage=additional_discount_percentage,
 			apply_discount_on=apply_discount_on,
+			self_pickup=self_pickup,
 			posting_date=data.get("posting_date"),
 		)
 
@@ -1570,6 +1576,7 @@ def create_draft_invoice(data):
 			additional_discount_amount,
 			additional_discount_percentage,
 			apply_discount_on,
+			self_pickup,
 		) = parse_invoice_data(data)
 
 		if target_draft_invoice_id:
@@ -1627,6 +1634,7 @@ def create_draft_invoice(data):
 				additional_discount_amount=additional_discount_amount,
 				additional_discount_percentage=additional_discount_percentage,
 				apply_discount_on=apply_discount_on,
+				self_pickup=self_pickup,
 			)
 
 			validate_required_salesperson(doc)
@@ -1878,6 +1886,10 @@ def parse_invoice_data(data):
 	salesperson = data.get("salesperson")
 	tax_id = data.get("tax_id")
 	custom_invoice_ref = data.get("customInvoiceRef") or data.get("custom_invoice_ref")
+	# POS checkout self-pickup checkbox (Module 17 follow-up) - customer takes the item at the
+	# counter, no delivery personnel/driver involved. Mutually exclusive with delivery_personnel
+	# at the UI level (PaymentDialog.tsx clears one when the other is set), not re-validated here.
+	self_pickup = _as_bool(data.get("selfPickup") or data.get("self_pickup"))
 
 	if not customer or not items:
 		frappe.throw(_("Customer and items are required"))
@@ -1903,6 +1915,7 @@ def parse_invoice_data(data):
 		additional_discount_amount,
 		additional_discount_percentage,
 		apply_discount_on,
+		self_pickup,
 	)
 
 
@@ -1930,6 +1943,7 @@ def build_sales_invoice_doc(
 	additional_discount_percentage=0.0,
 	apply_discount_on="Grand Total",
 	posting_date=None,
+	self_pickup=False,
 ):
 	"""Main function to build a sales invoice document."""
 	doc = frappe.new_doc("Sales Invoice")
@@ -1950,6 +1964,15 @@ def build_sales_invoice_doc(
 	# Set custom invoice reference if provided
 	if custom_invoice_ref and hasattr(doc, "custom_invoice_ref"):
 		doc.custom_invoice_ref = custom_invoice_ref
+
+	# POS checkout self-pickup checkbox (Module 17 follow-up) - the customer takes the item at the
+	# counter, so the delivery outcome is already known at submission time, same reasoning as the
+	# Daily Reconciliation page's manual Confirm Self-Pickup action but set immediately instead of
+	# needing that extra step later for the common "picked up right now" case.
+	if self_pickup and hasattr(doc, "custom_delivery_status"):
+		doc.custom_delivery_status = "Self Pickup"
+		if hasattr(doc, "custom_delivered_at"):
+			doc.custom_delivered_at = frappe.utils.now_datetime()
 
 	# Set salesperson in sales team
 	if salesperson:
@@ -4025,6 +4048,7 @@ def submit_draft_invoice(invoice_id, data=None):
 				additional_discount_amount=additional_discount_amount,
 				additional_discount_percentage=additional_discount_percentage,
 				apply_discount_on=apply_discount_on,
+				self_pickup=self_pickup,
 			)
 
 			invoice_doc.customer = rebuilt_doc.customer
@@ -4035,6 +4059,10 @@ def submit_draft_invoice(invoice_id, data=None):
 			invoice_doc.tax_id = rebuilt_doc.tax_id
 			if custom_invoice_ref and hasattr(invoice_doc, "custom_invoice_ref"):
 				invoice_doc.custom_invoice_ref = custom_invoice_ref
+			if self_pickup and hasattr(invoice_doc, "custom_delivery_status"):
+				invoice_doc.custom_delivery_status = rebuilt_doc.custom_delivery_status
+				if hasattr(invoice_doc, "custom_delivered_at"):
+					invoice_doc.custom_delivered_at = rebuilt_doc.custom_delivered_at
 			invoice_doc.pos_profile = rebuilt_doc.pos_profile
 			invoice_doc.company = rebuilt_doc.company
 			invoice_doc.currency = rebuilt_doc.currency

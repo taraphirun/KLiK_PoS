@@ -1408,7 +1408,7 @@
    "fieldname": "custom_delivery_status",
    "fieldtype": "Select",
    "label": "Delivery Status",
-   "options": "Pending\nDelivered\nPartially Delivered\nNot Delivered",
+   "options": "Pending\nDelivered\nPartially Delivered\nNot Delivered\nSelf Pickup",
    "default": "Pending",
    "dt": "Sales Invoice",
    "insert_after": "custom_delivery_personnel_name",

@@ -1,0 +1,174 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:closing_date",
+ "creation": "2026-08-02 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "closing_date",
+  "status",
+  "column_break_dc_1",
+  "start_number",
+  "end_number",
+  "section_break_summary",
+  "delivered_count",
+  "partially_delivered_count",
+  "column_break_dc_2",
+  "self_pickup_count",
+  "void_count",
+  "section_break_signoff",
+  "closed_by",
+  "closed_at",
+  "column_break_dc_3",
+  "reopened_by",
+  "reopened_at",
+  "section_break_review",
+  "needs_review_reason"
+ ],
+ "fields": [
+  {
+   "description": "Calendar date this closing covers. Also the docname (autoname: field:closing_date).",
+   "fieldname": "closing_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Closing Date",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "default": "Closed",
+   "description": "Closed (signed off) -> Reopened (System Manager undid it) -> Needs Re-review (new data arrived for this date after it was closed - detected lazily by get_daily_reconciliation, not a live push).",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Closed\nReopened\nNeeds Re-review"
+  },
+  {
+   "fieldname": "column_break_dc_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Lowest invoice/page number touched on this date, snapshotted at close time.",
+   "fieldname": "start_number",
+   "fieldtype": "Int",
+   "label": "Start Number"
+  },
+  {
+   "description": "Highest invoice/page number touched on this date, snapshotted at close time.",
+   "fieldname": "end_number",
+   "fieldtype": "Int",
+   "label": "End Number"
+  },
+  {
+   "fieldname": "section_break_summary",
+   "fieldtype": "Section Break",
+   "label": "Summary (snapshot at close time)"
+  },
+  {
+   "fieldname": "delivered_count",
+   "fieldtype": "Int",
+   "label": "Delivered"
+  },
+  {
+   "fieldname": "partially_delivered_count",
+   "fieldtype": "Int",
+   "label": "Partially Delivered"
+  },
+  {
+   "fieldname": "column_break_dc_2",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "self_pickup_count",
+   "fieldtype": "Int",
+   "label": "Self Pickup"
+  },
+  {
+   "fieldname": "void_count",
+   "fieldtype": "Int",
+   "label": "Void"
+  },
+  {
+   "fieldname": "section_break_signoff",
+   "fieldtype": "Section Break",
+   "label": "Sign-off"
+  },
+  {
+   "fieldname": "closed_by",
+   "fieldtype": "Link",
+   "label": "Closed By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "closed_at",
+   "fieldtype": "Datetime",
+   "label": "Closed At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_dc_3",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Set when a System Manager reopens this closing - the original closed_by/closed_at above are left in place as history, not overwritten.",
+   "fieldname": "reopened_by",
+   "fieldtype": "Link",
+   "label": "Reopened By",
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "reopened_at",
+   "fieldtype": "Datetime",
+   "label": "Reopened At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_review",
+   "fieldtype": "Section Break",
+   "label": "Re-review"
+  },
+  {
+   "description": "Why get_daily_reconciliation flagged this closing as needing another look (e.g. \"New Delivery Report DR-08-0099 (invoice 47) synced after closing\").",
+   "fieldname": "needs_review_reason",
+   "fieldtype": "Small Text",
+   "label": "Needs Review Reason"
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-02 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "KLiK PoS",
+ "name": "Delivery Booklet Daily Closing",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "search_fields": "closing_date,status",
+ "sort_field": "closing_date",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "closing_date",
+ "track_changes": 1
+}
