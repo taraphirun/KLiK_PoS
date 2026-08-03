@@ -1034,3 +1034,58 @@ def create_invoice_for_unreported_page(page_number, invoice_data, payment_status
     except Exception as e:
         frappe.log_error(title="Create invoice for unreported booklet page failed")
         return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def get_shop_locations():
+    """Fixed shop pins for the Live Delivery Map (2026-08-03 follow-up) - most deliveries
+    originate near a shop, so this gives the map a reference point (and, once there's more than
+    one, all of them at once - not scoped to whichever POS Profile the current session happens to
+    have open).
+
+    A warehouse counts as a "shop location" if it's assigned to an enabled POS Profile (decided
+    with the user: "pos profile is open per warehouse so select the address of those warehouse
+    only") - not every Warehouse is a shop, but every warehouse actually in use as a till location
+    is, by definition. Only returns ones with coordinates actually set
+    (custom_shop_latitude/custom_shop_longitude, see ensure_warehouse_shop_location_fields).
+    """
+    try:
+        pos_profiles = frappe.get_all(
+            "POS Profile",
+            filters={"disabled": 0, "warehouse": ["is", "set"]},
+            fields=["name", "warehouse"],
+        )
+        if not pos_profiles:
+            return {"success": True, "data": []}
+
+        profiles_by_warehouse = {}
+        for p in pos_profiles:
+            profiles_by_warehouse.setdefault(p.warehouse, []).append(p.name)
+
+        warehouses = frappe.get_all(
+            "Warehouse",
+            filters={"name": ["in", list(profiles_by_warehouse)]},
+            fields=["name", "warehouse_name", "custom_shop_latitude", "custom_shop_longitude"],
+        )
+
+        return {
+            "success": True,
+            "data": [
+                {
+                    "warehouse": w.name,
+                    "warehouse_name": w.warehouse_name,
+                    "latitude": w.custom_shop_latitude,
+                    "longitude": w.custom_shop_longitude,
+                    "pos_profiles": profiles_by_warehouse[w.name],
+                }
+                for w in warehouses
+                # Float fields default to 0, not NULL - a real (0, 0) shop is implausible enough
+                # here to safely treat both falsy values as "not configured yet" rather than
+                # relying on an IS NOT NULL filter that wouldn't actually catch the never-set case.
+                if w.custom_shop_latitude and w.custom_shop_longitude
+            ],
+        }
+
+    except Exception as e:
+        frappe.log_error(title="Shop locations lookup failed")
+        return {"success": False, "message": str(e), "data": []}

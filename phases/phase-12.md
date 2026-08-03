@@ -17,6 +17,9 @@ points (and drivers), driven by Frappe realtime instead of the bot's socket.io/N
 ## Todos
 - [x] [031.md](../todo/031.md): Realtime delivery events (Frappe `publish_realtime`)
 - [x] [032.md](../todo/032.md): Live map page in KlikPOS
+- [x] [055.md](../todo/055.md): Shop location pin(s) on the map (follow-up, 2026-08-03) - a
+  warehouse assigned to an enabled POS Profile can carry lat/lng coordinates, shown as a fixed
+  shop pin(s) alongside delivery pins
 
 ## Notes
 - Replaces the bot's socket.io channel with Frappe's built-in realtime (`frappe.publish_realtime`

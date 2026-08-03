@@ -31,7 +31,7 @@ Legend: ✅ Done · 🔷 In progress · ⬜ Not started. Per-todo status lives i
 | 10 — Delivery Tracking & Payment Reconciliation | 9 | 019–024 | ✅ Done (backend fully verified; frontend not yet browser-checked, see Todo 024) |
 | 11 — Delivery Driver Management & Free-Text→Link | 10 | 025–028 | ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked, see Todo 027) |
 | 12 — Deliveries & Conflicts UI | 11 | 029–030 | ❌ Dropped (2026-07-31, see phases/phase-11.md) |
-| 13 — Live Delivery Map | 12 | 031–032 | ✅ Done (backend fully verified; frontend build/typecheck clean, not yet browser-checked or given a real Google Maps API key, see Todo 032) |
+| 13 — Live Delivery Map | 12 | 031–032, 055 | ✅ Done (key + layout confirmed working by the user; Todo 055 shop location pin(s) backend-verified, not yet browser-checked) |
 | 14 — Offline-First Bot Repoint & Legacy Retirement | 13 | 033–036 | 🔷 In progress (033–035 done + verified live against KlikPOS, in `hd-delivery-telegram`; 036 - actual cutover/decommission - deliberately deferred, see phase-13.md) |
 | 15 — Backfill Invoice Creation from Reconciliation | 14 | 038–040 | ✅ Done (verified live end-to-end incl. browser, see phases/phase-14.md) |
 | 16 — Delivery Booklet Registry & Lifecycle | 15 | 041–044 | ✅ Done (klik_pos side verified live via bench console + build/typecheck; bot side (hd-delivery-telegram) import/logic-verified, not yet run live - see phases/phase-15.md) |

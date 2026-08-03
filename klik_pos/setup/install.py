@@ -232,24 +232,76 @@ def ensure_delivery_reconciliation_fields():
 
 
 def ensure_google_maps_api_key_field():
-    """POS Profile field holding the Google Maps JavaScript API key for the Live Delivery Map
-    (Module 13 / Todo 032). A JS API key is meant to run client-side (restrict it by HTTP
-    referrer in Google Cloud Console, not treat it as a server secret) - Data, not Password, so
-    it round-trips through the existing posDetails-on-frontend pattern this app already uses for
-    other POS Profile custom fields (e.g. custom_az_coil_item_groups) without special-casing.
-    """
-    if frappe.db.exists("Custom Field", "POS Profile-custom_google_maps_api_key"):
-        return
+    """POS Profile fields holding Google Maps config for the Live Delivery Map (Module 13 /
+    Todo 032, Map ID added as a 2026-08-03 follow-up). Both are meant to run client-side (restrict
+    the API key by HTTP referrer in Google Cloud Console, not treat it as a server secret) - Data,
+    not Password, so they round-trip through the existing posDetails-on-frontend pattern this app
+    already uses for other POS Profile custom fields (e.g. custom_az_coil_item_groups) without
+    special-casing.
 
-    create_custom_field(
-        "POS Profile",
+    custom_google_maps_map_id is optional (unlike the API key, the map still renders without it -
+    just falls back to classic raster tiles). Setting it switches Live Delivery Map to vector
+    (WebGL) rendering, which is what actually makes smooth/animated zoom possible without visible
+    tile-reload flicker - raster tiles are discrete images per integer zoom level, so any zoom
+    change forces new tiles to load; vector rendering has no such per-level tiles. Confirmed with
+    the user (2026-08-03) this tradeoff (a one-time Cloud Console Map ID setup step) is worth it -
+    mirrors exactly how the companion hd-delivery-telegram bot's own live map already works
+    (frontend/src/components/DeliveryMap.tsx sets a mapId + drives smooth flyTo via
+    map.moveCamera(), ported into klik_spa's MapFocuser).
+    """
+    create_custom_fields(
         {
-            "fieldname": "custom_google_maps_api_key",
-            "label": "Google Maps API Key",
-            "fieldtype": "Data",
-            "insert_after": "print_format",
-            "module": "KLiK PoS",
-            "description": "Google Maps JavaScript API key for the Live Delivery Map. Restrict this key to your site's domain(s) in Google Cloud Console.",
+            "POS Profile": [
+                {
+                    "fieldname": "custom_google_maps_api_key",
+                    "label": "Google Maps API Key",
+                    "fieldtype": "Data",
+                    "insert_after": "print_format",
+                    "description": "Google Maps JavaScript API key for the Live Delivery Map. Restrict this key to your site's domain(s) in Google Cloud Console.",
+                },
+                {
+                    "fieldname": "custom_google_maps_map_id",
+                    "label": "Google Maps Map ID",
+                    "fieldtype": "Data",
+                    "insert_after": "custom_google_maps_api_key",
+                    "description": "Optional. Create one in Google Cloud Console (Google Maps Platform → Map Management), same project as the API key above, to enable smooth vector-rendered zoom on the Live Delivery Map. Leave blank to keep classic raster tiles.",
+                },
+            ]
+        },
+        ignore_validate=True,
+    )
+
+
+def ensure_warehouse_shop_location_fields():
+    """Warehouse fields holding a shop's coordinates for the Live Delivery Map (2026-08-03
+    follow-up) - the user wants a fixed "shop" pin shown alongside delivery pins, since most
+    deliveries originate near the shop. Not every Warehouse is a shop (raw material/transit
+    warehouses etc.), so get_shop_locations (klik_pos.api.delivery) doesn't use these fields
+    alone - it only shows a warehouse that's also assigned to an *enabled* POS Profile (decided
+    with the user: "pos profile is open per warehouse so select the address of those warehouse
+    only"), which is this app's existing signal for "this warehouse is a real till/shop location."
+    Manual lat/lng entry (decided with the user) rather than address-typing + geocoding, so no
+    Places API is needed beyond the Maps JavaScript API already in use.
+    """
+    create_custom_fields(
+        {
+            "Warehouse": [
+                {
+                    "fieldname": "custom_shop_latitude",
+                    "label": "Shop Latitude",
+                    "fieldtype": "Float",
+                    "precision": "6",
+                    "insert_after": "pin",
+                    "description": "Shown as a fixed shop pin on the Live Delivery Map, if this warehouse is also assigned to an enabled POS Profile.",
+                },
+                {
+                    "fieldname": "custom_shop_longitude",
+                    "label": "Shop Longitude",
+                    "fieldtype": "Float",
+                    "precision": "6",
+                    "insert_after": "custom_shop_latitude",
+                },
+            ]
         },
         ignore_validate=True,
     )
@@ -262,3 +314,4 @@ def after_install():
     ensure_pos_print_format_field()
     ensure_delivery_reconciliation_fields()
     ensure_google_maps_api_key_field()
+    ensure_warehouse_shop_location_fields()

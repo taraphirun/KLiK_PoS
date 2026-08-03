@@ -215,6 +215,21 @@ export async function setManualDeliveryStatus(
   });
 }
 
+/** A warehouse assigned to an enabled POS Profile, with a coordinate set - shown as a fixed shop
+ * pin on the Live Delivery Map (2026-08-03 follow-up). See get_shop_locations for how "shop" is
+ * determined - not every Warehouse, only ones actually in use as a till location. */
+export interface ShopLocation {
+  warehouse: string;
+  warehouse_name: string;
+  latitude: number;
+  longitude: number;
+  pos_profiles: string[];
+}
+
+export async function getShopLocations(): Promise<{ success: boolean; data: ShopLocation[]; message?: string }> {
+  return postJson("klik_pos.api.delivery.get_shop_locations", {});
+}
+
 export async function createInvoiceForUnreportedPage(
   pageNumber: number,
   invoiceData: BackfillInvoiceData,

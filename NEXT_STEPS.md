@@ -1,25 +1,20 @@
 # Next Steps
 
-Outstanding items as of 2026-08-02, after Module 17 (Daily Booklet Page Reconciliation). Not a
-phased todo list — a snapshot of what's left to verify, act on, or pick up. Update or delete items
-as they're resolved; this file isn't meant to accumulate stale entries the way `bugs.md` sometimes
-does.
+Outstanding items as of 2026-08-03, after Module 17 (Daily Booklet Page Reconciliation) and its
+2026-08-03 follow-up (Todos 053-054: full-range booklet close gate, Scheduled delivery dates,
+locked-when-closed actions). Not a phased todo list — a snapshot of what's left to verify, act on,
+or pick up. Update or delete items as they're resolved; this file isn't meant to accumulate stale
+entries the way `bugs.md` sometimes does.
 
 ## Needs your verification (built + tested by Claude, not yet confirmed in browser)
-- [ ] Daily Reconciliation page (`/deliveries/daily-reconcile`) — checklist, Close/Reopen, link/
-      unlink, confirm dialogs
-- [ ] Self-pickup checkbox at POS checkout — fixed the `isDeliveryRequired` gating bug, unconfirmed
-      since your last restart
-- [ ] Booklets page (`/deliveries/booklets`) and reconciliation-page booklet badges/resolve action
-- [ ] Live Delivery Map — blocked on setting a real Google Maps API key on the POS Profile first
+- [ ] Live Delivery Map shop location pin(s) (Todo 055) — set "Shop Latitude"/"Shop Longitude" on
+      your warehouse(s) in Desk (Stock → Warehouse), then confirm the pin(s) show up on
+      `/deliveries/map`
 
 ## Needs an action from you (ops/deployment, not code)
-- [ ] Restart `hd-delivery-telegram`'s bot process so `booklet_sync.py` actually runs against
-      Telegram - only unit-tested in isolation so far
 - [ ] Delete leftover $1 test invoices against "Delivery Reconciliation Demo (seed)" customer -
       stuck uncancellable because AZT stock is too tight on this site; not touched since it'd
       require a Stock Settings change
-- [ ] Push this session's commits to origin - everything is local-only on `version-16.1` so far
 
 ## Known, deliberately deferred (not urgent)
 - [ ] Todo 036: retire the legacy NestJS/Postgres/Redis/MinIO/OCR stack in the bot repo - needs a

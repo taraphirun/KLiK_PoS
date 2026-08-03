@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APIProvider, ControlPosition, Map, MapControl, Marker, useMap } from "@vis.gl/react-google-maps";
 import { AlertTriangle, Crosshair, Layers, Loader2, MapPin, Minus, Plus, Receipt, Search, User, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import BottomNavigation from "../components/BottomNavigation";
 import {
   getDeliveryReports,
+  getShopLocations,
   subscribeToDeliveryUpdates,
   type DeliveryReport,
   type DeliveryRealtimeUpdate,
   type ReconciliationStatus,
+  type ShopLocation,
 } from "../services/delivery";
 import { getRealtimeSocket } from "../utils/realtime";
 import { usePOSProfileStore } from "../stores/posProfileStore";
@@ -26,6 +28,15 @@ const STATUS_COLOR: Record<ReconciliationStatus, string> = {
   Rejected: "#a855f7",
   Confirmed: "#22c55e",
 };
+
+// Solid teardrop "map pin" shape (same family as lucide-react's MapPin, already used elsewhere on
+// this page) in a 24x24 path coordinate space - replaces the old flat SymbolPath.CIRCLE dot
+// (2026-08-03 follow-up, user request: show the cluster's delivery count inside a pin, not a
+// plain dot). anchor/labelOrigin are expressed in this same unscaled 24x24 space; Maps scales both
+// together with the path via `scale`, so they stay aligned regardless of pin size.
+const PIN_PATH = "M12 2C7.58 2 4 5.58 4 10c0 6.5 8 14 8 14s8-7.5 8-14c0-4.42-3.58-8-8-8z";
+const PIN_ANCHOR = { x: 12, y: 24 };
+const PIN_LABEL_ORIGIN = { x: 12, y: 9.5 };
 
 type MapPin = {
   name: string;
@@ -74,6 +85,16 @@ function updateToPin(update: DeliveryRealtimeUpdate, receivedAt: number): MapPin
     delivery_timestamp: update.delivery_timestamp,
     receivedAt,
   };
+}
+
+/** Permissive by design (2026-08-03 follow-up): a report with no delivery_timestamp yet (e.g.
+ * Unmatched, awaiting confirmation) is presumably very recent and shouldn't be hidden from the
+ * feed just for lacking a stamp - only an *actually past-dated* timestamp excludes it. */
+function isToday(timestamp: string | null): boolean {
+  if (!timestamp) return true;
+  const today = new Date();
+  const ts = new Date(timestamp.replace(" ", "T"));
+  return ts.getFullYear() === today.getFullYear() && ts.getMonth() === today.getMonth() && ts.getDate() === today.getDate();
 }
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -128,14 +149,40 @@ function ClusterMarker({ cluster, onClick }: { cluster: ClusterData; onClick: ()
       onClick={onClick}
       zIndex={cluster.items.length}
       icon={{
-        path: google.maps.SymbolPath.CIRCLE,
+        path: PIN_PATH,
         fillColor: color,
         fillOpacity: 1,
         strokeColor: "#ffffff",
-        strokeWeight: 2,
-        scale: isGroup ? 16 : 10,
+        strokeWeight: 1.5,
+        scale: isGroup ? 1.8 : 1.4,
+        anchor: new google.maps.Point(PIN_ANCHOR.x, PIN_ANCHOR.y),
+        labelOrigin: new google.maps.Point(PIN_LABEL_ORIGIN.x, PIN_LABEL_ORIGIN.y),
       }}
-      label={isGroup ? { text: String(cluster.items.length), color: "#ffffff", fontSize: "12px", fontWeight: "bold" } : undefined}
+      label={{ text: String(cluster.items.length), color: "#ffffff", fontSize: "11px", fontWeight: "bold" }}
+    />
+  );
+}
+
+const SHOP_PIN_ICON = "/assets/klik_pos/klik_spa/shop-location-pin.png";
+const SHOP_PIN_SIZE = 40;
+
+/** A fixed shop pin (2026-08-03 follow-up) - most deliveries originate near a shop, so this gives
+ * the map a reference point. User-provided teardrop-pin-with-building icon (self-hosted, served
+ * from klik_spa/public - not hotlinked), distinct in shape from every delivery pin's flat
+ * status-colored circle so it reads as fundamentally different at a glance. anchor is set to the
+ * pin's actual tip (bottom-center of the square source image) so the marker points precisely at
+ * the coordinate rather than centering the whole icon on it. */
+function ShopMarker({ location }: { location: ShopLocation }) {
+  return (
+    <Marker
+      position={{ lat: location.latitude, lng: location.longitude }}
+      title={`${location.warehouse_name} (shop)`}
+      icon={{
+        url: SHOP_PIN_ICON,
+        scaledSize: new google.maps.Size(SHOP_PIN_SIZE, SHOP_PIN_SIZE),
+        anchor: new google.maps.Point(SHOP_PIN_SIZE / 2, SHOP_PIN_SIZE),
+      }}
+      zIndex={1000}
     />
   );
 }
@@ -143,7 +190,7 @@ function ClusterMarker({ cluster, onClick }: { cluster: ClusterData; onClick: ()
 /** Custom floating controls (map type, recenter, zoom) instead of Google's default UI - matches
  * the reference bot UI's CustomMapControls. "Recenter" fits bounds around the currently visible
  * pins rather than a fixed home location, since this app has no equivalent "home" concept. */
-function MapControls({ pins }: { pins: MapPin[] }) {
+function MapControls({ pins, shopLocations }: { pins: MapPin[]; shopLocations: ShopLocation[] }) {
   const map = useMap();
   const [mapType, setMapType] = useState<"roadmap" | "satellite">("roadmap");
 
@@ -154,9 +201,10 @@ function MapControls({ pins }: { pins: MapPin[] }) {
   };
 
   const recenter = () => {
-    if (!map || pins.length === 0) return;
+    if (!map || (pins.length === 0 && shopLocations.length === 0)) return;
     const bounds = new google.maps.LatLngBounds();
     pins.forEach((pin) => bounds.extend({ lat: pin.gps_latitude, lng: pin.gps_longitude }));
+    shopLocations.forEach((location) => bounds.extend({ lat: location.latitude, lng: location.longitude }));
     map.fitBounds(bounds, 64);
   };
 
@@ -198,6 +246,88 @@ function MapControls({ pins }: { pins: MapPin[] }) {
       </div>
     </MapControl>
   );
+}
+
+const FLY_TARGET_ZOOM = 17;
+
+function easeInOutQuad(t: number): number {
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+/** Imperatively "flies" the map to a target location - ported from the companion
+ * hd-delivery-telegram bot's own live map (frontend/src/components/DeliveryMap.tsx's flyTo(),
+ * 2026-08-03 follow-up: "check my hd delivery telegram and see how this issue is handled"). Drives
+ * map.moveCamera() every animation frame with continuously-interpolated center/zoom, including a
+ * parabolic zoom-out-then-in dip (their exact formula/thresholds, kept as-is) - not a discrete
+ * step-by-step setZoom() loop, which is what caused the previous attempt's tile-reload flicker.
+ * Genuinely smooth (no reload jumps) *if* the map is vector-rendered (custom_google_maps_map_id
+ * set on the POS Profile, wired into <Map mapId=...> below) - on plain raster tiles this still
+ * runs, but raster's own discrete per-zoom-level tiles are a rendering-technology limit that
+ * animation code alone can't fix, confirmed with the user before porting this.
+ *
+ * Rendered inside <Map> purely to reach the raw map instance via useMap() (same reason
+ * MapControls does). Deliberately imperative, not controlled center/zoom props on <Map> itself -
+ * those would fight the user's own free panning/zooming on every re-render. */
+function MapFocuser({ target }: { target: { lat: number; lng: number } | null }) {
+  const map = useMap();
+  const animationRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!map || !target) return;
+
+    if (animationRef.current !== null) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+
+    const currentCenter = map.getCenter();
+    if (!currentCenter) {
+      map.setCenter(target);
+      map.setZoom(FLY_TARGET_ZOOM);
+      return;
+    }
+
+    const startLat = currentCenter.lat();
+    const startLng = currentCenter.lng();
+    const startZoom = map.getZoom() ?? 12;
+    const distance = haversineMeters(startLat, startLng, target.lat, target.lng);
+    // Duration: 1s minimum, up to 3s based on distance - same formula as the bot's flyTo().
+    const duration = Math.min(Math.max(1000, 1000 + distance * 150), 3000);
+    const startTime = performance.now();
+
+    const step = (now: number) => {
+      const progress = Math.min((now - startTime) / duration, 1);
+      const eased = easeInOutQuad(progress);
+
+      const lat = startLat + (target.lat - startLat) * eased;
+      const lng = startLng + (target.lng - startLng) * eased;
+
+      let zoom = startZoom + (FLY_TARGET_ZOOM - startZoom) * eased;
+      if (distance > 5) {
+        // Parabolic dip: zoom out mid-transition, back in by the end - "so I can get a feel of
+        // the relative location" (user request). zoomOutAmount caps how deep the dip goes and
+        // fades to 0 the more zoomed-out the start already was, matching the bot's own tuning.
+        const parabola = 4 * eased * (1 - eased);
+        const zoomOutAmount = Math.min(3, Math.max(0, startZoom - 10));
+        zoom -= parabola * zoomOutAmount;
+      }
+
+      map.moveCamera({ center: { lat, lng }, zoom });
+
+      animationRef.current = progress < 1 ? requestAnimationFrame(step) : null;
+    };
+
+    animationRef.current = requestAnimationFrame(step);
+
+    return () => {
+      if (animationRef.current !== null) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+      }
+    };
+  }, [map, target]);
+
+  return null;
 }
 
 interface ClusterDetailPanelProps {
@@ -354,20 +484,37 @@ function FiltersPanel({
 }
 
 function LiveFeedList({ pins, isConnected, onFocus }: { pins: MapPin[]; isConnected: boolean; onFocus: (pin: MapPin) => void }) {
-  const feed = useMemo(() => [...pins].sort((a, b) => b.receivedAt - a.receivedAt).slice(0, 50), [pins]);
+  // Defaults to today only (2026-08-03 follow-up, user request) - a "live" feed showing months of
+  // old history by default isn't actually useful; toggle-able for catching up on older activity.
+  const [todayOnly, setTodayOnly] = useState(true);
+  const feed = useMemo(() => {
+    const scoped = todayOnly ? pins.filter((pin) => isToday(pin.delivery_timestamp)) : pins;
+    return [...scoped].sort((a, b) => b.receivedAt - a.receivedAt).slice(0, 50);
+  }, [pins, todayOnly]);
 
   return (
     <div className="flex h-full flex-col gap-3">
-      <div className="flex items-center gap-2 text-xs font-medium">
-        <span className={`h-2 w-2 rounded-full ${isConnected ? "animate-pulse bg-green-500" : "bg-red-500"}`} />
-        <span className={isConnected ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
-          {isConnected ? "Connected to live updates" : "Disconnected"}
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-xs font-medium">
+          <span className={`h-2 w-2 rounded-full ${isConnected ? "animate-pulse bg-green-500" : "bg-red-500"}`} />
+          <span className={isConnected ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
+            {isConnected ? "Connected" : "Disconnected"}
+          </span>
+        </div>
+        <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
+          <input
+            type="checkbox"
+            checked={todayOnly}
+            onChange={(event) => setTodayOnly(event.target.checked)}
+            className="rounded border-gray-300 text-beveren-600 focus:ring-beveren-500 dark:border-gray-600"
+          />
+          Today only
+        </label>
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
         {feed.length === 0 ? (
           <div className="rounded-md border border-dashed border-gray-200 p-4 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-            No deliveries yet.
+            {todayOnly ? "No deliveries today yet." : "No deliveries yet."}
           </div>
         ) : (
           feed.map((pin) => (
@@ -405,8 +552,10 @@ export default function LiveDeliveryMapPage() {
   const navigate = useNavigate();
   const { posDetails } = usePOSProfileStore();
   const apiKey = posDetails?.custom_google_maps_api_key;
+  const mapId = posDetails?.custom_google_maps_map_id;
 
   const [pins, setPins] = useState<Record<string, MapPin>>({});
+  const [shopLocations, setShopLocations] = useState<ShopLocation[]>([]);
   const [statusFilter, setStatusFilter] = useState<Set<ReconciliationStatus>>(new Set(["Unmatched", "Suggested", "Confirmed"]));
   const [driverFilter, setDriverFilter] = useState("");
   const [search, setSearch] = useState("");
@@ -416,6 +565,7 @@ export default function LiveDeliveryMapPage() {
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [selectedCluster, setSelectedCluster] = useState<ClusterData | null>(null);
+  const [focusTarget, setFocusTarget] = useState<{ lat: number; lng: number } | null>(null);
 
   const fetchPins = useCallback(async () => {
     setIsLoading(true);
@@ -439,6 +589,14 @@ export default function LiveDeliveryMapPage() {
   useEffect(() => {
     fetchPins();
   }, [fetchPins]);
+
+  // Shop pins are static reference data (unlike deliveries, no realtime subscription needed) -
+  // fetched once on mount.
+  useEffect(() => {
+    getShopLocations()
+      .then((response) => setShopLocations(response.data || []))
+      .catch(() => setShopLocations([]));
+  }, []);
 
   // Connection indicator for the Live Feed panel - separate from the delivery_report_update
   // subscription below, since this tracks the socket's own connect/disconnect state.
@@ -493,10 +651,21 @@ export default function LiveDeliveryMapPage() {
   const clusters = useMemo(() => buildClusters(visiblePins, CLUSTER_RADIUS_METERS), [visiblePins]);
 
   const center = useMemo(() => {
-    if (visiblePins.length === 0) return DEFAULT_CENTER;
-    const sum = visiblePins.reduce((acc, pin) => ({ lat: acc.lat + pin.gps_latitude, lng: acc.lng + pin.gps_longitude }), { lat: 0, lng: 0 });
-    return { lat: sum.lat / visiblePins.length, lng: sum.lng / visiblePins.length };
-  }, [visiblePins]);
+    // Shop location(s) take priority over the delivery pins' own average (2026-08-03 follow-up,
+    // user request: "make sure to open to around my warehouse location") - most deliveries happen
+    // near the shop, so opening there is more useful than centering on whatever the current
+    // (possibly filtered, possibly sparse) set of visible pins happens to average out to. Multiple
+    // shops average together; "Recenter" still fits bounds around everything on demand.
+    if (shopLocations.length > 0) {
+      const sum = shopLocations.reduce((acc, loc) => ({ lat: acc.lat + loc.latitude, lng: acc.lng + loc.longitude }), { lat: 0, lng: 0 });
+      return { lat: sum.lat / shopLocations.length, lng: sum.lng / shopLocations.length };
+    }
+    if (visiblePins.length > 0) {
+      const sum = visiblePins.reduce((acc, pin) => ({ lat: acc.lat + pin.gps_latitude, lng: acc.lng + pin.gps_longitude }), { lat: 0, lng: 0 });
+      return { lat: sum.lat / visiblePins.length, lng: sum.lng / visiblePins.length };
+    }
+    return DEFAULT_CENTER;
+  }, [visiblePins, shopLocations]);
 
   const toggleStatus = (status: ReconciliationStatus) => {
     setStatusFilter((prev) => {
@@ -508,6 +677,9 @@ export default function LiveDeliveryMapPage() {
   };
 
   const focusOnPin = (pin: MapPin) => {
+    // 2026-08-03 follow-up, user request: clicking a Live Feed item teleports the map there, on
+    // top of the existing behavior of opening its cluster's detail panel.
+    setFocusTarget({ lat: pin.gps_latitude, lng: pin.gps_longitude });
     const cluster = clusters.find((c) => c.items.some((item) => item.name === pin.name));
     if (cluster) setSelectedCluster(cluster);
   };
@@ -539,12 +711,17 @@ export default function LiveDeliveryMapPage() {
               <APIProvider apiKey={apiKey}>
                 <Map
                   defaultCenter={center}
-                  defaultZoom={visiblePins.length ? 12 : 6}
+                  defaultZoom={shopLocations.length ? 14 : visiblePins.length ? 12 : 6}
+                  mapId={mapId || undefined}
                   gestureHandling="greedy"
                   disableDefaultUI
                   style={{ width: "100%", height: "100%" }}
                 >
-                  <MapControls pins={visiblePins} />
+                  <MapControls pins={visiblePins} shopLocations={shopLocations} />
+                  <MapFocuser target={focusTarget} />
+                  {shopLocations.map((location) => (
+                    <ShopMarker key={location.warehouse} location={location} />
+                  ))}
                   {clusters.map((cluster) => (
                     <ClusterMarker key={cluster.id} cluster={cluster} onClick={() => setSelectedCluster(cluster)} />
                   ))}
