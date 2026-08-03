@@ -462,8 +462,13 @@ export default function OrderSummary({
           </label>
           <input
             type="text"
+            inputMode="numeric"
             value={customInvoiceRef}
-            onChange={(e) => setCustomInvoiceRef(e.target.value)}
+            // custom_invoice_ref is an Int column (BUG-002, bugs.md) - a non-numeric value here
+            // used to silently save as 0 with no error shown, which the booklet/daily
+            // reconciliation system then reads as "no reference" rather than the cashier's actual
+            // (mistyped) input. Stripping non-digits as you type surfaces that immediately instead.
+            onChange={(e) => setCustomInvoiceRef(e.target.value.replace(/\D/g, ""))}
             placeholder="Physical receipt / reference number"
             className="w-full px-3 py-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-beveren-500"
           />

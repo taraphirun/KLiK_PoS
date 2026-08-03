@@ -17,11 +17,12 @@ export default function RetailSidebar() {
   const {posDetails} = usePOSProfileStore()
 
   const canAccessSalesDashboard = userInfo?.is_admin_user ?? false
+  const canAccessDeliveryManagement = posDetails?.custom_allow_delivery_management === 1
   const [pendingDeliveryCount, setPendingDeliveryCount] = useState(0)
   const [pendingDriverCount, setPendingDriverCount] = useState(0)
 
   useEffect(() => {
-    if (!canAccessSalesDashboard) return
+    if (!canAccessDeliveryManagement) return
     let isCurrent = true
     const fetchCount = () => {
       getDeliveryReports()
@@ -38,10 +39,10 @@ export default function RetailSidebar() {
       isCurrent = false
       window.clearInterval(interval)
     }
-  }, [canAccessSalesDashboard])
+  }, [canAccessDeliveryManagement])
 
   useEffect(() => {
-    if (!canAccessSalesDashboard) return
+    if (!canAccessDeliveryManagement) return
     let isCurrent = true
     const fetchCount = () => {
       getDrivers("Pending")
@@ -58,7 +59,7 @@ export default function RetailSidebar() {
       isCurrent = false
       window.clearInterval(interval)
     }
-  }, [canAccessSalesDashboard])
+  }, [canAccessDeliveryManagement])
 
   const menuItems = [
     { icon: Grid3X3, path: "/pos", label: "POS" },
@@ -67,11 +68,11 @@ export default function RetailSidebar() {
      { icon: Users, path: "/customers", label: "Customers", requiresEditCreatePermission: true },
     { icon: BarChart3, path: "/dashboard", label: "Dashboard", requiresSalesDashboard: true },
     { icon: MonitorX, path: "/closing_shift", label: "Closing Shift" },
-    { icon: Truck, path: "/deliveries/reconcile", label: "Deliveries", requiresSalesDashboard: true },
-    { icon: UserCheck, path: "/drivers", label: "Drivers", requiresSalesDashboard: true },
-    { icon: MapIcon, path: "/deliveries/map", label: "Live Map", requiresSalesDashboard: true },
-    { icon: BookOpen, path: "/deliveries/booklets", label: "Booklets", requiresSalesDashboard: true },
-    { icon: CalendarCheck, path: "/deliveries/daily-reconcile", label: "Daily Close", requiresSalesDashboard: true },
+    { icon: Truck, path: "/deliveries/reconcile", label: "Deliveries", requiresDeliveryManagement: true },
+    { icon: UserCheck, path: "/drivers", label: "Drivers", requiresDeliveryManagement: true },
+    { icon: MapIcon, path: "/deliveries/map", label: "Live Map", requiresDeliveryManagement: true },
+    { icon: BookOpen, path: "/deliveries/booklets", label: "Booklets", requiresDeliveryManagement: true },
+    { icon: CalendarCheck, path: "/deliveries/daily-reconcile", label: "Daily Close", requiresDeliveryManagement: true },
 
   ]
 
@@ -84,6 +85,7 @@ export default function RetailSidebar() {
 
   const handleNav = (item: (typeof menuItems)[0]) => {
     if (item.requiresSalesDashboard && !canAccessSalesDashboard) return
+    if (item.requiresDeliveryManagement && !canAccessDeliveryManagement) return
     navigate(item.path)
   }
 
@@ -119,7 +121,9 @@ export default function RetailSidebar() {
       {/* Menu Items - Flexible space */}
       <div className="flex-1 flex flex-col items-center py-6 space-y-4">
         {menuItems.map((item, index) => {
-          const disabled = item.requiresSalesDashboard && !canAccessSalesDashboard
+          const disabled =
+            (item.requiresSalesDashboard && !canAccessSalesDashboard) ||
+            (item.requiresDeliveryManagement && !canAccessDeliveryManagement)
           if (item.requiresEditCreatePermission && posDetails?.custom_allow_to_create_and_edit_customers !== 1) {
             return null; // Don't render this menu item if the user doesn't have permission
            }
@@ -136,7 +140,13 @@ export default function RetailSidebar() {
             key={index}
             onClick={() => handleNav(item)}
             disabled={disabled}
-            title={disabled ? `${item.label} (Sales Manager, System Manager or Administrator only)` : item.label}
+            title={
+              disabled
+                ? item.requiresDeliveryManagement
+                  ? `${item.label} (not enabled for this POS Profile)`
+                  : `${item.label} (Sales Manager, System Manager or Administrator only)`
+                : item.label
+            }
             className={`relative w-12 h-12 rounded-xl flex items-center justify-center transition-all duration-150 ${
               disabled
                 ? "opacity-50 cursor-not-allowed text-gray-400 dark:text-gray-600"

@@ -165,6 +165,7 @@ def sync_driver_from_bot(payload):
         telegram_user_id = payload.get("telegram_user_id")
         telegram_username = payload.get("telegram_username")
         chat_id = payload.get("chat_id")
+        phone_number = payload.get("phone_number")
 
         if not bot_driver_id and not telegram_user_id:
             frappe.throw("bot_driver_id or telegram_user_id is required")
@@ -181,8 +182,14 @@ def sync_driver_from_bot(payload):
             driver = frappe.get_doc("Delivery Driver", existing_name)
             created = False
         else:
+            # phone_number is set here too (creation only) even though it's a profile field, not
+            # a BOT_OWNED_FIELDS identity field - same precedence as driver_name just below: the
+            # bot seeds the *initial* value from the driver's own registration flow (2026-08-03,
+            # Todo 036 - this used to only be captured in the now-retired Postgres Driver table),
+            # but never overwrites it on a later sync once a human may have edited it.
             driver = frappe.new_doc("Delivery Driver")
             driver.driver_name = payload.get("driver_name") or telegram_username or "Unknown Driver"
+            driver.phone_number = phone_number
             driver.status = "Pending"
             created = True
 

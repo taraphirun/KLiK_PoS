@@ -135,11 +135,17 @@ def ensure_sales_invoice_invoice_ref_field():
     site, never fully configured"). A real from-scratch install during this audit confirmed every
     booklet/reconciliation feature would silently break without this field existing at all.
 
-    Replicated here with the EXACT properties already live in production (Int, not Data;
-    allow_on_submit not set, i.e. 0) rather than fixing BUG-002's underlying type issue as part of
-    this change - that's a separate, already-tracked, deliberately deferred decision (see
-    bugs.md), not something to fold into a portability fix without the user asking for the
-    behavior change itself.
+    Kept as Int (decided with the user, 2026-08-03, BUG-002) - the entire booklet/daily
+    reconciliation system (Module 17) is built around this being a real integer (page-range
+    "between" queries, booklet-number bucket math), so converting to Data now would be a much
+    larger, riskier rewrite than the field's original "free-text receipt number" framing was worth
+    revisiting for. `allow_on_submit` is now explicitly 1 (BUG-002's other half) - the field is
+    genuinely meant to be set after submission (that's the entire point of Daily Reconciliation's
+    link/unlink actions), so this is a real fix, not a workaround. `link_invoice_to_page`/
+    `unlink_invoice_page` (booklet.py) still use `frappe.db.set_value` rather than `doc.save()` for
+    this field specifically - that's now a deliberate choice (a single-field admin correction
+    shouldn't re-run the full Sales Invoice validate/stock chain), not a workaround for a missing
+    field property.
     """
     create_custom_fields(
         {
@@ -152,6 +158,7 @@ def ensure_sales_invoice_invoice_ref_field():
                     "non_negative": 1,
                     "in_list_view": 1,
                     "in_standard_filter": 1,
+                    "allow_on_submit": 1,
                     "description": "Reference number from hardcopy invoice",
                 },
             ]

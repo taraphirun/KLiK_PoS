@@ -94,23 +94,23 @@ const router = createBrowserRouter([
       },
       {
         path: "deliveries/reconcile",
-        element: <ProtectedRoute element={<DeliveryReconciliationPage />} />,
+        element: <ProtectedRoute element={<DeliveryReconciliationPage />} requiresDeliveryManagement />,
       },
       {
         path: "drivers",
-        element: <ProtectedRoute element={<DriverManagementPage />} />,
+        element: <ProtectedRoute element={<DriverManagementPage />} requiresDeliveryManagement />,
       },
       {
         path: "deliveries/map",
-        element: <ProtectedRoute element={<LiveDeliveryMapPage />} />,
+        element: <ProtectedRoute element={<LiveDeliveryMapPage />} requiresDeliveryManagement />,
       },
       {
         path: "deliveries/booklets",
-        element: <ProtectedRoute element={<BookletsPage />} />,
+        element: <ProtectedRoute element={<BookletsPage />} requiresDeliveryManagement />,
       },
       {
         path: "deliveries/daily-reconcile",
-        element: <ProtectedRoute element={<DailyReconciliationPage />} />,
+        element: <ProtectedRoute element={<DailyReconciliationPage />} requiresDeliveryManagement />,
       },
     ],
   },

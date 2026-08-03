@@ -1950,7 +1950,6 @@ def build_sales_invoice_doc(
 	_apply_klik_invoice_flags(doc, is_held=False, is_submitted=False)
 	doc.customer = customer
 	doc.due_date = due_date or frappe.utils.nowdate()
-	doc.custom_delivery_date = frappe.utils.nowdate()
 	doc.enable_background_invoice_submission = 1 if enable_background_submission else 0
 
 	# Set delivery personnel if provided
@@ -2089,7 +2088,6 @@ def _update_existing_draft_invoice(
 
 	invoice_doc.customer = rebuilt_doc.customer
 	invoice_doc.due_date = rebuilt_doc.due_date
-	invoice_doc.custom_delivery_date = rebuilt_doc.custom_delivery_date
 	invoice_doc.enable_background_invoice_submission = rebuilt_doc.enable_background_invoice_submission
 	invoice_doc.custom_delivery_personnel = rebuilt_doc.custom_delivery_personnel
 	invoice_doc.tax_id = rebuilt_doc.tax_id
@@ -3805,7 +3803,6 @@ def create_partial_return(
 
 		return_doc.is_return = 1
 		return_doc.posting_date = frappe.utils.nowdate()
-		return_doc.custom_delivery_date = frappe.utils.nowdate()
 		_apply_klik_invoice_flags(return_doc, is_held=False, is_submitted=True)
 
 		# Set the current POS opening entry
@@ -4053,7 +4050,6 @@ def submit_draft_invoice(invoice_id, data=None):
 
 			invoice_doc.customer = rebuilt_doc.customer
 			invoice_doc.due_date = rebuilt_doc.due_date
-			invoice_doc.custom_delivery_date = rebuilt_doc.custom_delivery_date
 			invoice_doc.enable_background_invoice_submission = rebuilt_doc.enable_background_invoice_submission
 			invoice_doc.custom_delivery_personnel = rebuilt_doc.custom_delivery_personnel
 			invoice_doc.tax_id = rebuilt_doc.tax_id

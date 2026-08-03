@@ -991,12 +991,10 @@ def link_invoice_to_page(invoice_name, page_number, date=None):
                 f"be linked to an existing invoice"
             )
 
-        # custom_invoice_ref's Custom Field has allow_on_submit=0 (a pre-existing gap, see
-        # bugs.md's BUG-002 - it was created directly on the site, never fully configured), which
-        # blocks a normal doc.save() from touching it post-submission. frappe.db.set_value bypasses
-        # that document-level submit check for just this column - deliberately scoped rather than
-        # flipping allow_on_submit globally, which would also open this field to direct desk-form
-        # editing on any submitted invoice, a bigger change than this endpoint needs.
+        # custom_invoice_ref now has allow_on_submit=1 (BUG-002, fixed 2026-08-03), so doc.save()
+        # would work here too - frappe.db.set_value is used anyway, deliberately: a single-field
+        # admin correction like this shouldn't re-run the full Sales Invoice validate/stock chain
+        # a full save() would trigger.
         frappe.db.set_value("Sales Invoice", invoice.name, "custom_invoice_ref", page_number)
 
         return {"success": True, "invoice_name": invoice.name, "page_number": page_number}
@@ -1035,8 +1033,9 @@ def set_requested_delivery_date(invoice_name, date):
         if target_date <= getdate(invoice.posting_date):
             frappe.throw("Requested delivery date must be after the invoice's own posting date")
 
-        # allow_on_submit=1 on this field (see install.py), so a plain save is enough - unlike
-        # custom_invoice_ref this was never a pre-existing gap needing the db.set_value workaround.
+        # allow_on_submit=1 on this field (see install.py), so a plain save() would work too -
+        # frappe.db.set_value used anyway for the same reason as link_invoice_to_page's own use of
+        # it just above: a single-field change shouldn't re-run the full validate/stock chain.
         frappe.db.set_value(
             "Sales Invoice", invoice.name, "custom_requested_delivery_date", target_date
         )
@@ -1094,8 +1093,8 @@ def unlink_invoice_page(invoice_name):
                 f"can only unlink a page reference while still Pending"
             )
 
-        # See link_invoice_to_page's comment - frappe.db.set_value bypasses the same
-        # allow_on_submit=0 restriction, deliberately scoped to just this column.
+        # See link_invoice_to_page's comment - same deliberate choice of frappe.db.set_value over
+        # doc.save() for a single-field change.
         frappe.db.set_value("Sales Invoice", invoice.name, "custom_invoice_ref", 0)
 
         return {"success": True, "invoice_name": invoice.name}

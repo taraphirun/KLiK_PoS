@@ -8,7 +8,12 @@ Pick these up whenever, independent of phase order.
 
 ## BUG-001: `custom_delivery_date` is set on Sales Invoice but the field doesn't exist
 
-**Status:** ⬜ Not started
+**Status:** ✅ Fixed 2026-08-03 - removed the four dead assignments (`sales_invoice.py`, no field
+was ever added, per option 2 below). Confirmed nothing read it back anywhere in the codebase
+(backend or frontend) before removing. `custom_delivered_at` (Todo 020) already covers the
+"reconciled delivery timestamp" need this looked like it was meant for, so a redundant real field
+wasn't worth adding. Verified live: `build_sales_invoice_doc()` still builds/inserts a valid Sales
+Invoice with no `custom_delivery_date` attribute at all now.
 **Found:** 2026-07-30, while doing Todo 020 (Sales Invoice reconciled delivery fields) — checking
 for `custom_delivery_*` field-name collisions per that todo's Risks section.
 
@@ -63,7 +68,33 @@ field added there may make this field redundant once resolved either way.
 
 ## BUG-002: `custom_invoice_ref` on Sales Invoice is an Int column (not text) and defaults to 0
 
-**Status:** ⬜ Not started
+**Status:** ✅ Fixed 2026-08-03, in three parts:
+1. **Portability** (field never existed in code at all) - fixed earlier the same day, see
+   `DEPLOYMENT_CHECKLIST.md`/`todo/055.md`'s portability audit.
+2. **Type decision** - asked the user directly: keep `Int`, or convert to `Data` per this bug's
+   original "likely intent" note. Decided to **keep `Int`** - Module 17's entire booklet/daily
+   reconciliation system (built after this bug was originally filed) is built around this being a
+   real integer (`between` range queries, `ceil(number/pages_per_booklet)` bucket math), so
+   converting now would be a much larger, riskier rewrite than the original "free-text receipt
+   number" framing was worth revisiting for.
+3. **`allow_on_submit`** was 0 (blocking legitimate post-submission edits - Daily Reconciliation's
+   whole link/unlink feature exists because of this) - now explicitly 1 in
+   `ensure_sales_invoice_invoice_ref_field()` (`install.py`). Verified live: a plain `doc.save()`
+   on an already-submitted invoice now succeeds (previously threw "Not allowed to change Invoice
+   Ref after submission"). `link_invoice_to_page`/`unlink_invoice_page` (`booklet.py`) still use
+   `frappe.db.set_value` rather than `doc.save()` - now a deliberate choice (avoids re-running the
+   full Sales Invoice validate/stock chain for a single-field admin correction), not a workaround
+   for a missing field property.
+4. **Root cause of the "many rows share 0" landmine**: found the checkout's "Invoice Reference"
+   field (`OrderSummary.tsx`) was a plain `<input type="text">` with no validation - a cashier
+   typo silently saved as `0` with no error shown. Now strips non-digit characters as you type
+   (`onChange` regex), so a typo is visibly rejected instead of silently discarded.
+5. Audited every `custom_invoice_ref` filter site (`booklet.py`, `delivery.py`,
+   `sales_invoice.py`) - all already correctly guard with real integers (the one place this bit
+   before, `match_delivery_report`, was already fixed with `_safe_nonzero_int` per this bug's own
+   original notes); nothing else needed the same guard added.
+
+**Status (pre-2026-08-03, kept for history):** ⬜ Not started
 **Found:** 2026-07-30, while doing Todo 022 (Delivery Report auto-match) — writing invoice-number
 matching against `custom_invoice_ref` ("physical receipt/invoice number", Module 6 spec) exposed
 this the hard way: a garbage test input (`"ZZZZZZZZZZZZZZZZZZZZ"`) falsely "exact matched" a real

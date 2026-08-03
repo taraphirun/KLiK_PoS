@@ -10,6 +10,7 @@ export default function BottomNavigation() {
   const { posDetails } = usePOSProfileStore()
 
   const canAccessSalesDashboard = userInfo?.is_admin_user ?? false
+  const canAccessDeliveryManagement = posDetails?.custom_allow_delivery_management === 1
 
    const menuItems = [
     { icon: Grid3X3, path: "/pos", label: "POS" },
@@ -18,11 +19,11 @@ export default function BottomNavigation() {
      { icon: Users, path: "/customers", label: "Customers", requiresEditCreatePermission: true },
     { icon: BarChart3, path: "/dashboard", label: "Dashboard", requiresSalesDashboard: true },
     { icon: FileText, path: "/closing_shift", label: "Closing" },
-    { icon: Truck, path: "/deliveries/reconcile", label: "Deliveries", requiresSalesDashboard: true },
-    { icon: UserCheck, path: "/drivers", label: "Drivers", requiresSalesDashboard: true },
-    { icon: MapIcon, path: "/deliveries/map", label: "Live Map", requiresSalesDashboard: true },
-    { icon: BookOpen, path: "/deliveries/booklets", label: "Booklets", requiresSalesDashboard: true },
-    { icon: CalendarCheck, path: "/deliveries/daily-reconcile", label: "Daily Close", requiresSalesDashboard: true },
+    { icon: Truck, path: "/deliveries/reconcile", label: "Deliveries", requiresDeliveryManagement: true },
+    { icon: UserCheck, path: "/drivers", label: "Drivers", requiresDeliveryManagement: true },
+    { icon: MapIcon, path: "/deliveries/map", label: "Live Map", requiresDeliveryManagement: true },
+    { icon: BookOpen, path: "/deliveries/booklets", label: "Booklets", requiresDeliveryManagement: true },
+    { icon: CalendarCheck, path: "/deliveries/daily-reconcile", label: "Daily Close", requiresDeliveryManagement: true },
 
   ]
 
@@ -35,6 +36,7 @@ export default function BottomNavigation() {
 
   const handleNav = (item: (typeof menuItems)[0]) => {
     if (item.requiresSalesDashboard && !canAccessSalesDashboard) return
+    if (item.requiresDeliveryManagement && !canAccessDeliveryManagement) return
     navigate(item.path)
   }
 
@@ -45,13 +47,21 @@ export default function BottomNavigation() {
           if (item.requiresEditCreatePermission && posDetails?.custom_allow_to_create_and_edit_customers !== 1) {
             return null
           }
-          const disabled = item.requiresSalesDashboard && !canAccessSalesDashboard
+          const disabled =
+            (item.requiresSalesDashboard && !canAccessSalesDashboard) ||
+            (item.requiresDeliveryManagement && !canAccessDeliveryManagement)
           return (
           <button
             key={index}
             onClick={() => handleNav(item)}
             disabled={disabled}
-            title={disabled ? `${item.label} (Sales Manager, System Manager or Administrator only)` : item.label}
+            title={
+              disabled
+                ? item.requiresDeliveryManagement
+                  ? `${item.label} (not enabled for this POS Profile)`
+                  : `${item.label} (Sales Manager, System Manager or Administrator only)`
+                : item.label
+            }
             className={`flex flex-col items-center justify-center min-w-0 flex-1 py-2 px-1 transition-colors ${
               disabled
                 ? "opacity-50 cursor-not-allowed text-gray-400 dark:text-gray-500"
