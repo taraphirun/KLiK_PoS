@@ -9,12 +9,14 @@
   "closing_date",
   "status",
   "groups_summary",
+  "scheduled_summary",
   "section_break_summary",
   "delivered_count",
   "partially_delivered_count",
   "column_break_dc_2",
   "self_pickup_count",
   "void_count",
+  "scheduled_count",
   "section_break_signoff",
   "closed_by",
   "closed_at",
@@ -52,6 +54,12 @@
    "label": "Groups Summary"
   },
   {
+   "description": "Snapshot at close time of every invoice scheduled for a later delivery date whose requested_delivery_date fell on *this* closing_date - [{invoice, status}, ...] (Module 17 follow-up, 2026-08-03: set_requested_delivery_date). Compared for drift the same way groups_summary is.",
+   "fieldname": "scheduled_summary",
+   "fieldtype": "JSON",
+   "label": "Scheduled Deliveries Summary"
+  },
+  {
    "fieldname": "section_break_summary",
    "fieldtype": "Section Break",
    "label": "Summary (snapshot at close time)"
@@ -79,6 +87,12 @@
    "fieldname": "void_count",
    "fieldtype": "Int",
    "label": "Void"
+  },
+  {
+   "description": "Booklet pages resolved by scheduling a later delivery date (status 'Scheduled') on this closing_date - distinct from the invoice itself actually being delivered, which happens (and is counted) on the requested delivery date instead.",
+   "fieldname": "scheduled_count",
+   "fieldtype": "Int",
+   "label": "Scheduled"
   },
   {
    "fieldname": "section_break_signoff",

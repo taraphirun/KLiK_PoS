@@ -19,13 +19,15 @@ import type { Customer } from "../types/customer";
 import {
   closeBooklet,
   deleteBooklet,
-  getBookletGaps,
   getBookletSettings,
+  getBookletStatus,
   getBooklets,
   updateBookletSettings,
   upsertBooklet,
   type BookletSettings,
   type BookletStatus,
+  type DailyPageRow,
+  type DailyPageStatus,
   type DeliveryBooklet,
 } from "../services/booklet";
 
@@ -49,6 +51,26 @@ function statusBadgeClass(status: BookletStatus): string {
       return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300";
     default:
       return "bg-gray-100 text-gray-600 dark:bg-gray-700/50 dark:text-gray-400";
+  }
+}
+
+/** Same palette as DailyReconciliationPage's statusBadgeClass, for a DailyPageStatus row instead
+ * of a BookletStatus - kept as a small local duplicate rather than a shared import since the two
+ * pages otherwise have no coupling. */
+function pageStatusBadgeClass(status: DailyPageStatus): string {
+  switch (status) {
+    case "Delivered":
+    case "Self Pickup":
+      return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300";
+    case "Partially Delivered":
+      return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300";
+    case "Void":
+      return "bg-gray-100 text-gray-600 dark:bg-gray-700/50 dark:text-gray-400";
+    case "Pending Fulfillment":
+    case "Reported, No Invoice":
+      return "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300";
+    default:
+      return "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300";
   }
 }
 
@@ -337,26 +359,27 @@ function SettingsDialog({
 }
 
 function BookletRow({ booklet, onChanged }: { booklet: DeliveryBooklet; onChanged: () => void }) {
-  const [gaps, setGaps] = useState<number[] | null>(null);
-  const [isLoadingGaps, setIsLoadingGaps] = useState(false);
+  const [pageStatus, setPageStatus] = useState<DailyPageRow[] | null>(null);
+  const [isLoadingStatus, setIsLoadingStatus] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
 
-  const toggleGaps = async () => {
-    if (gaps !== null) {
-      setGaps(null);
+  const toggleStatus = async () => {
+    if (pageStatus !== null) {
+      setPageStatus(null);
       return;
     }
-    setIsLoadingGaps(true);
+    setIsLoadingStatus(true);
     try {
-      const result = await getBookletGaps(booklet.name);
-      setGaps(result.data || []);
+      const result = await getBookletStatus(booklet.name);
+      if (!result.success) throw new Error(result.message || "Failed to load booklet status");
+      setPageStatus(result.data || []);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load gaps");
+      toast.error(err instanceof Error ? err.message : "Failed to load booklet status");
     } finally {
-      setIsLoadingGaps(false);
+      setIsLoadingStatus(false);
     }
   };
 
@@ -416,12 +439,12 @@ function BookletRow({ booklet, onChanged }: { booklet: DeliveryBooklet; onChange
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={toggleGaps}
-            disabled={isLoadingGaps}
+            onClick={toggleStatus}
+            disabled={isLoadingStatus}
             className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
           >
-            {isLoadingGaps && <Loader2 size={14} className="animate-spin" />}
-            {gaps === null ? "Check Gaps" : "Hide Gaps"}
+            {isLoadingStatus && <Loader2 size={14} className="animate-spin" />}
+            {pageStatus === null ? "Check Status" : "Hide Status"}
           </button>
           <button
             type="button"
@@ -452,15 +475,35 @@ function BookletRow({ booklet, onChanged }: { booklet: DeliveryBooklet; onChange
         </div>
       </div>
 
-      {gaps !== null && (
-        <div className="mt-3 rounded-md bg-gray-50 p-3 text-sm dark:bg-gray-900/50">
-          {gaps.length === 0 ? (
-            <span className="text-gray-500 dark:text-gray-400">No gaps - every reported page is accounted for.</span>
-          ) : (
-            <span className="text-amber-700 dark:text-amber-400">
-              Missing pages: {gaps.join(", ")}
-            </span>
-          )}
+      {pageStatus !== null && (
+        <div className="mt-3 overflow-hidden rounded-md border border-gray-200 dark:border-gray-700">
+          <table className="w-full text-sm">
+            <thead className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400">
+              <tr>
+                <th className="px-3 py-1.5 font-medium">#</th>
+                <th className="px-3 py-1.5 font-medium">Status</th>
+                <th className="px-3 py-1.5 font-medium">Reference</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100 bg-white dark:divide-gray-700 dark:bg-gray-800">
+              {pageStatus.map((row) => (
+                <tr key={row.number}>
+                  <td className="px-3 py-1.5 font-medium text-gray-900 dark:text-white">{row.number}</td>
+                  <td className="px-3 py-1.5">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${pageStatusBadgeClass(row.status)}`}>
+                      {row.status}
+                    </span>
+                    {row.status === "Void" && row.void_reason && (
+                      <span className="ml-1 text-xs text-gray-400">({row.void_reason})</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-1.5 text-gray-500 dark:text-gray-400">
+                    {row.invoice || row.delivery_report || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 

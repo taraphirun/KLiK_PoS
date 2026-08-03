@@ -163,3 +163,10 @@ Delivery Report DR-08-0099 (invoice 47) synced after closing").
 - [x] [052.md](../todo/052.md): Group the daily checklist by booklet instead of one day-wide
   min/max range (follow-up, 2026-08-02) - real bug: two invoices ~1000 apart on the same day
   produced ~1000 fake "Unresolved" rows spanning unrelated booklets
+- [x] [053.md](../todo/053.md): Full-range booklet readiness check + close_booklet gate
+  (follow-up, 2026-08-02) - `close_booklet` had zero validation despite its own docstring; "Check
+  Gaps" only ever looked at Delivery Reports, not invoices/self-pickup/void
+- [x] [054.md](../todo/054.md): Lock actions on closed days + Scheduled (later) delivery dates
+  (follow-up, 2026-08-03) - action buttons now hide once a day is Closed (reappear on Reopen); new
+  "Set Delivery Date" resolution for pre-orders purchased today but due later, which re-surfaces
+  actionable on the target date's own checklist

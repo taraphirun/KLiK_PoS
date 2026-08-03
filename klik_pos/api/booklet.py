@@ -258,14 +258,91 @@ def upsert_booklet(data):
         return {"success": False, "message": str(e)}
 
 
+def _classify_booklet_range(booklet_name):
+    """Every number in a booklet's *full* start_number-end_number range (all 50 pages, not just
+    the interior span between touched numbers), classified the same way as the daily checklist's
+    _classify_number - Void/Delivered/Partially Delivered/Self Pickup/Pending Fulfillment/
+    Reported-No-Invoice/Unresolved. Scoped to the whole booklet across all time, not one date.
+
+    Gates close_booklet (decided with the user, 2026-08-02: a booklet can't be closed with any
+    page still unresolved, mirroring how close_daily_reconciliation already gates a day) and backs
+    the Booklets page's readiness view (replaces the old get_booklet_gaps, which only looked at
+    Delivery Reports and only the interior span - real gaps like a still-Pending invoice or a
+    never-written tail page went unnoticed)."""
+    doc = frappe.get_doc("Delivery Booklet", booklet_name)
+    start_number, end_number = doc.start_number, doc.end_number
+
+    invoices = frappe.get_all(
+        "Sales Invoice",
+        filters={"docstatus": 1, "custom_invoice_ref": ["between", [start_number, end_number]]},
+        fields=["name", "custom_invoice_ref", "custom_delivery_status", "custom_requested_delivery_date"],
+    )
+    invoice_by_number = {inv.custom_invoice_ref: inv for inv in invoices}
+
+    report_rows = frappe.get_all(
+        "Delivery Report",
+        filters={"booklet": doc.name},
+        fields=["name", "reported_invoice_no", "reconciliation_status", "matched_invoice", "creation"],
+    )
+    # Stable sorts compose: lowest-priority first, same pattern get_delivery_reports already uses.
+    report_rows.sort(key=lambda r: r.creation, reverse=True)
+    report_rows.sort(key=lambda r: r.reconciliation_status == "Confirmed", reverse=True)
+    report_by_number = {}
+    for r in report_rows:
+        n = _extract_number(r.reported_invoice_no)
+        if n is not None and n not in report_by_number:
+            report_by_number[n] = r
+
+    void_by_number = {v.page_number: v for v in doc.void_entries}
+
+    rows = []
+    counts = {v: 0 for v in _SUMMARY_COUNT_FIELD.values()}
+    for n in range(start_number, end_number + 1):
+        status, row = _classify_number(n, invoice_by_number, report_by_number, void_by_number)
+        if status in _SUMMARY_COUNT_FIELD:
+            counts[_SUMMARY_COUNT_FIELD[status]] += 1
+        rows.append(row)
+
+    return rows, counts
+
+
+@frappe.whitelist()
+def get_booklet_status(booklet):
+    """Full-range readiness view for one booklet (Module 17 follow-up, 2026-08-02) - every page
+    classified, so staff can see what's blocking a close before attempting it. Replaces the old
+    get_booklet_gaps."""
+    try:
+        rows, counts = _classify_booklet_range(booklet)
+        return {"success": True, "data": rows, "summary": counts}
+    except Exception as e:
+        frappe.log_error(title="Delivery Booklet status lookup failed")
+        return {"success": False, "message": str(e), "data": []}
+
+
 @frappe.whitelist()
 def close_booklet(booklet):
-    """Staff sign-off that a booklet's physical pages have all been reconciled. Terminal - a Closed
-    booklet is excluded from the lifecycle scheduler entirely (check_booklet_lifecycle below)."""
+    """Staff sign-off that a booklet's physical pages have all been reconciled - hard-blocked
+    (decided with the user, 2026-08-02) until every page in the booklet's full range is Void/
+    Delivered/Partially Delivered/Self Pickup, mirroring close_daily_reconciliation's own gate.
+    Terminal - a Closed booklet is excluded from the lifecycle scheduler entirely
+    (check_booklet_lifecycle below).
+
+    Deliberately stricter than close_daily_reconciliation on one point (2026-08-03 follow-up): a
+    Scheduled page (set_requested_delivery_date) is NOT enough here, even though it's closable for
+    the day - see BOOKLET_CLOSABLE_STATUSES.
+    """
     try:
         doc = frappe.get_doc("Delivery Booklet", booklet)
         if doc.status == "Closed":
             return {"success": True, "booklet": doc.name, "status": doc.status}
+
+        rows, _ = _classify_booklet_range(booklet)
+        blocking = [row["number"] for row in rows if row["status"] not in BOOKLET_CLOSABLE_STATUSES]
+        if blocking:
+            frappe.throw(
+                f"{len(blocking)} page(s) still need action before booklet #{doc.booklet_number} "
+                f"can be closed: {', '.join(str(n) for n in blocking)}"
+            )
 
         doc.status = "Closed"
         doc.closed_at = now_datetime()
@@ -337,27 +414,6 @@ def resolve_booklet(report_name, booklet):
     except Exception as e:
         frappe.log_error(title="Delivery Report booklet resolve failed")
         return {"success": False, "message": str(e)}
-
-
-@frappe.whitelist()
-def get_booklet_gaps(booklet):
-    """Invoice numbers strictly between the lowest and highest reported numbers for this booklet
-    that have no matching Delivery Report - a real skipped/missing page, not just "not yet
-    delivered" (mirrors the NestJS dashboard's deliberate interior-only gap definition, not the
-    booklet's full start-end range, most of which is legitimately just not written yet)."""
-    try:
-        rows = frappe.get_all("Delivery Report", filters={"booklet": booklet}, pluck="reported_invoice_no")
-        numbers = sorted({n for n in (_extract_number(r) for r in rows) if n is not None})
-        if len(numbers) < 2:
-            return {"success": True, "data": []}
-
-        seen = set(numbers)
-        gaps = [n for n in range(numbers[0], numbers[-1] + 1) if n not in seen]
-        return {"success": True, "data": gaps}
-
-    except Exception as e:
-        frappe.log_error(title="Delivery Booklet gap lookup failed")
-        return {"success": False, "message": str(e), "data": []}
 
 
 @frappe.whitelist()
@@ -450,11 +506,20 @@ def check_booklet_lifecycle():
 # Daily reconciliation checklist + closing (Module 17, phases/phase-16.md)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Statuses that count as "accounted for" for closing purposes - Partially Delivered is included
-# deliberately (decided with the user 2026-08-02): its eventual remainder is a follow-up confirm
-# against the *same* invoice, not a new paper page, so it's invisible to this page-number-keyed
-# checklist by design and shouldn't block the day from closing.
-CLOSABLE_STATUSES = {"Void", "Delivered", "Partially Delivered", "Self Pickup"}
+# Statuses that count as "accounted for" for closing a *day* (close_daily_reconciliation) -
+# Partially Delivered is included deliberately (decided with the user 2026-08-02): its eventual
+# remainder is a follow-up confirm against the *same* invoice, not a new paper page, so it's
+# invisible to this page-number-keyed checklist by design and shouldn't block the day from
+# closing. Scheduled (2026-08-03 follow-up) is included the same way: its eventual real delivery
+# re-surfaces, actionable, on the *requested* delivery date's own checklist instead (see
+# _get_scheduled_deliveries) - not a new paper page either, so it doesn't block this date's close.
+CLOSABLE_STATUSES = {"Void", "Delivered", "Partially Delivered", "Self Pickup", "Scheduled"}
+
+# Statuses that count as "accounted for" for closing a *booklet* (close_booklet) - deliberately
+# excludes Scheduled (decided with the user, 2026-08-03): closing a booklet retires it forever, so
+# a page whose real delivery outcome is still unknown shouldn't be enough to sign off on - unlike
+# closing a day, there's no later checklist that re-surfaces it once the booklet itself is Closed.
+BOOKLET_CLOSABLE_STATUSES = CLOSABLE_STATUSES - {"Scheduled"}
 
 # Maps a closable status to the Delivery Booklet Daily Closing snapshot field it counts toward.
 _SUMMARY_COUNT_FIELD = {
@@ -462,6 +527,7 @@ _SUMMARY_COUNT_FIELD = {
     "Partially Delivered": "partially_delivered_count",
     "Self Pickup": "self_pickup_count",
     "Void": "void_count",
+    "Scheduled": "scheduled_count",
 }
 
 
@@ -490,16 +556,19 @@ def _resolve_booklet_bucket(number, pages_per_booklet, registered_booklets):
 
 
 def _classify_number(n, invoice_by_number, report_by_number, void_by_number):
-    """Per-number classification - Void / Delivered / Partially Delivered / Self Pickup / Pending
-    Fulfillment / Reported-No-Invoice / Unresolved. Factored out of _classify_daily_checklist so
-    it's called once per number regardless of how numbers are grouped into booklets."""
+    """Per-number classification - Void / Delivered / Partially Delivered / Self Pickup /
+    Scheduled / Pending Fulfillment / Reported-No-Invoice / Unresolved. Factored out of
+    _classify_daily_checklist so it's called once per number regardless of how numbers are grouped
+    into booklets."""
     invoice = invoice_by_number.get(n)
     report = report_by_number.get(n)
     void_entry = void_by_number.get(n)
 
     resolved_delivery_status = None
+    requested_delivery_date = None
     if invoice:
         resolved_delivery_status = invoice.custom_delivery_status
+        requested_delivery_date = invoice.get("custom_requested_delivery_date")
     elif report and report.reconciliation_status == "Confirmed" and report.matched_invoice:
         # Confirmed via the normal reconciliation flow (Module 10/15) but not discoverable via
         # custom_invoice_ref above - e.g. an older backfilled invoice from before the ref-stamping
@@ -512,12 +581,15 @@ def _classify_number(n, invoice_by_number, report_by_number, void_by_number):
 
     if void_entry:
         status = "Void"
+    elif resolved_delivery_status in ("Delivered", "Partially Delivered", "Self Pickup"):
+        status = resolved_delivery_status
+    elif resolved_delivery_status is not None and requested_delivery_date:
+        # Purchased today, asked for a later delivery (2026-08-03 follow-up) - resolved here, but
+        # the invoice re-surfaces actionable on the *requested* date's own checklist instead (see
+        # _get_scheduled_deliveries), so it isn't lost track of.
+        status = "Scheduled"
     elif resolved_delivery_status is not None:
-        status = (
-            resolved_delivery_status
-            if resolved_delivery_status in ("Delivered", "Partially Delivered", "Self Pickup")
-            else "Pending Fulfillment"
-        )
+        status = "Pending Fulfillment"
     elif report:
         status = "Reported, No Invoice"
     else:
@@ -529,6 +601,7 @@ def _classify_number(n, invoice_by_number, report_by_number, void_by_number):
         "invoice": invoice.name if invoice else None,
         "delivery_report": report.name if report else None,
         "void_reason": void_entry.reason if void_entry else None,
+        "requested_delivery_date": str(requested_delivery_date) if requested_delivery_date else None,
     }
     return status, row
 
@@ -541,7 +614,9 @@ def _classify_daily_checklist(date):
     then computes the interior min/max *within each cluster separately* - not one min/max across
     the whole day, which would span every gap between unrelated booklets (the bug this was
     rewritten to fix, 2026-08-02). Most of an unfinished booklet is legitimately "not written yet,"
-    not a gap - same reasoning get_booklet_gaps already uses for its own interior-only definition.
+    not a gap - this daily view stays interior-only even though _classify_booklet_range (used by
+    close_booklet/get_booklet_status) deliberately checks a booklet's *entire* range instead: that
+    check gates permanently closing a booklet, so it can't stop at "what's been touched so far."
 
     Returns (groups, counts). Each group: booklet/booklet_number/is_registered/start_number/
     end_number (interior span actually touched)/bucket_start/bucket_end (the booklet's full
@@ -551,7 +626,7 @@ def _classify_daily_checklist(date):
     invoices = frappe.get_all(
         "Sales Invoice",
         filters={"docstatus": 1, "posting_date": date, "custom_invoice_ref": [">", 0]},
-        fields=["name", "custom_invoice_ref", "custom_delivery_status"],
+        fields=["name", "custom_invoice_ref", "custom_delivery_status", "custom_requested_delivery_date"],
     )
     invoice_by_number = {inv.custom_invoice_ref: inv for inv in invoices}
 
@@ -654,6 +729,58 @@ def _get_unreferenced_invoices(date):
     )
 
 
+def _get_scheduled_deliveries(date):
+    """Invoices whose custom_requested_delivery_date is `date` (2026-08-03 follow-up) - the paper
+    page itself belongs to an earlier posting_date's booklet group (already resolved there as
+    'Scheduled'), but the actual delivery commitment is due *today*, so it surfaces again here,
+    actionable, and blocks *this* date's Close Day until Delivered/Self-Pickup is confirmed for
+    real. Unlike _get_unreferenced_invoices this is NOT purely informational - see the blocking
+    check in close_daily_reconciliation/get_daily_reconciliation.
+
+    Returns rows shaped like a DailyPageRow's action-relevant fields, keyed by invoice instead of
+    page number: {invoice, customer, page_number, status, requested_delivery_date}. status is
+    never 'Scheduled' here (that's the origin date's label for this same invoice) - it resolves to
+    Delivered/Partially Delivered/Self Pickup (closable) or Pending Fulfillment (blocking), exactly
+    like _classify_number would for a normal booklet page.
+    """
+    invoices = frappe.get_all(
+        "Sales Invoice",
+        filters={"docstatus": 1, "custom_requested_delivery_date": date},
+        fields=[
+            "name",
+            "customer",
+            "customer_name",
+            "custom_invoice_ref",
+            "custom_delivery_status",
+            "custom_requested_delivery_date",
+        ],
+        order_by="creation asc",
+    )
+    rows = []
+    for inv in invoices:
+        status = (
+            inv.custom_delivery_status
+            if inv.custom_delivery_status in ("Delivered", "Partially Delivered", "Self Pickup")
+            else "Pending Fulfillment"
+        )
+        rows.append(
+            {
+                "invoice": inv.name,
+                "customer": inv.customer_name or inv.customer,
+                "page_number": inv.custom_invoice_ref or None,
+                "status": status,
+                "requested_delivery_date": str(inv.custom_requested_delivery_date),
+            }
+        )
+    return rows
+
+
+def _scheduled_summary(rows):
+    """Compact snapshot of _get_scheduled_deliveries's rows for storage/drift comparison,
+    mirroring _groups_summary's role for booklet groups."""
+    return [{"invoice": r["invoice"], "status": r["status"]} for r in rows]
+
+
 def _flatten_rows(groups):
     return [row for group in groups for row in group["rows"]]
 
@@ -689,7 +816,9 @@ def get_daily_reconciliation(date=None):
         date = getdate(date) if date else getdate(nowdate())
         groups, counts = _classify_daily_checklist(date)
         unreferenced_invoices = _get_unreferenced_invoices(date)
+        scheduled_deliveries = _get_scheduled_deliveries(date)
         current_summary = _groups_summary(groups)
+        current_scheduled_summary = _scheduled_summary(scheduled_deliveries)
 
         closing = frappe.db.get_value(
             "Delivery Booklet Daily Closing",
@@ -697,10 +826,12 @@ def get_daily_reconciliation(date=None):
             [
                 "status",
                 "groups_summary",
+                "scheduled_summary",
                 "delivered_count",
                 "partially_delivered_count",
                 "self_pickup_count",
                 "void_count",
+                "scheduled_count",
                 "closed_by",
                 "closed_at",
                 "reopened_by",
@@ -712,11 +843,14 @@ def get_daily_reconciliation(date=None):
 
         if closing and closing.status == "Closed":
             stored_summary = json.loads(closing.groups_summary) if closing.groups_summary else []
-            drifted = stored_summary != current_summary or any(
-                closing.get(field) != counts[field] for field in _SUMMARY_COUNT_FIELD.values()
+            stored_scheduled_summary = json.loads(closing.scheduled_summary) if closing.scheduled_summary else []
+            drifted = (
+                stored_summary != current_summary
+                or stored_scheduled_summary != current_scheduled_summary
+                or any(closing.get(field) != counts[field] for field in _SUMMARY_COUNT_FIELD.values())
             )
             if drifted:
-                reason = f"New activity detected for {date}: booklet groups/counts changed since closing"
+                reason = f"New activity detected for {date}: booklet groups/scheduled deliveries/counts changed since closing"
                 frappe.db.set_value(
                     "Delivery Booklet Daily Closing",
                     str(date),
@@ -728,6 +862,8 @@ def get_daily_reconciliation(date=None):
 
         if closing and closing.groups_summary:
             closing.groups_summary = json.loads(closing.groups_summary)
+        if closing and closing.scheduled_summary:
+            closing.scheduled_summary = json.loads(closing.scheduled_summary)
 
         return {
             "success": True,
@@ -736,6 +872,7 @@ def get_daily_reconciliation(date=None):
             "summary": counts,
             "closing": closing,
             "unreferenced_invoices": unreferenced_invoices,
+            "scheduled_deliveries": scheduled_deliveries,
         }
 
     except Exception as e:
@@ -752,16 +889,25 @@ def close_daily_reconciliation(date=None):
     try:
         date = getdate(date) if date else getdate(nowdate())
         groups, counts = _classify_daily_checklist(date)
+        scheduled_deliveries = _get_scheduled_deliveries(date)
 
-        if not groups:
+        if not groups and not scheduled_deliveries:
             frappe.throw(f"Nothing was touched on {date} - there is no range to close")
 
-        blocking = [row["number"] for row in _flatten_rows(groups) if row["status"] not in CLOSABLE_STATUSES]
-        if blocking:
-            frappe.throw(
-                f"{len(blocking)} number(s) still need action before {date} can be closed: "
-                f"{', '.join(str(n) for n in blocking)}"
-            )
+        blocking_numbers = [row["number"] for row in _flatten_rows(groups) if row["status"] not in CLOSABLE_STATUSES]
+        blocking_invoices = [row["invoice"] for row in scheduled_deliveries if row["status"] not in CLOSABLE_STATUSES]
+        if blocking_numbers or blocking_invoices:
+            parts = []
+            if blocking_numbers:
+                parts.append(f"{len(blocking_numbers)} number(s): {', '.join(str(n) for n in blocking_numbers)}")
+            if blocking_invoices:
+                parts.append(f"{len(blocking_invoices)} scheduled delivery(ies): {', '.join(blocking_invoices)}")
+            return {
+                "success": False,
+                "message": f"Still need action before {date} can be closed - " + "; ".join(parts),
+                "blocking_numbers": blocking_numbers,
+                "blocking_invoices": blocking_invoices,
+            }
 
         existing_name = frappe.db.exists("Delivery Booklet Daily Closing", str(date))
         doc = frappe.get_doc("Delivery Booklet Daily Closing", existing_name) if existing_name else frappe.new_doc(
@@ -769,6 +915,7 @@ def close_daily_reconciliation(date=None):
         )
         doc.closing_date = date
         doc.groups_summary = json.dumps(_groups_summary(groups))
+        doc.scheduled_summary = json.dumps(_scheduled_summary(scheduled_deliveries))
         for field, value in counts.items():
             setattr(doc, field, value)
         doc.status = "Closed"
@@ -858,6 +1005,74 @@ def link_invoice_to_page(invoice_name, page_number, date=None):
         return {"success": False, "message": str(e)}
     except Exception as e:
         frappe.log_error(title="Link invoice to booklet page failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def set_requested_delivery_date(invoice_name, date):
+    """Marks a still-Pending booklet page as scheduled for delivery on a later date (2026-08-03
+    follow-up, user request): "some invoice where purchased today but was asked to deliver at a
+    later date." Resolves the page on its own posting date (status becomes 'Scheduled', counts
+    toward closing) but the invoice re-surfaces, actionable, on the target date's own checklist via
+    _get_scheduled_deliveries - so the commitment isn't just noted and forgotten.
+
+    Reversible via clear_requested_delivery_date, and callable again to reschedule, both only while
+    still Pending/Not Delivered (decided with the user 2026-08-03) - matches unlink_invoice_page's
+    own gating: once delivery/pickup is actually confirmed, touching the paper reference is
+    materially riskier than adjusting an unconfirmed schedule.
+    """
+    try:
+        invoice = frappe.get_doc("Sales Invoice", invoice_name)
+        if invoice.docstatus != 1:
+            frappe.throw(f"Sales Invoice {invoice_name} is not submitted")
+        if invoice.custom_delivery_status not in ("Pending", "Not Delivered"):
+            frappe.throw(
+                f"{invoice_name}'s delivery status is already {invoice.custom_delivery_status} - "
+                f"can only schedule a still-pending invoice"
+            )
+
+        target_date = getdate(date)
+        if target_date <= getdate(invoice.posting_date):
+            frappe.throw("Requested delivery date must be after the invoice's own posting date")
+
+        # allow_on_submit=1 on this field (see install.py), so a plain save is enough - unlike
+        # custom_invoice_ref this was never a pre-existing gap needing the db.set_value workaround.
+        frappe.db.set_value(
+            "Sales Invoice", invoice.name, "custom_requested_delivery_date", target_date
+        )
+
+        return {"success": True, "invoice_name": invoice.name, "requested_delivery_date": str(target_date)}
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Set requested delivery date failed")
+        return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def clear_requested_delivery_date(invoice_name):
+    """Undoes set_requested_delivery_date - the page goes back to Pending Fulfillment on its own
+    posting date, and the invoice drops out of the target date's scheduled-deliveries group.
+    Same Pending/Not Delivered gating as set_requested_delivery_date."""
+    try:
+        invoice = frappe.get_doc("Sales Invoice", invoice_name)
+        if invoice.docstatus != 1:
+            frappe.throw(f"Sales Invoice {invoice_name} is not submitted")
+        if invoice.custom_delivery_status not in ("Pending", "Not Delivered"):
+            frappe.throw(
+                f"{invoice_name}'s delivery status is already {invoice.custom_delivery_status} - "
+                f"can only clear a still-pending invoice's scheduled date"
+            )
+
+        frappe.db.set_value("Sales Invoice", invoice.name, "custom_requested_delivery_date", None)
+
+        return {"success": True, "invoice_name": invoice.name}
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Clear requested delivery date failed")
         return {"success": False, "message": str(e)}
 
 

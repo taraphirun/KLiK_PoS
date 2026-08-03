@@ -216,6 +216,15 @@ def ensure_delivery_reconciliation_fields():
                     "allow_on_submit": 1,
                     "description": "The confirmed Delivery Report this delivery outcome was reconciled from.",
                 },
+                {
+                    "fieldname": "custom_requested_delivery_date",
+                    "label": "Requested Delivery Date",
+                    "fieldtype": "Date",
+                    "insert_after": "custom_delivery_report",
+                    "read_only": 1,
+                    "allow_on_submit": 1,
+                    "description": "Set via Daily Reconciliation's 'Set Delivery Date' action (Module 17 follow-up, 2026-08-03) for a paper page purchased today but asked to be delivered later - e.g. a pre-order. Resolves the page on its own posting date (status 'Scheduled') but the invoice re-surfaces, actionable, on this date's own Daily Reconciliation checklist until Delivered/Self-Pickup is actually confirmed.",
+                },
             ]
         },
         ignore_validate=True,

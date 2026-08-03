@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   BookOpen,
   CalendarCheck,
+  CalendarClock,
   CheckCircle2,
   FilePlus2,
   Info,
@@ -25,17 +26,20 @@ import CreateInvoiceForPageModal from "../components/delivery/CreateInvoiceForPa
 import type { DeliveryReport } from "../services/delivery";
 import { setManualDeliveryStatus } from "../services/delivery";
 import {
+  clearRequestedDeliveryDate,
   closeDailyReconciliation,
   getDailyReconciliation,
   linkInvoiceToPage,
   markPageVoid,
   reopenDailyReconciliation,
+  setRequestedDeliveryDate,
   unlinkInvoicePage,
   unmarkPageVoid,
   type DailyGroup,
   type DailyPageRow,
   type DailyPageStatus,
   type DailyReconciliation,
+  type ScheduledDeliveryRow,
   type UnreferencedInvoice,
 } from "../services/booklet";
 
@@ -50,6 +54,8 @@ function statusBadgeClass(status: DailyPageStatus): string {
       return "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300";
     case "Partially Delivered":
       return "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300";
+    case "Scheduled":
+      return "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300";
     case "Void":
       return "bg-gray-100 text-gray-600 dark:bg-gray-700/50 dark:text-gray-400";
     case "Pending Fulfillment":
@@ -60,20 +66,106 @@ function statusBadgeClass(status: DailyPageStatus): string {
   }
 }
 
-const CLOSABLE: DailyPageStatus[] = ["Void", "Delivered", "Partially Delivered", "Self Pickup"];
+function nextDayIso(dateIso: string): string {
+  const d = new Date(`${dateIso}T00:00:00`);
+  d.setDate(d.getDate() + 1);
+  return d.toISOString().slice(0, 10);
+}
+
+interface SetDeliveryDateDialogProps {
+  invoiceName: string;
+  label: string;
+  minDate: string;
+  initialValue?: string | null;
+  onClose: () => void;
+  onSaved: () => void;
+}
+
+/** Date-picker modal for the "Set/Change Delivery Date" action (2026-08-03 follow-up) - a plain
+ * ConfirmDialog can't collect a date, so this mirrors LinkPagePicker's own portal-modal shape
+ * instead (the date input doubles as the only thing to review before confirming). */
+function SetDeliveryDateDialog({ invoiceName, label, minDate, initialValue, onClose, onSaved }: SetDeliveryDateDialogProps) {
+  const [value, setValue] = useState(initialValue || minDate);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleSave = async () => {
+    if (!value) return;
+    setIsSubmitting(true);
+    try {
+      const result = await setRequestedDeliveryDate(invoiceName, value);
+      if (!result.success) throw new Error(result.message || "Failed to set delivery date");
+      toast.success(`${label} scheduled for delivery on ${value}`);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set delivery date");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-sm rounded-lg bg-white p-5 shadow-xl dark:bg-gray-800">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Set Delivery Date</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+          >
+            <X size={18} />
+          </button>
+        </div>
+        <p className="mb-3 text-sm text-gray-500 dark:text-gray-400">
+          {label} was purchased today but asked to be delivered later - pick the date it's actually due.
+        </p>
+        <input
+          type="date"
+          value={value}
+          min={minDate}
+          onChange={(event) => setValue(event.target.value)}
+          className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-900 dark:text-white"
+        />
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isSubmitting}
+            className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={isSubmitting || !value}
+            onClick={handleSave}
+            className="inline-flex items-center gap-1 rounded-lg bg-beveren-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-beveren-700 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSubmitting && <Loader2 size={14} className="animate-spin" />}
+            Save
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
 
 interface RowActionsProps {
   row: DailyPageRow;
+  date: string;
+  readOnly: boolean;
   onChanged: () => void;
   onCreateInvoiceForPage: (row: DailyPageRow) => void;
   onCreateInvoiceFromReport: (row: DailyPageRow) => void;
 }
 
-type ConfirmKind = "self-pickup" | "delivered" | "unlink" | "void" | "unvoid";
+type ConfirmKind = "self-pickup" | "delivered" | "unlink" | "void" | "unvoid" | "clear-date";
 
-function RowActions({ row, onChanged, onCreateInvoiceForPage, onCreateInvoiceFromReport }: RowActionsProps) {
+function RowActions({ row, date, readOnly, onChanged, onCreateInvoiceForPage, onCreateInvoiceFromReport }: RowActionsProps) {
   const [isBusy, setIsBusy] = useState(false);
   const [confirmKind, setConfirmKind] = useState<ConfirmKind | null>(null);
+  const [showDateDialog, setShowDateDialog] = useState(false);
 
   const runManual = async (status: "Delivered" | "Self Pickup") => {
     if (!row.invoice) return;
@@ -123,6 +215,22 @@ function RowActions({ row, onChanged, onCreateInvoiceForPage, onCreateInvoiceFro
     }
   };
 
+  const runClearDate = async () => {
+    if (!row.invoice) return;
+    setIsBusy(true);
+    try {
+      const result = await clearRequestedDeliveryDate(row.invoice);
+      if (!result.success) throw new Error(result.message || "Failed to clear delivery date");
+      toast.success(`Page ${row.number}'s scheduled delivery date cleared`);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to clear delivery date");
+    } finally {
+      setIsBusy(false);
+      setConfirmKind(null);
+    }
+  };
+
   const confirmProps: Record<
     ConfirmKind,
     { title: string; message: string; confirmText: string; confirmButtonClass: string; onConfirm: () => void }
@@ -162,6 +270,13 @@ function RowActions({ row, onChanged, onCreateInvoiceForPage, onCreateInvoiceFro
       confirmButtonClass: "bg-beveren-600 hover:bg-beveren-700 text-white",
       onConfirm: runToggleVoid,
     },
+    "clear-date": {
+      title: "Clear scheduled delivery date?",
+      message: `Page ${row.number} (${row.invoice}) goes back to Pending Fulfillment on ${date}, un-scheduled.`,
+      confirmText: "Clear Date",
+      confirmButtonClass: "bg-red-600 hover:bg-red-700 text-white",
+      onConfirm: runClearDate,
+    },
   };
 
   const activeConfirm = confirmKind ? confirmProps[confirmKind] : null;
@@ -177,6 +292,48 @@ function RowActions({ row, onChanged, onCreateInvoiceForPage, onCreateInvoiceFro
       confirmButtonClass={activeConfirm.confirmButtonClass}
     />
   );
+
+  const dateDialog = showDateDialog && row.invoice && (
+    <SetDeliveryDateDialog
+      invoiceName={row.invoice}
+      label={`Page ${row.number} (${row.invoice})`}
+      minDate={nextDayIso(date)}
+      initialValue={row.requested_delivery_date}
+      onClose={() => setShowDateDialog(false)}
+      onSaved={() => {
+        setShowDateDialog(false);
+        onChanged();
+      }}
+    />
+  );
+
+  if (readOnly) return null;
+
+  if (row.status === "Scheduled") {
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={isBusy}
+          onClick={() => setShowDateDialog(true)}
+          className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+        >
+          <CalendarClock size={12} />
+          Change Date
+        </button>
+        <button
+          type="button"
+          disabled={isBusy}
+          onClick={() => setConfirmKind("clear-date")}
+          className="rounded-lg border border-red-300 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/30"
+        >
+          Clear Date
+        </button>
+        {confirmDialog}
+        {dateDialog}
+      </div>
+    );
+  }
 
   if (row.status === "Pending Fulfillment") {
     return (
@@ -200,12 +357,22 @@ function RowActions({ row, onChanged, onCreateInvoiceForPage, onCreateInvoiceFro
         <button
           type="button"
           disabled={isBusy}
+          onClick={() => setShowDateDialog(true)}
+          className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+        >
+          <CalendarClock size={12} />
+          Set Delivery Date
+        </button>
+        <button
+          type="button"
+          disabled={isBusy}
           onClick={() => setConfirmKind("unlink")}
           className="rounded-lg border border-red-300 px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/30"
         >
           Unlink
         </button>
         {confirmDialog}
+        {dateDialog}
       </div>
     );
   }
@@ -358,13 +525,16 @@ interface UnreferencedInvoiceRowActionsProps {
   invoice: UnreferencedInvoice;
   unresolvedNumbers: number[];
   date: string;
+  readOnly: boolean;
   onChanged: () => void;
 }
 
-function UnreferencedInvoiceRowActions({ invoice, unresolvedNumbers, date, onChanged }: UnreferencedInvoiceRowActionsProps) {
+function UnreferencedInvoiceRowActions({ invoice, unresolvedNumbers, date, readOnly, onChanged }: UnreferencedInvoiceRowActionsProps) {
   const [isBusy, setIsBusy] = useState(false);
   const [confirmKind, setConfirmKind] = useState<"self-pickup" | "delivered" | null>(null);
   const [showLinkPicker, setShowLinkPicker] = useState(false);
+
+  if (readOnly) return null;
 
   const isPending = invoice.custom_delivery_status === "Pending" || invoice.custom_delivery_status === "Not Delivered";
 
@@ -461,6 +631,8 @@ function UnreferencedInvoiceRowActions({ invoice, unresolvedNumbers, date, onCha
 
 interface BookletGroupCardProps {
   group: DailyGroup;
+  date: string;
+  readOnly: boolean;
   onChanged: () => void;
   onCreateInvoiceForPage: (row: DailyPageRow) => void;
   onCreateInvoiceFromReport: (row: DailyPageRow) => void;
@@ -470,7 +642,7 @@ interface BookletGroupCardProps {
  * show one flat table spanning min-to-max across the entire day, which synthesized a huge fake gap
  * whenever two unrelated invoice numbers landed far apart (e.g. 1222 and 2222 on the same day).
  * Now grouped by booklet, each with its own interior span. */
-function BookletGroupCard({ group, onChanged, onCreateInvoiceForPage, onCreateInvoiceFromReport }: BookletGroupCardProps) {
+function BookletGroupCard({ group, date, readOnly, onChanged, onCreateInvoiceForPage, onCreateInvoiceFromReport }: BookletGroupCardProps) {
   const navigate = useNavigate();
 
   const handleRegister = () => {
@@ -532,6 +704,11 @@ function BookletGroupCard({ group, onChanged, onCreateInvoiceForPage, onCreateIn
                 {row.status === "Void" && row.void_reason && (
                   <div className="mt-0.5 text-xs text-gray-400">{row.void_reason}</div>
                 )}
+                {row.status === "Scheduled" && row.requested_delivery_date && (
+                  <div className="mt-0.5 inline-flex items-center gap-1 text-xs text-gray-400">
+                    <CalendarClock size={11} /> Delivery on {row.requested_delivery_date}
+                  </div>
+                )}
               </td>
               <td className="px-4 py-2">
                 {row.invoice ? (
@@ -553,10 +730,150 @@ function BookletGroupCard({ group, onChanged, onCreateInvoiceForPage, onCreateIn
               <td className="px-4 py-2">
                 <RowActions
                   row={row}
+                  date={date}
+                  readOnly={readOnly}
                   onChanged={onChanged}
                   onCreateInvoiceForPage={onCreateInvoiceForPage}
                   onCreateInvoiceFromReport={onCreateInvoiceFromReport}
                 />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+interface ScheduledDeliveryRowActionsProps {
+  row: ScheduledDeliveryRow;
+  readOnly: boolean;
+  onChanged: () => void;
+}
+
+function ScheduledDeliveryRowActions({ row, readOnly, onChanged }: ScheduledDeliveryRowActionsProps) {
+  const [isBusy, setIsBusy] = useState(false);
+  const [confirmKind, setConfirmKind] = useState<"self-pickup" | "delivered" | null>(null);
+
+  if (readOnly) return null;
+  if (row.status !== "Pending Fulfillment") return null;
+
+  const runManual = async (status: "Delivered" | "Self Pickup") => {
+    setIsBusy(true);
+    try {
+      const result = await setManualDeliveryStatus(row.invoice, status);
+      if (!result.success) throw new Error(result.message || "Failed to update");
+      toast.success(`${row.invoice} marked ${status}`);
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    } finally {
+      setIsBusy(false);
+      setConfirmKind(null);
+    }
+  };
+
+  const activeConfirm =
+    confirmKind === "self-pickup"
+      ? {
+          title: "Confirm self-pickup?",
+          message: `Mark ${row.invoice} as picked up by the customer.`,
+          confirmText: "Confirm Self-Pickup",
+          onConfirm: () => runManual("Self Pickup"),
+        }
+      : confirmKind === "delivered"
+      ? {
+          title: "Confirm delivered?",
+          message: `Mark ${row.invoice} as delivered. No bot report exists for this - this is a manual override.`,
+          confirmText: "Confirm Delivered",
+          onConfirm: () => runManual("Delivered"),
+        }
+      : null;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        disabled={isBusy}
+        onClick={() => setConfirmKind("self-pickup")}
+        className="rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+      >
+        Confirm Self-Pickup
+      </button>
+      <button
+        type="button"
+        disabled={isBusy}
+        onClick={() => setConfirmKind("delivered")}
+        className="rounded-lg border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+      >
+        Confirm Delivered
+      </button>
+      {activeConfirm && (
+        <ConfirmDialog
+          isOpen
+          onClose={() => setConfirmKind(null)}
+          onConfirm={activeConfirm.onConfirm}
+          title={activeConfirm.title}
+          message={activeConfirm.message}
+          confirmText={activeConfirm.confirmText}
+          confirmButtonClass="bg-beveren-600 hover:bg-beveren-700 text-white"
+        />
+      )}
+    </div>
+  );
+}
+
+interface ScheduledDeliveriesCardProps {
+  rows: ScheduledDeliveryRow[];
+  readOnly: boolean;
+  onChanged: () => void;
+}
+
+/** Invoices whose requested delivery date is *this* date (2026-08-03 follow-up) - the paper page
+ * itself lives in an earlier date's booklet group (already resolved there as "Scheduled"), but the
+ * actual delivery commitment is due today, so it surfaces here too, at the top of the checklist,
+ * actionable, and blocks this date's Close Day until really confirmed. Same card chrome as
+ * BookletGroupCard, per the user's ask to reuse that grouping UI. */
+function ScheduledDeliveriesCard({ rows, readOnly, onChanged }: ScheduledDeliveriesCardProps) {
+  const navigate = useNavigate();
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-purple-200 dark:border-purple-900">
+      <div className="flex items-center gap-2 border-b border-purple-200 bg-purple-50 px-4 py-2 text-sm font-medium text-purple-800 dark:border-purple-900 dark:bg-purple-950/20 dark:text-purple-300">
+        <CalendarClock size={14} />
+        Scheduled for delivery today ({rows.length})
+      </div>
+      <table className="w-full text-sm">
+        <thead className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500 dark:border-gray-700 dark:bg-gray-900/50 dark:text-gray-400">
+          <tr>
+            <th className="px-4 py-2 font-medium">Invoice</th>
+            <th className="px-4 py-2 font-medium">Customer</th>
+            <th className="px-4 py-2 font-medium">Page</th>
+            <th className="px-4 py-2 font-medium">Status</th>
+            <th className="px-4 py-2 font-medium">Action</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-100 bg-white dark:divide-gray-700 dark:bg-gray-800">
+          {rows.map((row) => (
+            <tr key={row.invoice}>
+              <td className="px-4 py-2">
+                <button
+                  type="button"
+                  onClick={() => navigate(`/invoice/${row.invoice}`)}
+                  className="text-beveren-600 hover:underline dark:text-beveren-400"
+                >
+                  {row.invoice}
+                </button>
+              </td>
+              <td className="px-4 py-2 text-gray-700 dark:text-gray-300">{row.customer}</td>
+              <td className="px-4 py-2 text-gray-500 dark:text-gray-400">{row.page_number ?? "—"}</td>
+              <td className="px-4 py-2">
+                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(row.status)}`}>
+                  {row.status}
+                </span>
+              </td>
+              <td className="px-4 py-2">
+                <ScheduledDeliveryRowActions row={row} readOnly={readOnly} onChanged={onChanged} />
               </td>
             </tr>
           ))}
@@ -578,6 +895,7 @@ export default function DailyReconciliationPage() {
   const [isClosing, setIsClosing] = useState(false);
   const [isReopening, setIsReopening] = useState(false);
   const [blockingNumbers, setBlockingNumbers] = useState<number[] | null>(null);
+  const [blockingInvoices, setBlockingInvoices] = useState<string[] | null>(null);
   const [pageModalRow, setPageModalRow] = useState<DailyPageRow | null>(null);
   const [reportModalRow, setReportModalRow] = useState<DailyPageRow | null>(null);
 
@@ -585,6 +903,7 @@ export default function DailyReconciliationPage() {
     setIsLoading(true);
     setError(null);
     setBlockingNumbers(null);
+    setBlockingInvoices(null);
     try {
       const response = await getDailyReconciliation(date);
       if (!response.success) throw new Error(response.message || "Failed to load");
@@ -604,21 +923,25 @@ export default function DailyReconciliationPage() {
   const groups = result?.groups || [];
   const allRows = groups.flatMap((g) => g.rows);
   const unresolvedNumbers = allRows.filter((r) => r.status === "Unresolved").map((r) => r.number);
+  const scheduledDeliveries = result?.scheduled_deliveries || [];
   const closing = result?.closing;
   const isClosed = closing?.status === "Closed";
   const needsReview = closing?.status === "Needs Re-review";
+  // Hides/disables every manual action on the checklist once the day is Closed (user request,
+  // 2026-08-03) - re-enabled the moment it's Reopened. "Needs Re-review" deliberately stays
+  // actionable: that status exists specifically so staff can address the drift that triggered it,
+  // and hiding the actions would make that impossible without a System-Manager-only Reopen first.
+  const isReadOnly = isClosed;
 
   const handleClose = async () => {
     setIsClosing(true);
     setBlockingNumbers(null);
+    setBlockingInvoices(null);
     try {
       const res = await closeDailyReconciliation(date);
       if (!res.success) {
-        // Server message ends with "...before <date> can be closed: 605, 608, 609" - split on the
-        // final colon to avoid picking up digits from the date/count earlier in the sentence.
-        const tail = (res.message || "").split(":").pop() || "";
-        const nums = tail.match(/\d+/g);
-        setBlockingNumbers(nums ? nums.map(Number) : null);
+        setBlockingNumbers(res.blocking_numbers?.length ? res.blocking_numbers : null);
+        setBlockingInvoices(res.blocking_invoices?.length ? res.blocking_invoices : null);
         throw new Error(res.message || "Failed to close");
       }
       toast.success(`${date} closed`);
@@ -659,6 +982,8 @@ export default function DailyReconciliationPage() {
                         .map((g) => `#${g.booklet_number} (${g.start_number}-${g.end_number})`)
                         .join(", ")}`
                     : "Nothing touched on this date yet"}
+                  {scheduledDeliveries.length > 0 &&
+                    ` + ${scheduledDeliveries.length} scheduled for delivery today`}
                 </p>
               </div>
             </div>
@@ -676,7 +1001,7 @@ export default function DailyReconciliationPage() {
               ) : (
                 <button
                   type="button"
-                  disabled={isClosing || groups.length === 0}
+                  disabled={isClosing || (groups.length === 0 && scheduledDeliveries.length === 0)}
                   onClick={handleClose}
                   className="inline-flex items-center gap-1 rounded-lg bg-beveren-600 px-3 py-2 text-sm font-medium text-white hover:bg-beveren-700 disabled:cursor-not-allowed disabled:bg-gray-300"
                 >
@@ -721,9 +1046,12 @@ export default function DailyReconciliationPage() {
           </div>
         )}
 
-        {blockingNumbers && blockingNumbers.length > 0 && (
+        {((blockingNumbers && blockingNumbers.length > 0) || (blockingInvoices && blockingInvoices.length > 0)) && (
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
-            Still need action: {blockingNumbers.join(", ")}
+            {blockingNumbers && blockingNumbers.length > 0 && <div>Pages still need action: {blockingNumbers.join(", ")}</div>}
+            {blockingInvoices && blockingInvoices.length > 0 && (
+              <div>Scheduled deliveries still need action: {blockingInvoices.join(", ")}</div>
+            )}
           </div>
         )}
 
@@ -735,20 +1063,31 @@ export default function DailyReconciliationPage() {
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
             {error}
           </div>
-        ) : groups.length === 0 ? (
-          <div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
-            No invoices or delivery reports touched {date}.
-          </div>
         ) : (
-          groups.map((group) => (
-            <BookletGroupCard
-              key={group.booklet || group.booklet_number}
-              group={group}
-              onChanged={fetchData}
-              onCreateInvoiceForPage={setPageModalRow}
-              onCreateInvoiceFromReport={setReportModalRow}
-            />
-          ))
+          <>
+            {scheduledDeliveries.length > 0 && (
+              <ScheduledDeliveriesCard rows={scheduledDeliveries} readOnly={isReadOnly} onChanged={fetchData} />
+            )}
+            {groups.length === 0 ? (
+              scheduledDeliveries.length === 0 && (
+                <div className="rounded-lg border border-gray-200 bg-white p-6 text-center text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">
+                  No invoices or delivery reports touched {date}.
+                </div>
+              )
+            ) : (
+              groups.map((group) => (
+                <BookletGroupCard
+                  key={group.booklet || group.booklet_number}
+                  group={group}
+                  date={date}
+                  readOnly={isReadOnly}
+                  onChanged={fetchData}
+                  onCreateInvoiceForPage={setPageModalRow}
+                  onCreateInvoiceFromReport={setReportModalRow}
+                />
+              ))
+            )}
+          </>
         )}
 
         {Boolean(result?.unreferenced_invoices?.length) && (
@@ -783,6 +1122,7 @@ export default function DailyReconciliationPage() {
                         invoice={inv}
                         unresolvedNumbers={unresolvedNumbers}
                         date={date}
+                        readOnly={isReadOnly}
                         onChanged={fetchData}
                       />
                     </td>
