@@ -1,17 +1,16 @@
 # Next Steps
 
-Outstanding items as of 2026-08-03, after Module 17 (Daily Booklet Page Reconciliation) and its
-2026-08-03 follow-up (Todos 053-054: full-range booklet close gate, Scheduled delivery dates,
-locked-when-closed actions). Not a phased todo list — a snapshot of what's left to verify, act on,
-or pick up. Update or delete items as they're resolved; this file isn't meant to accumulate stale
-entries the way `bugs.md` sometimes does.
-
-## Needs your verification (built + tested by Claude, not yet confirmed in browser)
-- [ ] Live Delivery Map shop location pin(s) (Todo 055) — set "Shop Latitude"/"Shop Longitude" on
-      your warehouse(s) in Desk (Stock → Warehouse), then confirm the pin(s) show up on
-      `/deliveries/map`
+Outstanding items as of 2026-08-03, after Module 17 (Daily Booklet Page Reconciliation follow-up:
+Todos 053-054) and Todo 055 (Live Delivery Map: shop location pins, numbered cluster pins, Live
+Feed teleport-on-click, smooth vector-map zoom). Not a phased todo list — a snapshot of what's
+left to verify, act on, or pick up. Update or delete items as they're resolved; this file isn't
+meant to accumulate stale entries the way `bugs.md` sometimes does.
 
 ## Needs an action from you (ops/deployment, not code)
+- [ ] Smooth zoom on the Live Delivery Map (Todo 055 addendum) — currently opt-in and unset: create
+      a Map ID in Google Cloud Console (Google Maps Platform → Map Management, same project as
+      your existing Maps API key), then set it on POS Profile ("Google Maps Map ID"). Without it,
+      the map still works exactly as before, just without smooth zoom transitions.
 - [ ] Delete leftover $1 test invoices against "Delivery Reconciliation Demo (seed)" customer -
       stuck uncancellable because AZT stock is too tight on this site; not touched since it'd
       require a Stock Settings change

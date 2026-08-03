@@ -124,6 +124,42 @@ def ensure_pos_print_format_field():
     )
 
 
+def ensure_sales_invoice_invoice_ref_field():
+    """Sales Invoice field holding the physical paper invoice/booklet page number - the single
+    most load-bearing field across the whole delivery/booklet feature set (Modules 15-17:
+    read/written throughout klik_pos/api/booklet.py, delivery.py, sales_invoice.py) and yet, until
+    this 2026-08-03 portability audit, was never created by any code in this app - it had been
+    added directly on hd.phirun.me via Customize Form at some point before this project's current
+    session history begins (Custom Field.creation: 2026-07-28, same day as initial site setup but
+    not part of it), matching the long-standing BUG-002 note in bugs.md ("created directly on the
+    site, never fully configured"). A real from-scratch install during this audit confirmed every
+    booklet/reconciliation feature would silently break without this field existing at all.
+
+    Replicated here with the EXACT properties already live in production (Int, not Data;
+    allow_on_submit not set, i.e. 0) rather than fixing BUG-002's underlying type issue as part of
+    this change - that's a separate, already-tracked, deliberately deferred decision (see
+    bugs.md), not something to fold into a portability fix without the user asking for the
+    behavior change itself.
+    """
+    create_custom_fields(
+        {
+            "Sales Invoice": [
+                {
+                    "fieldname": "custom_invoice_ref",
+                    "label": "Invoice Ref",
+                    "fieldtype": "Int",
+                    "insert_after": "custom_pos_opening_entry",
+                    "non_negative": 1,
+                    "in_list_view": 1,
+                    "in_standard_filter": 1,
+                    "description": "Reference number from hardcopy invoice",
+                },
+            ]
+        },
+        ignore_validate=True,
+    )
+
+
 def ensure_delivery_reconciliation_fields():
     """Create/update the Sales Invoice fields that hold the *reconciled* (trusted) delivery
     outcome.
@@ -307,11 +343,52 @@ def ensure_warehouse_shop_location_fields():
     )
 
 
+def ensure_delivery_bot_role():
+    """Creates the 'Delivery Bot' role and its permissions on the doctypes the companion
+    hd-delivery-telegram bot's service account (delivery-bot@hd-telegram.local) needs to poll/
+    write - Delivery Report, Delivery Booklet, Delivery Booklet Settings.
+
+    Found missing from this app's own code during a 2026-08-03 portability audit (the user is
+    planning to recreate their site from scratch and wanted assurance the app wouldn't silently
+    depend on manual Desk configuration that only happens to exist on the current install). Both
+    the role and its Custom DocPerm grants had been created directly via Desk/console at some
+    point (Role.creation on the live site: 2026-07-31, well after initial site setup) - invisible
+    to `bench install-app` on a fresh site, and not fixture-exported either (this app's `fixtures`
+    hook in hooks.py only covers Property Setter, not Custom DocPerm or Role). Replicated here with
+    the exact permission flags already verified working in production - read/write/create/export,
+    deliberately no delete/submit/report/print/share, matching what's live on hd.phirun.me.
+
+    The bot's own User account and its API key are NOT recreated here (deliberately) - a fresh
+    site needs a new API key regardless (the old one is meaningless once the site is gone), so
+    that step stays manual either way, same as normal ERPNext onboarding (Company/Warehouse/POS
+    Profile also aren't seeded here - those are standard setup, not something this app owns).
+    """
+    from frappe.permissions import add_permission, update_permission_property
+
+    if not frappe.db.exists("Role", "Delivery Bot"):
+        frappe.get_doc({"doctype": "Role", "role_name": "Delivery Bot", "desk_access": 0}).insert(
+            ignore_permissions=True
+        )
+
+    grants = {
+        "Delivery Report": {"read": 1, "write": 1, "create": 1, "export": 1},
+        "Delivery Booklet": {"read": 1, "write": 1, "create": 1, "export": 1},
+        "Delivery Booklet Settings": {"read": 1, "write": 1, "create": 1, "export": 1},
+    }
+    for doctype, ptypes in grants.items():
+        if not frappe.db.exists("Custom DocPerm", {"parent": doctype, "role": "Delivery Bot", "permlevel": 0}):
+            add_permission(doctype, "Delivery Bot", 0)
+        for ptype, value in ptypes.items():
+            update_permission_property(doctype, "Delivery Bot", 0, ptype, value)
+
+
 def after_install():
     ensure_sales_invoice_reserve_stock_field()
     ensure_stock_reservation_is_enabled()
     ensure_az_coil_custom_fields()
     ensure_pos_print_format_field()
+    ensure_sales_invoice_invoice_ref_field()
     ensure_delivery_reconciliation_fields()
     ensure_google_maps_api_key_field()
     ensure_warehouse_shop_location_fields()
+    ensure_delivery_bot_role()
