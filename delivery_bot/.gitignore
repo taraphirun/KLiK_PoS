@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+# Keep environment variables out of version control
+.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+media/
