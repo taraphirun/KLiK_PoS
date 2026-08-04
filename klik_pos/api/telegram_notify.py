@@ -1,0 +1,67 @@
+"""Direct Telegram Bot API calls made *by klik_pos*, not routed through the Worker or Hookdeck
+(ARCHITECTURE.md's "Outbound notifications" design decision). First user: submit_delivery_report
+webhook's 422-permanent-failure alert (Phase 5.2). Phase 8 (driver-approved DM, booklet-stalled
+alert, new-registration DM) reuses send_admin_alert / _send_telegram_message rather than
+duplicating this.
+"""
+
+import frappe
+import requests
+
+
+def _bot_token():
+    settings = frappe.get_doc("Telegram Bot Settings", "Telegram Bot Settings")
+    if not settings.enabled:
+        return None
+    # raise_exception=False: an unset Password field otherwise raises ValidationError - found live
+    # (2026-08-04) when bot_token hadn't been configured yet, which crashed the *caller* of
+    # send_admin_alert (submit_delivery_report_webhook) instead of just skipping this alert. This
+    # function exists to report *other* failures and must degrade to "can't send, log it" rather
+    # than becoming a new, uncaught failure mode itself.
+    return settings.get_password("bot_token", raise_exception=False) or None
+
+
+def _admin_telegram_ids():
+    settings = frappe.get_doc("Telegram Bot Settings", "Telegram Bot Settings")
+    raw = settings.admin_telegram_ids or ""
+    return [v.strip() for v in raw.split(",") if v.strip()]
+
+
+def _send_telegram_message(chat_id, text):
+    """One sendMessage call. Best-effort - never raises; failures are logged, since this function
+    exists to alert humans about *other* failures and must not itself become a new failure mode
+    that also goes unnoticed. Everything is inside the try, not just the HTTP call - _bot_token()
+    itself can raise (see its own comment) and that must be caught here too."""
+    try:
+        token = _bot_token()
+        if not token:
+            frappe.log_error(title="Telegram alert skipped - bot token not configured", message=text)
+            return
+
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not body.get("ok"):
+            frappe.log_error(title="Telegram alert send failed", message=f"{text}\n\n{body}")
+    except Exception:
+        frappe.log_error(title="Telegram alert send failed", message=text)
+
+
+def send_admin_alert(text):
+    """DMs every configured admin (Telegram Bot Settings' admin_telegram_ids). Never raises - see
+    _send_telegram_message's own comment; the same must hold for the recipient-list lookup here,
+    so this whole function is wrapped too, not just the per-recipient send loop."""
+    try:
+        admin_ids = _admin_telegram_ids()
+        if not admin_ids:
+            frappe.log_error(title="Telegram alert has no recipients - admin_telegram_ids unset", message=text)
+            return
+
+        for admin_id in admin_ids:
+            _send_telegram_message(admin_id, text)
+    except Exception:
+        frappe.log_error(title="send_admin_alert failed", message=text)

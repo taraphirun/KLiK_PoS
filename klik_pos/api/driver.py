@@ -3,6 +3,8 @@ import json
 import frappe
 import requests
 
+from klik_pos.api.telegram_notify import send_admin_alert
+
 DRIVER_LIST_FIELDS = [
     "name",
     "driver_name",
@@ -214,6 +216,39 @@ def sync_driver_from_bot(payload):
     except Exception as e:
         frappe.log_error(title="Delivery Driver bot sync failed")
         return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def sync_driver_from_bot_webhook(payload):
+    """Hookdeck ingress for driver-registration writes - sync_driver_from_bot's counterpart to
+    delivery.py's submit_delivery_report_webhook, same reasoning: sync_driver_from_bot also always
+    returns HTTP 200 even on failure, so without this wrapper Hookdeck can't tell a permanent
+    rejection from a successful sync and never retries or alerts anyone. Not explicitly listed in
+    PHASES.md's original Phase 5 checklist, but ARCHITECTURE.md already names this endpoint as one
+    of the two Hookdeck-forwarded writes, so it needs the same fix for the same reason.
+    """
+    if isinstance(payload, str):
+        payload = json.loads(payload)
+
+    result = sync_driver_from_bot(payload)
+
+    if not result.get("success"):
+        # sync_driver_from_bot's only validation failure is this one inline condition - mirrored
+        # here rather than extracted into a shared helper, since it's a single check, not a
+        # multi-field validator like delivery.py's _validate_delivery_payload.
+        is_permanent = not payload.get("bot_driver_id") and not payload.get("telegram_user_id")
+        if is_permanent:
+            frappe.local.response.http_status_code = 422
+            send_admin_alert(
+                "🚨 <b>Driver registration permanently rejected</b>\n"
+                f"Reason: {result.get('message')}\n"
+                f"telegram_user_id: {payload.get('telegram_user_id')}\n\n"
+                "Hookdeck has stopped retrying this one."
+            )
+        else:
+            frappe.local.response.http_status_code = 500
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ from frappe.utils.file_manager import save_file
 from klik_pos.api.booklet import _extract_number as _extract_invoice_number
 from klik_pos.api.booklet import match_booklet_for_invoice
 from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment_entry, queue_sales_invoice
+from klik_pos.api.telegram_notify import send_admin_alert
 
 # completion_status (Delivery Report) -> custom_delivery_status (Sales Invoice, Todo 020).
 DELIVERY_STATUS_MAP = {"Full": "Delivered", "Partial": "Partially Delivered"}
@@ -312,6 +313,59 @@ def submit_delivery_report(data):
     except Exception as e:
         frappe.log_error(title="Delivery Report ingestion failed")
         return {"success": False, "message": str(e)}
+
+
+@frappe.whitelist()
+def submit_delivery_report_webhook(data):
+    """Hookdeck ingress for the Worker's write path (ARCHITECTURE.md/PHASES.md Phase 5).
+
+    submit_delivery_report itself always returns HTTP 200, even on failure - callers are expected
+    to check the {"success": bool} field in the body. Hookdeck can only make retry/give-up
+    decisions off the HTTP status code, so without this wrapper *every* validation failure and
+    *every* transient bug (a DB hiccup, a bug) would look identical to a successfully delivered
+    event, and Hookdeck would never retry - the exact silent data loss ARCHITECTURE.md calls out.
+    This is a wrapper, not a change to submit_delivery_report itself, deliberately: the old Python
+    bot calls that endpoint directly and must keep working unchanged through parallel run.
+
+    - `{"success": true}` -> unchanged 200.
+    - `{"success": false}` from a bad payload (missing/invalid field) -> **422**. Permanent -
+      retrying the identical payload will never help, so Hookdeck correctly gives up on it. That
+      makes this the case that must alert a human, or a 422 here silently loses the report exactly
+      as badly as the un-wrapped 200 did.
+    - `{"success": false}` from anything else (a bug, a DB hiccup) -> **500**. Transient - Hookdeck
+      retries on 5xx.
+
+    Distinguishing the two without changing submit_delivery_report's own response shape: its own
+    except blocks already separate `ValidationError` (from `_validate_delivery_payload`, the only
+    `frappe.throw()` in that whole function) from a bare `Exception` - but by the time a caller
+    sees the *result*, both look like the same `{"success": false, "message": ...}`. Re-running
+    `_validate_delivery_payload` here (cheap, side-effect-free, no DB writes) after the fact
+    recovers that distinction: if the payload itself is well-formed, the failure came from
+    somewhere else in the function (transient); if re-validating throws the same way, it's the
+    same permanent failure submit_delivery_report itself hit.
+    """
+    if isinstance(data, str):
+        data = json.loads(data)
+
+    result = submit_delivery_report(data)
+
+    if not result.get("success"):
+        try:
+            _validate_delivery_payload(data)
+            frappe.local.response.http_status_code = 500
+        except frappe.exceptions.ValidationError:
+            frappe.local.response.http_status_code = 422
+            send_admin_alert(
+                "🚨 <b>Delivery report permanently rejected</b>\n"
+                f"bot_delivery_id: <code>{data.get('bot_delivery_id')}</code>\n"
+                f"Invoice: {data.get('reported_invoice_no')}\n"
+                f"Reason: {result.get('message')}\n\n"
+                "Hookdeck has stopped retrying this one (422 = permanent). It will not be "
+                "delivered automatically - fix the payload issue and resubmit, or enter it "
+                "manually in klik_pos."
+            )
+
+    return result
 
 
 def _is_newer_or_first_delivery(existing_delivered_at, new_delivered_at):

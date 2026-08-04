@@ -15,7 +15,8 @@
   "cloudflare_kv_namespace_id",
   "section_break_tbs2",
   "reporting_chat_id",
-  "reporting_topic_id"
+  "reporting_topic_id",
+  "admin_telegram_ids"
  ],
  "fields": [
   {
@@ -68,6 +69,12 @@
    "fieldname": "reporting_topic_id",
    "fieldtype": "Data",
    "label": "Reporting Topic ID"
+  },
+  {
+   "description": "Comma-separated Telegram user ids to DM for things that need a human's attention: a permanent (422) delivery-report ingestion failure (Phase 5), and later (Phase 8) driver-approval and booklet-stalled alerts. Same convention as the old bot's ADMIN_TELEGRAM_IDS env var. Sent via klik_pos.api.telegram_notify.send_admin_alert.",
+   "fieldname": "admin_telegram_ids",
+   "fieldtype": "Small Text",
+   "label": "Admin Telegram IDs"
   }
  ],
  "index_web_pages_for_search": 1,
