@@ -1,0 +1,77 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "creation": "2026-08-04 00:00:00.000000",
+ "default_view": "List",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "bot_token",
+  "column_break_tbs1",
+  "cloudflare_account_id",
+  "cloudflare_api_token",
+  "cloudflare_kv_namespace_id"
+ ],
+ "fields": [
+  {
+   "default": "0",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled"
+  },
+  {
+   "description": "The delivery bot's Telegram token. Used for klik_pos's own direct outbound sends (driver-approved DM, booklet-stalled alert - Phase 8) and Telegram media downloads (Phase 6). Same bot/value as the Worker's BOT_TOKEN secret - kept in sync by hand, not pushed automatically.",
+   "fieldname": "bot_token",
+   "fieldtype": "Password",
+   "label": "Bot Token"
+  },
+  {
+   "fieldname": "column_break_tbs1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Cloudflare account id (from the Cloudflare dashboard), scoping the KV namespace below.",
+   "fieldname": "cloudflare_account_id",
+   "fieldtype": "Data",
+   "label": "Cloudflare Account ID"
+  },
+  {
+   "description": "Cloudflare API token scoped to Workers KV (Edit permission on the DRIVERS namespace only - not a Global API Key). Used to PUT the approved-driver list on every relevant Delivery Driver save.",
+   "fieldname": "cloudflare_api_token",
+   "fieldtype": "Password",
+   "label": "Cloudflare API Token"
+  },
+  {
+   "description": "The Worker's DRIVERS KV namespace id (from `wrangler kv namespace create`, or the Cloudflare dashboard). The push target key within it is always `drivers:approved`.",
+   "fieldname": "cloudflare_kv_namespace_id",
+   "fieldtype": "Data",
+   "label": "Cloudflare KV Namespace ID (DRIVERS)"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-04 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "KLiK PoS",
+ "name": "Telegram Bot Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

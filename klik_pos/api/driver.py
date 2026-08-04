@@ -1,6 +1,7 @@
 import json
 
 import frappe
+import requests
 
 DRIVER_LIST_FIELDS = [
     "name",
@@ -121,8 +122,10 @@ def set_driver_status(driver, status):
     """Approve (Active), Rejected, or suspend. Delivery Driver has no separate Suspended state
     (Todo 025's Select is Pending/Active/Rejected, mirroring the bot's three-state model) -
     suspending an already-Active driver reuses Rejected, same as rejecting a Pending signup.
-    KlikPOS is the sync master (Phase 10 decision): this is the only place status changes; the bot
-    only ever reads it back (via list_drivers polling)."""
+    KlikPOS is the sync master (Phase 10 decision): this is the only place status changes. The
+    telegram-bot-worker's approved-driver cache is kept current by a push, not by the bot polling
+    - see push_driver_cache below, hooked to Delivery Driver's on_update so it also covers Desk
+    edits, bulk edits, and sync_driver_from_bot creates, not just this one call site."""
     try:
         if status not in VALID_STATUSES:
             frappe.throw(f"Invalid status '{status}', expected one of {VALID_STATUSES}")
@@ -211,3 +214,105 @@ def sync_driver_from_bot(payload):
     except Exception as e:
         frappe.log_error(title="Delivery Driver bot sync failed")
         return {"success": False, "message": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────
+# KV driver cache push (ARCHITECTURE.md "Reads vs. writes" / PHASES.md Phase 3)
+# ─────────────────────────────────────────────────────────────────
+
+# Fields that change the cached-approval-relevant picture - everything the Worker's cache actually
+# carries (DRIVER_LIST_FIELDS minus name/creation/modified, which aren't driver-editable). A save
+# that touches none of these doesn't need a push.
+CACHE_RELEVANT_FIELDS = (
+    "driver_name",
+    "phone_number",
+    "status",
+    "telegram_user_id",
+    "telegram_username",
+    "chat_id",
+    "bot_driver_id",
+)
+
+
+def push_driver_cache(doc, method=None):
+    """`Delivery Driver` `on_update` hook (see hooks.py `doc_events`) - the *only* trigger for a KV
+    cache push. Deliberately not wired to set_driver_status/upsert_driver individually: on_update
+    fires after every save regardless of call site, so it also covers Desk edits, bulk edits,
+    imports, and sync_driver_from_bot's bot-side creates - all of which the two-function approach
+    would have missed, leaving the cache silently stale for up to the hourly reconciliation window
+    (PHASES.md 3.7).
+
+    Guards on has_value_changed so an unrelated save (e.g. some future field the cache doesn't
+    use) doesn't push. Always true on creation - harmless, since a brand-new driver starts Pending
+    and isn't in the Active-only list pushed below anyway.
+
+    Only *decides and enqueues* here, synchronously inside the save transaction. The actual
+    Cloudflare HTTP call happens in push_driver_cache_job, after commit (enqueue_after_commit),
+    so a Cloudflare outage or bad token can never block or roll back a Delivery Driver save - and
+    the enqueue call itself is try/excepted for the same reason (a down queue backend shouldn't
+    block a save either; the hourly reconciliation cron is the backstop for a push that never
+    happened at all).
+    """
+    changed = any(doc.has_value_changed(field) for field in CACHE_RELEVANT_FIELDS)
+    if not changed:
+        return
+
+    try:
+        frappe.enqueue(
+            "klik_pos.api.driver.push_driver_cache_job",
+            queue="short",
+            enqueue_after_commit=True,
+        )
+    except Exception:
+        frappe.log_error(title="Failed to enqueue driver cache push")
+
+
+def push_driver_cache_job():
+    """Background job (never call directly outside a queue context - runs post-commit). Full-list
+    replace of the single `drivers:approved` KV key (ARCHITECTURE.md: one key, not one per driver
+    - at five drivers, full-list replacement makes revocation automatic with no tombstones needed).
+
+    Silently no-ops if Telegram Bot Settings isn't enabled/configured yet - expected before Phase
+    3's Cloudflare account/KV namespace exist (PHASES.md Prerequisites), not an error state.
+    """
+    settings = frappe.get_doc("Telegram Bot Settings", "Telegram Bot Settings")
+    if not settings.enabled:
+        return
+
+    account_id = settings.cloudflare_account_id
+    namespace_id = settings.cloudflare_kv_namespace_id
+    api_token = settings.get_password("cloudflare_api_token")
+    if not (account_id and namespace_id and api_token):
+        frappe.log_error(
+            title="Driver cache push skipped - Telegram Bot Settings incomplete",
+            message="Enabled but missing cloudflare_account_id / cloudflare_kv_namespace_id / cloudflare_api_token.",
+        )
+        return
+
+    drivers = frappe.get_all(
+        "Delivery Driver",
+        filters={"status": "Active"},
+        fields=DRIVER_LIST_FIELDS,
+        order_by="modified desc",
+    )
+
+    # Cloudflare's "Write key-value pair" endpoint (verified against current API docs, 2026-08-04):
+    # PUT .../values/:key_name, Bearer auth, multipart/form-data with a `value` field - not a raw
+    # JSON body.
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/"
+        f"namespaces/{namespace_id}/values/drivers:approved"
+    )
+    try:
+        response = requests.put(
+            url,
+            headers={"Authorization": f"Bearer {api_token}"},
+            files={"value": (None, json.dumps(drivers, default=str))},
+            timeout=15,
+        )
+        response.raise_for_status()
+        body = response.json()
+        if not body.get("success"):
+            raise Exception(f"Cloudflare API returned success=false: {body.get('errors')}")
+    except Exception:
+        frappe.log_error(title="Driver cache push to Cloudflare KV failed")

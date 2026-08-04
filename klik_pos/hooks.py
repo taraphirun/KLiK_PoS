@@ -49,6 +49,12 @@ doc_events = {
     "POS Profile": {
         "validate": "klik_pos.overrides.pos_profile.remove_duplicate_sales_persons"
     },
+    "Delivery Driver": {
+        # Push-not-poll KV cache for telegram-bot-worker (ARCHITECTURE.md). on_update (not
+        # set_driver_status/upsert_driver individually) so this also covers Desk edits, bulk
+        # edits, imports, and sync_driver_from_bot's bot-side creates.
+        "on_update": "klik_pos.api.driver.push_driver_cache",
+    },
 }
 
 extend_doctype_class = {
