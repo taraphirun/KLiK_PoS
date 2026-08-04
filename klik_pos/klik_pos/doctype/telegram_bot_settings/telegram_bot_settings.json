@@ -38,7 +38,7 @@
    "label": "Cloudflare Account ID"
   },
   {
-   "description": "Cloudflare API token scoped to Workers KV (Edit permission on the DRIVERS namespace only - not a Global API Key). Used to PUT the approved-driver list on every relevant Delivery Driver save.",
+   "description": "Cloudflare API token with the 'Workers KV Storage: Edit' permission (a scoped API Token, not a Global API Key) - confirmed 2026-08-04 this permission is account-wide, Cloudflare has no finer per-namespace grain, so this token can write any KV namespace on the account, not only DRIVERS. Used to PUT the approved-driver list on every relevant Delivery Driver save.",
    "fieldname": "cloudflare_api_token",
    "fieldtype": "Password",
    "label": "Cloudflare API Token"
