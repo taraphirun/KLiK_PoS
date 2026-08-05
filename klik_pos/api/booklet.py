@@ -453,11 +453,20 @@ def update_booklet_settings(data):
 
 def check_booklet_lifecycle():
     """Hourly scheduler job (hooks.py scheduler_events) - ports booklet-lifecycle.service.ts's
-    checkBooklets. Pure status computation only, no Telegram send here: unlike the original NestJS
-    service (which owns its own Telegram bot instance and DMs admins directly), KlikPOS has no
-    Telegram integration of its own - the delivery-bot repo's booklet_sync.py polls list_booklets
-    (same "KlikPOS -> bot is poll-only" pattern as driver status) and sends the Telegram alert
-    itself when it observes a transition to Stalled/Ready for Review.
+    checkBooklets.
+
+    Phase 8.2 (2026-08-05): now alerts directly on a transition into Stalled/Ready for Review, via
+    `telegram_notify.send_booklet_status_alert` - ARCHITECTURE.md's "outbound notifications, sent
+    by klik_pos calling Telegram's Bot API directly" design. The original plan (and the still-live
+    Python bot) instead has `delivery-bot/booklet_sync.py` *poll* `list_booklets` and track each
+    booklet's last-seen status itself purely to detect the same transition klik_pos already knows
+    about firsthand - unnecessary once klik_pos can send Telegram messages itself, so this alerts
+    right where the transition is computed, `new_status != booklet.status`, instead.
+
+    Each alert is enqueued rather than sent inline, `enqueue_after_commit=True` - this function
+    processes many booklets before its single `frappe.db.commit()` at the end, so this guarantees
+    an alert only fires for a status change that's actually persisted, never one later rolled back
+    by an exception elsewhere in the same run.
     """
     settings = get_booklet_settings()
     pages_per_booklet = settings["pages_per_booklet"]
@@ -482,6 +491,7 @@ def check_booklet_lifecycle():
             days_since_creation = (now_datetime() - get_datetime(booklet.creation)).total_seconds() / 86400
             if days_since_creation > stall_days and booklet.status == "Active":
                 frappe.db.set_value("Delivery Booklet", booklet.name, "status", "Stalled")
+                _enqueue_booklet_alert(booklet.name, "Stalled")
             continue
 
         numbers = {n for n in (_extract_number(r.reported_invoice_no) for r in reports) if n is not None}
@@ -498,8 +508,27 @@ def check_booklet_lifecycle():
 
         if new_status != booklet.status:
             frappe.db.set_value("Delivery Booklet", booklet.name, "status", new_status)
+            _enqueue_booklet_alert(booklet.name, new_status)
 
     frappe.db.commit()
+
+
+def _enqueue_booklet_alert(booklet_number, new_status):
+    """send_booklet_status_alert itself no-ops on Active/Closed (only Stalled/Ready for Review are
+    alert-worthy), but the check happens here too so a job whose enqueue fails logs against a
+    status that was actually worth alerting on, not noise for every ordinary Active tick."""
+    if new_status not in ("Stalled", "Ready for Review"):
+        return
+    try:
+        frappe.enqueue(
+            "klik_pos.api.telegram_notify.send_booklet_status_alert",
+            queue="short",
+            enqueue_after_commit=True,
+            booklet_number=booklet_number,
+            new_status=new_status,
+        )
+    except Exception:
+        frappe.log_error(title="Failed to enqueue booklet status alert", message=f"{booklet_number}: {new_status}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

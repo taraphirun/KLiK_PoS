@@ -209,6 +209,28 @@ def sync_driver_from_bot(payload):
 
         driver.save(ignore_permissions=True)
 
+        # Phase 8.4: admins lose bot.py's proactive "new registration" DM (with inline
+        # approve/reject buttons) once approval moves to klik_pos's Desk/SPA UI instead of staying
+        # in the bot (Phase 4's scope cut) - without a replacement, approval turnaround regresses
+        # to "whoever happens to check the /drivers page." Fires once, at creation, not on every
+        # later re-sync of the same driver (a driver messaging the bot again shouldn't re-alert).
+        if created:
+            try:
+                frappe.enqueue(
+                    "klik_pos.api.telegram_notify.send_admin_alert",
+                    queue="short",
+                    enqueue_after_commit=True,
+                    text=(
+                        "🆕 <b>New driver registration pending approval</b>\n"
+                        f"Name: {driver.driver_name}\n"
+                        f"Phone: {driver.phone_number or 'n/a'}\n"
+                        f"Telegram: {telegram_username or 'n/a'} ({telegram_user_id or bot_driver_id})\n\n"
+                        f"Review: {driver.name}"
+                    ),
+                )
+            except Exception:
+                frappe.log_error(title="Failed to enqueue new-registration admin alert")
+
         # Phase 7: acks the Worker's pending-delivery/registration ledger (src/ledger-do.ts) so its
         # hourly sweep can stop re-POSTing this registration once klik_pos actually has it - keyed
         # by telegram_user_id, matching the Worker's registrationLedgerKey exactly (never

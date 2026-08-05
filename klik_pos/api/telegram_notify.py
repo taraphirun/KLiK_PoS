@@ -7,6 +7,7 @@ duplicating this.
 
 import frappe
 import requests
+from frappe.utils import cint
 
 
 def get_bot_token():
@@ -30,11 +31,16 @@ def _admin_telegram_ids():
     return [v.strip() for v in raw.split(",") if v.strip()]
 
 
-def _send_telegram_message(chat_id, text):
+def _send_telegram_message(chat_id, text, **extra):
     """One sendMessage call. Best-effort - never raises; failures are logged, since this function
     exists to alert humans about *other* failures and must not itself become a new failure mode
     that also goes unnoticed. Everything is inside the try, not just the HTTP call -
-    get_bot_token() itself can raise (see its own comment) and that must be caught here too."""
+    get_bot_token() itself can raise (see its own comment) and that must be caught here too.
+
+    `**extra` merges straight into the sendMessage body - e.g. `message_thread_id` for
+    send_booklet_status_alert's reporting-chat broadcast, the one caller so far that needs
+    anything beyond chat_id/text.
+    """
     try:
         token = get_bot_token()
         if not token:
@@ -43,7 +49,7 @@ def _send_telegram_message(chat_id, text):
 
         response = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"},
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML", **extra},
             timeout=15,
         )
         response.raise_for_status()
@@ -78,3 +84,43 @@ def send_admin_alert(text):
             _send_telegram_message(admin_id, text)
     except Exception:
         frappe.log_error(title="send_admin_alert failed", message=text)
+
+
+def send_booklet_status_alert(booklet_number, new_status):
+    """Phase 8.2. Ports booklet_sync.py's `_check_one_booklet` (the old bot's Telegram side of
+    booklet-lifecycle.service.ts's notifyAdmins) directly into klik_pos, rather than keeping a
+    separate poll loop to detect the same transition klik_pos already just computed.
+
+    The old bot needed to *poll* `list_booklets` and track each booklet's last-seen status itself
+    (`local_store.get/set_booklet_last_status`) purely because it had no other way to learn about a
+    transition klik_pos's own database already knows about firsthand. `check_booklet_lifecycle`
+    (api/booklet.py) computes `new_status != booklet.status` and calls this function *only* in that
+    branch - so "was this the moment of transition" is already answered by the caller, and no
+    separate tracking table is needed here.
+
+    Only Stalled/Ready for Review are alert-worthy (mirrors booklet_sync.py's ALERT_STATUSES -
+    Active/Closed never alert). Sends to *both* destinations the old bot did: the reporting chat
+    (broadcast, for whoever's watching it) and every admin (DM) - not a duplicate, the two have
+    different audiences and the old bot deliberately sent both.
+    """
+    labels = {"Stalled": "STALLED", "Ready for Review": "READY FOR REVIEW"}
+    if new_status not in labels:
+        return
+
+    text = f"🚨 Booklet #{booklet_number} is {labels[new_status]}!"
+
+    try:
+        settings = frappe.get_doc("Telegram Bot Settings", "Telegram Bot Settings")
+        chat_id = settings.reporting_chat_id
+        if chat_id:
+            extra = {}
+            if settings.reporting_topic_id:
+                # Frappe Data field -> Telegram Integer, same gotcha ARCHITECTURE.md flags for the
+                # KV push (driver.py) and the delivery-report payload - a string here makes
+                # Telegram reject message_thread_id silently landing in the wrong topic or failing.
+                extra["message_thread_id"] = cint(settings.reporting_topic_id)
+            _send_telegram_message(chat_id, text, **extra)
+    except Exception:
+        frappe.log_error(title="Booklet status broadcast failed", message=f"{booklet_number}: {new_status}")
+
+    send_admin_alert(text)
