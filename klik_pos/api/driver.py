@@ -3,7 +3,7 @@ import json
 import frappe
 import requests
 
-from klik_pos.api.telegram_notify import send_admin_alert
+from klik_pos.api.telegram_notify import notify_driver, send_admin_alert
 
 DRIVER_LIST_FIELDS = [
     "name",
@@ -301,6 +301,36 @@ def push_driver_cache(doc, method=None):
         )
     except Exception:
         frappe.log_error(title="Failed to enqueue driver cache push")
+
+    # Phase 8.1: the driver-approved DM. bot.py used to send this itself, inline, the moment its
+    # own admin-approval buttons were tapped (driver_sync.py's "🎉 Your registration has been
+    # approved!"); this rewrite moved approval to klik_pos's Desk/SPA UI instead, which meant that
+    # DM had no trigger left anywhere - found live (2026-08-05) when an approval produced no
+    # notification. `on_update` already guards on has_value_changed, so specifically gate on the
+    # *status* field transitioning to Active, not on any of the other CACHE_RELEVANT_FIELDS (e.g.
+    # a phone-number edit shouldn't re-send this).
+    if doc.has_value_changed("status") and doc.status == "Active" and doc.chat_id:
+        try:
+            frappe.enqueue(
+                "klik_pos.api.driver.notify_driver_approved_job",
+                queue="short",
+                enqueue_after_commit=True,
+                driver_name=doc.name,
+            )
+        except Exception:
+            frappe.log_error(title="Failed to enqueue driver-approved notification")
+
+
+def notify_driver_approved_job(driver_name):
+    """Background job (runs post-commit, same reasoning as push_driver_cache_job - a Telegram
+    outage must never block or roll back the approval save). Re-fetches rather than trusting the
+    enqueue-time doc: by the time this runs the record could have been edited again (e.g. rejected
+    moments later), and re-checking here avoids a stale "you're approved!" DM in that race.
+    """
+    driver = frappe.get_doc("Delivery Driver", driver_name)
+    if driver.status != "Active" or not driver.chat_id:
+        return
+    notify_driver(driver.chat_id, "🎉 Your registration has been approved! Send /start to begin using the bot.")
 
 
 def push_driver_cache_job():

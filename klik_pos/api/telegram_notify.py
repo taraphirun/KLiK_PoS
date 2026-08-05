@@ -51,6 +51,16 @@ def _send_telegram_message(chat_id, text):
         frappe.log_error(title="Telegram alert send failed", message=text)
 
 
+def notify_driver(chat_id, text):
+    """DMs a single driver directly (not an admin) - Phase 8.1's driver-approved message, and the
+    natural home for any future driver-facing push (e.g. a booklet-stalled nudge aimed at the
+    driver rather than an admin). Thin wrapper over `_send_telegram_message` kept as its own name
+    for readability at call sites - `send_admin_alert` and `notify_driver` read very differently
+    even though today they share an implementation.
+    """
+    _send_telegram_message(chat_id, text)
+
+
 def send_admin_alert(text):
     """DMs every configured admin (Telegram Bot Settings' admin_telegram_ids). Never raises - see
     _send_telegram_message's own comment; the same must hold for the recipient-list lookup here,
