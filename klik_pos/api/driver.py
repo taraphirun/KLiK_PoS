@@ -1,8 +1,8 @@
 import json
 
 import frappe
-import requests
 
+from klik_pos.api.cloudflare_kv import get_acks_namespace_id, put_kv
 from klik_pos.api.telegram_notify import notify_driver, send_admin_alert
 
 DRIVER_LIST_FIELDS = [
@@ -209,6 +209,27 @@ def sync_driver_from_bot(payload):
 
         driver.save(ignore_permissions=True)
 
+        # Phase 7: acks the Worker's pending-delivery/registration ledger (src/ledger-do.ts) so its
+        # hourly sweep can stop re-POSTing this registration once klik_pos actually has it - keyed
+        # by telegram_user_id, matching the Worker's registrationLedgerKey exactly (never
+        # bot_driver_id; the Worker always sends telegram_user_id, so this is never the only
+        # identifier available in practice, but the guard makes that assumption explicit rather
+        # than silent). Enqueued (not written inline) for the same reason push_driver_cache_job is
+        # a background job: a Cloudflare outage or bad token must never block or roll back this
+        # save. Fires on every call, not just first-creation - a sweep re-POST of an
+        # already-registered driver must ALSO re-ack, or the sweep would re-POST it forever despite
+        # klik_pos definitely having the record.
+        if telegram_user_id:
+            try:
+                frappe.enqueue(
+                    "klik_pos.api.driver.push_registration_ack_job",
+                    queue="short",
+                    enqueue_after_commit=True,
+                    telegram_user_id=telegram_user_id,
+                )
+            except Exception:
+                frappe.log_error(title="Failed to enqueue registration ack push")
+
         return {"success": True, "driver": driver.name, "status": driver.status, "created": created}
 
     except frappe.exceptions.ValidationError as e:
@@ -216,6 +237,23 @@ def sync_driver_from_bot(payload):
     except Exception as e:
         frappe.log_error(title="Delivery Driver bot sync failed")
         return {"success": False, "message": str(e)}
+
+
+def push_registration_ack_job(telegram_user_id):
+    """Background job for the ack write above. Best-effort: if this fails, the Worker's ledger
+    entry simply isn't cleared and the hourly sweep re-POSTs it - safe (sync_driver_from_bot is
+    idempotent on telegram_user_id) if wasteful, so failure here is logged, not alerted.
+    """
+    namespace_id = get_acks_namespace_id()
+    if not namespace_id:
+        frappe.log_error(title="Registration ack push skipped - ACKS namespace id not configured")
+        return
+    try:
+        put_kv(namespace_id, f"registration:{telegram_user_id}", frappe.utils.now())
+    except Exception:
+        # See delivery.py's push_delivery_ack_job for why `message` is deliberately omitted here -
+        # passing one replaces frappe.log_error's auto-captured traceback instead of adding to it.
+        frappe.log_error(title=f"Registration ack push to Cloudflare KV failed ({telegram_user_id})")
 
 
 @frappe.whitelist()
@@ -340,20 +378,20 @@ def push_driver_cache_job():
     One key each, not one per driver (ARCHITECTURE.md) - at five drivers, full-list replacement
     makes revocation automatic with no tombstones needed.
 
-    Silently no-ops if Telegram Bot Settings isn't enabled/configured yet - expected before Phase
-    3's Cloudflare account/KV namespace exist (PHASES.md Prerequisites), not an error state.
+    Silently no-ops if Telegram Bot Settings isn't enabled yet - expected before Phase 3's
+    Cloudflare account/KV namespace exist (PHASES.md Prerequisites), not an error state. A
+    *configured-but-incomplete* settings doc (missing namespace id) is a real error, though, and is
+    still logged as one below - only "not enabled at all" is silent.
     """
     settings = frappe.get_doc("Telegram Bot Settings", "Telegram Bot Settings")
     if not settings.enabled:
         return
 
-    account_id = settings.cloudflare_account_id
     namespace_id = settings.cloudflare_kv_namespace_id
-    api_token = settings.get_password("cloudflare_api_token")
-    if not (account_id and namespace_id and api_token):
+    if not namespace_id:
         frappe.log_error(
             title="Driver cache push skipped - Telegram Bot Settings incomplete",
-            message="Enabled but missing cloudflare_account_id / cloudflare_kv_namespace_id / cloudflare_api_token.",
+            message="Enabled but missing cloudflare_kv_namespace_id.",
         )
         return
 
@@ -370,32 +408,11 @@ def push_driver_cache_job():
     # hot path, which meant a home-lab outage stalled the bot's most-used command - the exact
     # dependency the Worker architecture exists to remove. Filtered in Python rather than with a
     # second get_all so both keys always describe the same instant.
+    #
+    # put_kv (api/cloudflare_kv.py) raises on failure; each key gets its own try/except here so one
+    # failing still lets the other land, same as before this was extracted into a shared helper.
     for key_name, payload in (("drivers:approved", active_drivers), ("drivers:all", all_drivers)):
-        _put_kv(account_id, namespace_id, api_token, key_name, payload)
-
-
-def _put_kv(account_id, namespace_id, api_token, key_name, payload):
-    """Single KV write. Cloudflare's "Write key-value pair" endpoint (verified against current API
-    docs, 2026-08-04): PUT .../values/:key_name, Bearer auth, multipart/form-data with a `value`
-    field - not a raw JSON body.
-
-    Each key is written independently and logs its own failure, so one key failing still lets the
-    other land rather than leaving both stale.
-    """
-    url = (
-        f"https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/"
-        f"namespaces/{namespace_id}/values/{key_name}"
-    )
-    try:
-        response = requests.put(
-            url,
-            headers={"Authorization": f"Bearer {api_token}"},
-            files={"value": (None, json.dumps(payload, default=str))},
-            timeout=15,
-        )
-        response.raise_for_status()
-        body = response.json()
-        if not body.get("success"):
-            raise Exception(f"Cloudflare API returned success=false: {body.get('errors')}")
-    except Exception:
-        frappe.log_error(title=f"Driver cache push to Cloudflare KV failed ({key_name})")
+        try:
+            put_kv(namespace_id, key_name, payload)
+        except Exception:
+            frappe.log_error(title=f"Driver cache push to Cloudflare KV failed ({key_name})")

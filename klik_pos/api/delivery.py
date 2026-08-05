@@ -8,6 +8,7 @@ from frappe.utils.file_manager import save_file
 
 from klik_pos.api.booklet import _extract_number as _extract_invoice_number
 from klik_pos.api.booklet import match_booklet_for_invoice
+from klik_pos.api.cloudflare_kv import get_acks_namespace_id, put_kv
 from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment_entry, queue_sales_invoice
 from klik_pos.api.telegram_notify import notify_driver, send_admin_alert
 
@@ -260,6 +261,97 @@ def notify_driver_delivery_recorded_job(report_name):
     )
 
 
+STUCK_JOB_AGE_MINUTES = 15
+
+
+def sweep_stuck_delivery_jobs():
+    """Hourly (hooks.py's scheduler_events, alongside check_booklet_lifecycle) - re-enqueues Phase
+    6's media-sync/confirmation jobs for any Delivery Report where the *original enqueue call
+    itself* apparently never fired: `frappe.enqueue` failing at the exact instant of insert (e.g.
+    Redis briefly unreachable on this box). This is a narrower, local failure mode than Phase 7's
+    ledger - that one covers klik_pos/Hookdeck being unreachable *from the Worker*, a different
+    failure domain (external network) than this box's own job queue hiccuping for a moment.
+
+    Detection: `telegram_file_ids` was set (true for every current delivery - the bot's flow
+    requires at least one photo) but neither `photos` nor `voice_note` ever got populated, and
+    `media_sync_error` was never set either - the one state `sync_delivery_media_job` can never
+    leave behind on a completed run (success populates photos/voice_note; any per-file failure sets
+    `media_sync_error`). Aged past `STUCK_JOB_AGE_MINUTES` so an ordinarily in-flight/queued job
+    isn't mistaken for a stuck one.
+
+    Also re-fires the confirmation DM for the same flagged reports - there's no equivalent
+    observable signal for whether *that* enqueue succeeded on its own, but it's created in the same
+    code path at the same instant, so a stuck media job is a reasonable proxy. Accepted limitation,
+    not silently overlooked: a medialess delivery's confirmation-DM enqueue failing alone (with the
+    media enqueue succeeding, or media not applicable) has no detector here - not reachable via the
+    bot's current flow, since photos are mandatory.
+    """
+    cutoff = frappe.utils.add_to_date(None, minutes=-STUCK_JOB_AGE_MINUTES)
+    stuck = frappe.get_all(
+        "Delivery Report",
+        filters={
+            "telegram_file_ids": ["is", "set"],
+            "media_sync_error": ["is", "not set"],
+            "photos": ["is", "not set"],
+            "voice_note": ["is", "not set"],
+            "creation": ["<", cutoff],
+        },
+        fields=["name"],
+    )
+    if not stuck:
+        return
+
+    names = [row.name for row in stuck]
+    frappe.log_error(title="Stuck delivery media/confirmation jobs found - re-enqueueing", message=str(names))
+
+    for name in names:
+        try:
+            frappe.enqueue("klik_pos.api.telegram_media.sync_delivery_media_job", queue="short", report_name=name)
+            frappe.enqueue("klik_pos.api.delivery.notify_driver_delivery_recorded_job", queue="short", report_name=name)
+        except Exception:
+            frappe.log_error(title="Failed to re-enqueue stuck delivery jobs", message=name)
+
+
+def _enqueue_delivery_ack(bot_delivery_id):
+    """Phase 7: acks the Worker's pending-delivery ledger (src/ledger-do.ts) so its hourly sweep
+    stops re-POSTing this delivery once klik_pos actually has it. Called from all three of
+    submit_delivery_report's success paths, including both idempotent-replay branches - a replay is
+    exactly what happens when the sweep re-POSTs an entry that had already succeeded, and without
+    acking on that path too, the sweep would re-POST it forever despite klik_pos definitely having
+    the record. Enqueued (not written inline), same reasoning as push_driver_cache_job: a
+    Cloudflare outage or bad token must never block or roll back the caller's own save/response.
+    """
+    try:
+        frappe.enqueue(
+            "klik_pos.api.delivery.push_delivery_ack_job",
+            queue="short",
+            enqueue_after_commit=True,
+            bot_delivery_id=bot_delivery_id,
+        )
+    except Exception:
+        frappe.log_error(title="Failed to enqueue delivery ack push")
+
+
+def push_delivery_ack_job(bot_delivery_id):
+    """Background job for the ack write above. Best-effort - see driver.py's
+    push_registration_ack_job for the identical reasoning (a failure here just means the Worker's
+    sweep re-POSTs an already-successful write a bit longer, which is safe by design since klik_pos
+    is idempotent on bot_delivery_id - wasteful, not incorrect)."""
+    namespace_id = get_acks_namespace_id()
+    if not namespace_id:
+        frappe.log_error(title="Delivery ack push skipped - ACKS namespace id not configured")
+        return
+    try:
+        put_kv(namespace_id, f"delivery:{bot_delivery_id}", frappe.utils.now())
+    except Exception:
+        # `message` deliberately omitted - passing one (e.g. just `bot_delivery_id`) replaces
+        # frappe.log_error's own auto-captured traceback rather than adding to it (found live: an
+        # earlier version of this passed `message=bot_delivery_id` and every logged failure showed
+        # only the id, with the actual Cloudflare error - a transient 504 - nowhere to be found).
+        # The id goes in the title instead, where it's additive.
+        frappe.log_error(title=f"Delivery ack push to Cloudflare KV failed ({bot_delivery_id})")
+
+
 @frappe.whitelist()
 def submit_delivery_report(data):
     """Ingestion endpoint for the Telegram delivery bot.
@@ -282,10 +374,13 @@ def submit_delivery_report(data):
             "Delivery Report", {"bot_delivery_id": bot_delivery_id}, "name"
         )
         if existing_name:
-            # Idempotent replay (Hookdeck retry, Phase 7's future ledger sweep) - deliberately does
-            # NOT re-enqueue the confirmation DM or media sync below: those already ran once for
-            # the genuine insert, and re-running them on every replay would re-DM the driver and
-            # (worse) re-download and duplicate-attach every photo each time.
+            # Idempotent replay (Hookdeck retry, or Phase 7's ledger sweep re-POSTing an entry that
+            # actually already succeeded) - deliberately does NOT re-enqueue the confirmation DM or
+            # media sync below: those already ran once for the genuine insert, and re-running them
+            # on every replay would re-DM the driver and (worse) re-download and duplicate-attach
+            # every photo each time. The ack IS re-enqueued, though (unlike those) - this is
+            # precisely the case the Worker's sweep needs the ack for, to stop re-POSTing.
+            _enqueue_delivery_ack(bot_delivery_id)
             return _delivery_report_response(frappe.get_doc("Delivery Report", existing_name))
 
         # Worker-forwarded Telegram file_ids (ARCHITECTURE.md: the Worker only ever forwards
@@ -345,6 +440,7 @@ def submit_delivery_report(data):
             existing_name = frappe.db.get_value(
                 "Delivery Report", {"bot_delivery_id": bot_delivery_id}, "name"
             )
+            _enqueue_delivery_ack(bot_delivery_id)
             return _delivery_report_response(frappe.get_doc("Delivery Report", existing_name))
 
         # Phase 6.6: the driver-facing confirmation. The Worker's write is fire-and-forget through
@@ -375,6 +471,7 @@ def submit_delivery_report(data):
             except Exception:
                 frappe.log_error(title="Failed to enqueue delivery media sync")
 
+        _enqueue_delivery_ack(bot_delivery_id)
         return _delivery_report_response(report)
 
     except frappe.exceptions.ValidationError as e:

@@ -13,6 +13,7 @@
   "cloudflare_account_id",
   "cloudflare_api_token",
   "cloudflare_kv_namespace_id",
+  "cloudflare_acks_namespace_id",
   "section_break_tbs2",
   "reporting_chat_id",
   "reporting_topic_id",
@@ -52,6 +53,12 @@
    "fieldname": "cloudflare_kv_namespace_id",
    "fieldtype": "Data",
    "label": "Cloudflare KV Namespace ID (DRIVERS)"
+  },
+  {
+   "description": "The Worker's ACKS KV namespace id - a *different* namespace from DRIVERS above, same Cloudflare account/token (Phase 7's durability backstop: klik_pos writes `delivery:<bot_delivery_id>` / `registration:<telegram_user_id>` here on successful insert; the Worker's hourly sweep checks it before re-POSTing a pending ledger entry).",
+   "fieldname": "cloudflare_acks_namespace_id",
+   "fieldtype": "Data",
+   "label": "Cloudflare KV Namespace ID (ACKS)"
   },
   {
    "fieldname": "section_break_tbs2",
