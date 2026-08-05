@@ -9,7 +9,7 @@ from frappe.utils.file_manager import save_file
 from klik_pos.api.booklet import _extract_number as _extract_invoice_number
 from klik_pos.api.booklet import match_booklet_for_invoice
 from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment_entry, queue_sales_invoice
-from klik_pos.api.telegram_notify import send_admin_alert
+from klik_pos.api.telegram_notify import notify_driver, send_admin_alert
 
 # completion_status (Delivery Report) -> custom_delivery_status (Sales Invoice, Todo 020).
 DELIVERY_STATUS_MAP = {"Full": "Delivered", "Partial": "Partially Delivered"}
@@ -233,6 +233,33 @@ def _delivery_report_response(report):
     }
 
 
+def notify_driver_delivery_recorded_job(report_name):
+    """Phase 6.6. Background job, enqueued once by `submit_delivery_report` right after a new
+    report is inserted. Re-fetches rather than trusting an enqueue-time snapshot, same reasoning as
+    driver.py's notify_driver_approved_job - the report could be edited (e.g. a bad invoice number
+    corrected) between enqueue and run, and re-reading avoids sending a confirmation that's already
+    stale by the time it lands.
+
+    Uses `driver_telegram_id` directly as the DM's chat_id, not a Delivery Driver lookup - for a
+    *private* one-on-one chat with the bot (the only kind this bot has; there's no group-chat
+    delivery flow), Telegram's chat_id and the driver's user_id are the same number. That's the
+    same assumption `sync_driver_from_bot`'s `chat_id` field already rests on.
+    """
+    report = frappe.get_doc("Delivery Report", report_name)
+    if not report.driver_telegram_id:
+        return  # can't happen via the bot's own flow (always sends it) - guards direct API use
+
+    if report.matched_invoice:
+        detail = f"Matched to Invoice {report.matched_invoice}."
+    else:
+        detail = "Awaiting manual match by staff."
+
+    notify_driver(
+        report.driver_telegram_id,
+        f"✅ Delivery for Invoice #{report.reported_invoice_no} recorded ({report.name}).\n{detail}",
+    )
+
+
 @frappe.whitelist()
 def submit_delivery_report(data):
     """Ingestion endpoint for the Telegram delivery bot.
@@ -255,7 +282,18 @@ def submit_delivery_report(data):
             "Delivery Report", {"bot_delivery_id": bot_delivery_id}, "name"
         )
         if existing_name:
+            # Idempotent replay (Hookdeck retry, Phase 7's future ledger sweep) - deliberately does
+            # NOT re-enqueue the confirmation DM or media sync below: those already ran once for
+            # the genuine insert, and re-running them on every replay would re-DM the driver and
+            # (worse) re-download and duplicate-attach every photo each time.
             return _delivery_report_response(frappe.get_doc("Delivery Report", existing_name))
+
+        # Worker-forwarded Telegram file_ids (ARCHITECTURE.md: the Worker only ever forwards
+        # ids, never binaries) - stored separately from `photos`/`voice_note` above, which hold
+        # *downloaded* Frappe File URLs from the old bot's two-step flow. `telegram_media.py`'s
+        # sync_delivery_media_job is what turns this into those fields, asynchronously (Phase 6).
+        telegram_photo_ids = data.get("telegram_photo_file_ids") or []
+        telegram_voice_id = data.get("telegram_voice_file_id")
 
         report = frappe.get_doc(
             {
@@ -279,6 +317,9 @@ def submit_delivery_report(data):
                 # for any non-table field) - must json.dumps() a list ourselves.
                 "photos": json.dumps(data["photos"]) if isinstance(data.get("photos"), list) else data.get("photos"),
                 "voice_note": data.get("voice_note"),
+                "telegram_file_ids": json.dumps({"photos": telegram_photo_ids, "voice": telegram_voice_id})
+                if (telegram_photo_ids or telegram_voice_id)
+                else None,
                 "raw_payload": data,
             }
         )
@@ -305,6 +346,34 @@ def submit_delivery_report(data):
                 "Delivery Report", {"bot_delivery_id": bot_delivery_id}, "name"
             )
             return _delivery_report_response(frappe.get_doc("Delivery Report", existing_name))
+
+        # Phase 6.6: the driver-facing confirmation. The Worker's write is fire-and-forget through
+        # Hookdeck - it never learns this report's name or match outcome back, so without this the
+        # driver has no way to tell "recorded" from "vanished into a Hookdeck failure". Enqueued
+        # unconditionally (unlike the media job below), since a delivery is never expected to be
+        # medialess but this shouldn't silently depend on that holding true.
+        try:
+            frappe.enqueue(
+                "klik_pos.api.delivery.notify_driver_delivery_recorded_job",
+                queue="short",
+                enqueue_after_commit=True,
+                report_name=report.name,
+            )
+        except Exception:
+            frappe.log_error(title="Failed to enqueue delivery confirmation DM")
+
+        # Phase 6.1-6.4: klik_pos-side media download. Only when the bot actually forwarded
+        # something - see telegram_media.py for why this can't be the Worker's job.
+        if telegram_photo_ids or telegram_voice_id:
+            try:
+                frappe.enqueue(
+                    "klik_pos.api.telegram_media.sync_delivery_media_job",
+                    queue="short",
+                    enqueue_after_commit=True,
+                    report_name=report.name,
+                )
+            except Exception:
+                frappe.log_error(title="Failed to enqueue delivery media sync")
 
         return _delivery_report_response(report)
 
@@ -784,6 +853,38 @@ def upload_delivery_file(report_name):
 
 
 @frappe.whitelist()
+def _attach_delivery_media(report, photo_urls=None, voice_url=None, error=None):
+    """Core merge-and-save, shared by the old bot's two-step `attach_delivery_media` endpoint below
+    and Phase 6's `sync_delivery_media_job` (api/telegram_media.py). Operates on an already-fetched
+    doc and does not catch exceptions itself - each caller wraps this in its own try/except with a
+    different response shape (a whitelisted-method response dict vs. a background job's
+    log_error/alert), so error handling stays at the call site instead of being duplicated here.
+
+    `error`, when given, replaces `media_sync_error` outright rather than appending - the one
+    caller that passes it (`sync_delivery_media_job`) runs at most once per report, so there's
+    never a prior value worth preserving.
+    """
+    photo_urls = photo_urls or []
+
+    if photo_urls:
+        existing = report.photos or []
+        if isinstance(existing, str):
+            existing = json.loads(existing) if existing else []
+        # json.dumps() required: JSON fieldtype auto-serializes a dict on assignment but rejects a
+        # raw list outright (see submit_delivery_report's photos handling above).
+        report.photos = json.dumps(existing + [url for url in photo_urls if url not in existing])
+
+    if voice_url:
+        report.voice_note = voice_url
+
+    if error is not None:
+        report.media_sync_error = error
+
+    if photo_urls or voice_url or error is not None:
+        report.save(ignore_permissions=True)
+
+
+@frappe.whitelist()
 def attach_delivery_media(report_name, photo_urls=None, voice_url=None):
     """Records already-uploaded Frappe File URLs onto a Delivery Report (Module 14 / Todo 035).
 
@@ -798,27 +899,16 @@ def attach_delivery_media(report_name, photo_urls=None, voice_url=None):
     than overwriting - safe to call more than once as a multi-photo delivery's files upload one at
     a time. voice_url: single URL, overwrites any previous value (a delivery has at most one voice
     note, matching the `voice_note` Attach field's single-file semantics).
+
+    Kept as its own whitelisted endpoint, unchanged in behaviour, for the old bot's two-step flow
+    (Phase 6 note: the Worker's fire-and-forget write can't use this - see telegram_media.py).
     """
     try:
         if isinstance(photo_urls, str):
             photo_urls = json.loads(photo_urls) if photo_urls else []
-        photo_urls = photo_urls or []
 
         report = frappe.get_doc("Delivery Report", report_name)
-
-        if photo_urls:
-            existing = report.photos or []
-            if isinstance(existing, str):
-                existing = json.loads(existing) if existing else []
-            # json.dumps() required: JSON fieldtype auto-serializes a dict on assignment but
-            # rejects a raw list outright (see submit_delivery_report's photos handling above).
-            report.photos = json.dumps(existing + [url for url in photo_urls if url not in existing])
-
-        if voice_url:
-            report.voice_note = voice_url
-
-        if photo_urls or voice_url:
-            report.save(ignore_permissions=True)
+        _attach_delivery_media(report, photo_urls=photo_urls, voice_url=voice_url)
 
         return {
             "success": True,

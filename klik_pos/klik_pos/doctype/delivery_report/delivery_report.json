@@ -24,6 +24,8 @@
   "column_break_location_1",
   "photos",
   "voice_note",
+  "telegram_file_ids",
+  "media_sync_error",
   "section_break_reconciliation",
   "reconciliation_status",
   "match_confidence",
@@ -150,6 +152,20 @@
    "fieldname": "voice_note",
    "fieldtype": "Attach",
    "label": "Voice Note"
+  },
+  {
+   "description": "Raw Telegram file_ids as received from the Worker's fire-and-forget write, e.g. {\"photos\": [...], \"voice\": \"...\"|null} - kept separately from `photos`/`voice_note` (which hold the *downloaded* Frappe File URLs) since ARCHITECTURE.md explicitly warns against conflating the two: `photos` already means \"attached file URLs\" on records from the old two-step bot flow. This is the input to the media sync job (api/telegram_media.py); it is not itself displayed to staff.",
+   "fieldname": "telegram_file_ids",
+   "fieldtype": "JSON",
+   "label": "Telegram File IDs",
+   "read_only": 1
+  },
+  {
+   "description": "Set by the media sync job when a Telegram file_id could not be downloaded (bad/expired file_id, over Telegram's 20MB getFile limit, or a token rotation - ARCHITECTURE.md failure mode #9). Never silent: any entry here also raises an admin alert. Blank means either sync succeeded fully or hasn't run yet - the sync job's own log/enqueue history disambiguates those two.",
+   "fieldname": "media_sync_error",
+   "fieldtype": "Small Text",
+   "label": "Media Sync Error",
+   "read_only": 1
   },
   {
    "fieldname": "section_break_reconciliation",

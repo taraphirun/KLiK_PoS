@@ -9,7 +9,10 @@ import frappe
 import requests
 
 
-def _bot_token():
+def get_bot_token():
+    """Public - also used by api/telegram_media.py (Phase 6), which needs the raw token itself for
+    `getFile`/file-download URLs, not just a message-send helper.
+    """
     settings = frappe.get_doc("Telegram Bot Settings", "Telegram Bot Settings")
     if not settings.enabled:
         return None
@@ -30,10 +33,10 @@ def _admin_telegram_ids():
 def _send_telegram_message(chat_id, text):
     """One sendMessage call. Best-effort - never raises; failures are logged, since this function
     exists to alert humans about *other* failures and must not itself become a new failure mode
-    that also goes unnoticed. Everything is inside the try, not just the HTTP call - _bot_token()
-    itself can raise (see its own comment) and that must be caught here too."""
+    that also goes unnoticed. Everything is inside the try, not just the HTTP call -
+    get_bot_token() itself can raise (see its own comment) and that must be caught here too."""
     try:
-        token = _bot_token()
+        token = get_bot_token()
         if not token:
             frappe.log_error(title="Telegram alert skipped - bot token not configured", message=text)
             return
