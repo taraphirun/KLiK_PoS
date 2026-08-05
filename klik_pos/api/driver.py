@@ -3,7 +3,7 @@ import json
 import frappe
 
 from klik_pos.api.cloudflare_kv import get_acks_namespace_id, put_kv
-from klik_pos.api.telegram_notify import notify_driver, send_admin_alert
+from klik_pos.api.telegram_notify import KH_DRIVER_APPROVED, notify_driver, send_admin_alert
 
 DRIVER_LIST_FIELDS = [
     "name",
@@ -390,7 +390,7 @@ def notify_driver_approved_job(driver_name):
     driver = frappe.get_doc("Delivery Driver", driver_name)
     if driver.status != "Active" or not driver.chat_id:
         return
-    notify_driver(driver.chat_id, "🎉 Your registration has been approved! Send /start to begin using the bot.")
+    notify_driver(driver.chat_id, KH_DRIVER_APPROVED)
 
 
 def push_driver_cache_job():

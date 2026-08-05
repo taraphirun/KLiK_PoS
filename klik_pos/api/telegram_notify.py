@@ -132,6 +132,23 @@ def get_reporting_chat():
     return settings.reporting_chat_id, (cint(settings.reporting_topic_id) if settings.reporting_topic_id else None)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Driver-facing Khmer strings (2026-08-05).
+#
+# Scope decided with the user: driver-facing messages and the review-group report are Khmer;
+# anything addressed to an *admin* (send_admin_alert's callers, the booklet alert, the
+# new-registration ping, permanent-failure alerts) stays English. The Worker keeps its own copy of
+# this convention in src/strings.ts - these are the klik_pos-originated messages only.
+#
+# English original is kept beside each string so a non-Khmer reader can review a change here, and a
+# Khmer reader can tell what a string was meant to say. Corrections welcome - a native speaker
+# should have the last word on all of these.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# "Your registration has been approved! Send /start to begin using the bot."
+KH_DRIVER_APPROVED = "🎉 ការចុះឈ្មោះរបស់អ្នកត្រូវបានអនុម័ត!\n\nសូមផ្ញើ /start ដើម្បីចាប់ផ្តើមប្រើប្រាស់។"
+
+
 def notify_driver(chat_id, text):
     """DMs a single driver directly (not an admin) - Phase 8.1's driver-approved message, and the
     natural home for any future driver-facing push (e.g. a booklet-stalled nudge aimed at the
@@ -171,23 +188,16 @@ def send_booklet_status_alert(booklet_number, new_status):
     separate tracking table is needed here.
 
     Only Stalled/Ready for Review are alert-worthy (mirrors booklet_sync.py's ALERT_STATUSES -
-    Active/Closed never alert). Sends to *both* destinations the old bot did: the reporting chat
-    (broadcast, for whoever's watching it) and every admin (DM) - not a duplicate, the two have
-    different audiences and the old bot deliberately sent both.
+    Active/Closed never alert).
+
+    **Admin DM only** (changed 2026-08-05, user's call). bot.py broadcast this to the review chat
+    *as well as* DMing admins; that second copy was dropped deliberately - booklet lifecycle is an
+    operations concern for whoever manages the paper booklets, not something drivers or the review
+    chat need to see. Keeping it admin-only also sidesteps a language split: the review chat is
+    Khmer now, admin messages stay English, and this text would otherwise have needed both.
     """
     labels = {"Stalled": "STALLED", "Ready for Review": "READY FOR REVIEW"}
     if new_status not in labels:
         return
 
-    text = f"🚨 Booklet #{booklet_number} is {labels[new_status]}!"
-
-    try:
-        target = get_reporting_chat()
-        if target:
-            chat_id, topic_id = target
-            extra = {"message_thread_id": topic_id} if topic_id else {}
-            _send_telegram_message(chat_id, text, **extra)
-    except Exception:
-        frappe.log_error(title="Booklet status broadcast failed", message=f"{booklet_number}: {new_status}")
-
-    send_admin_alert(text)
+    send_admin_alert(f"🚨 Booklet #{booklet_number} is {labels[new_status]}!")

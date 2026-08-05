@@ -1,6 +1,7 @@
 import difflib
 import json
 import re
+import unicodedata
 from datetime import timezone
 from zoneinfo import ZoneInfo
 
@@ -260,19 +261,125 @@ def notify_driver_delivery_recorded_job(report_name):
         return  # can't happen via the bot's own flow (always sends it) - guards direct API use
 
     if report.matched_invoice:
-        detail = f"Matched to Invoice {report.matched_invoice}."
+        # "Matched to Invoice X."
+        detail = f"ត្រូវបានផ្គូផ្គងជាមួយវិក្កយបត្រ {report.matched_invoice}។"
     else:
-        detail = "Awaiting manual match by staff."
+        # "Awaiting manual match by staff."
+        detail = "កំពុងរង់ចាំបុគ្គលិកផ្គូផ្គងដោយដៃ។"
 
+    # "Delivery for Invoice #X recorded (DR-...)."
     notify_driver(
         report.driver_telegram_id,
-        f"✅ Delivery for Invoice #{report.reported_invoice_no} recorded ({report.name}).\n{detail}",
+        f"✅ បានកត់ត្រាការដឹកជញ្ជូនសម្រាប់វិក្កយបត្រ <b>#{report.reported_invoice_no}</b> "
+        f"(<code>{report.name}</code>)។\n{detail}",
     )
 
 
 # bot.py's LOCAL_TZ (Asia/Phnom_Penh), matching what the Worker's toLocalDisplayString used for this
 # same message. Hardcoded rather than configurable, same as the original - single-country deployment.
 REPORTING_TZ = "Asia/Phnom_Penh"
+
+# Khmer weekday names, indexed by datetime.weekday() (Monday = 0 ... Sunday = 6). A lookup rather
+# than strftime("%A") because that would need a Khmer system locale installed on the bench host -
+# an external dependency for something this small, and one that would silently fall back to English
+# if the locale were ever missing.
+KH_WEEKDAYS = ("ចន្ទ", "អង្គារ", "ពុធ", "ព្រហស្បតិ៍", "សុក្រ", "សៅរ៍", "អាទិត្យ")
+
+# Divider between consecutive delivery reports in the review chat, sent as its **own message**
+# ahead of each report (user's call). Its own message rather than a line inside the summary because
+# each delivery posts summary -> voice -> photos as three separate messages: a divider appended to
+# the summary would sit between a report and its own media, not between reports. Sending it first
+# puts it exactly on the boundary.
+#
+# Costs one extra sendMessage per delivery. That's in this background job, not the Worker's request
+# path, so it has no bearing on the CPU budget that Phase 9.3 was about.
+#
+# Length/character tuned by eye on a real device - it must not wrap to a second line. Single
+# constant so it stays a one-token change.
+REPORT_SEPARATOR = "❎" * 11
+
+
+def _format_delivery_time(dt):
+    """`ពុធ 05/08/26 - 07:41 PM` - the user's requested format (2026-08-05).
+
+    Day/month/year and 12-hour AM/PM, matching how dates are read locally rather than the ISO-ish
+    `YYYY-MM-DD HH:MM` this used to show. `%d/%m/%y` not `%m/%d/%y`: 05/08 here is 5 August.
+    """
+    return f"{KH_WEEKDAYS[dt.weekday()]} {dt.strftime('%d/%m/%y - %I:%M %p')}"
+
+# Khmer display labels for the values klik_pos stores in English. Display-only - the stored value is
+# always the English one (it's what validation and reporting key off). Mirrors the Worker's
+# STATUS_LABELS in src/strings.ts; keep the two in step if either changes.
+# Wording is the user's own (2026-08-05) - deliberately terser than a literal translation of the
+# English. Don't "correct" these back towards the English phrasing.
+KH_COMPLETION = {
+    "Full": "✅ គ្រប់",  # All Delivered
+    "Partial": "⚠️ ខ្វះ",  # Missing Product
+}
+# "Paid" is the same word as completion's "Full" (គ្រប់) - deliberate, per the user. The label and
+# emoji on each line are what distinguish them in the report.
+KH_PAYMENT = {
+    "Paid": "🟢 គ្រប់",  # Paid
+    "Unpaid": "🔴 មិនបាន",  # Unpaid
+    "Partial": "🟡 ខ្លះ",  # Partial
+}
+
+
+def _location_link(report):
+    """HTML `<a>` to Google Maps for the delivery's GPS point, or `None` if either coordinate is
+    missing - gps_latitude/gps_longitude are optional on the doctype even though the bot's own flow
+    currently always collects them, so this doesn't assume they're set.
+
+    HTML anchor, not the Markdown `[text](url)` form: `_send_telegram_message` sends with
+    `parse_mode: "HTML"` throughout this file, so Markdown syntax would render as literal brackets
+    rather than a link.
+    """
+    lat, lng = report.gps_latitude, report.gps_longitude
+    if lat is None or lng is None:
+        return None
+    return f'<a href="https://www.google.com/maps?q={lat},{lng}">Google Map</a>'
+
+
+def _driver_hashtag(report):
+    """A tappable per-driver tag so the review chat can be filtered by driver - tapping a hashtag in
+    Telegram searches that chat for it, which is the whole feature, with no bot-side search command.
+
+    `#<klik_pos driver id>.<registered name>` - e.g. `#DRV0127.តារា`. Two parts, deliberately:
+
+      - The id half is what's actually searchable. It's Latin/numeric, so it always tokenizes as
+        ONE tappable hashtag. Pure-Khmer tags don't: Telegram's hashtag parser breaks at Khmer's
+        spacing vowel signs (category Mc) - found live 2026-08-05, "តារា" only tagged as "តា",
+        which would collide with any other driver whose name happens to start the same way.
+      - The name half exists purely so a human glancing at the chat can see whose delivery it is.
+        The literal "." before it is what keeps it *out* of the tag - punctuation terminates a
+        Telegram hashtag exactly like a space does, so tapping the tag searches only the id half.
+
+    Uses the driver's **registered** name (`delivery_driver_name`) for the name half, not
+    `reported_driver_name` (the driver's Telegram *profile* name, changeable by them at any time -
+    a real record here had it set to "ដេប៉ូ ហុងតារា", a business name, while their registered name
+    was "តារា"). Also matches the driver line in the message body above, which was switched to the
+    same field for the same reason - the two must agree, or the tag and the visible name in the
+    same report point at two different identities.
+
+    Falls back to the telegram id when no driver record resolved, so an unmatched delivery is still
+    filterable rather than untagged.
+    """
+    if report.delivery_driver:
+        id_part = "".join(ch for ch in report.delivery_driver if ch.isalnum())
+    elif report.driver_telegram_id:
+        id_part = f"TG{report.driver_telegram_id}"
+    else:
+        return ""
+
+    name = report.delivery_driver_name or report.reported_driver_name
+    if name:
+        # Combining marks kept (Mn/Mc), same reasoning as before - this half isn't part of the
+        # tappable tag any more, but a naive isalnum() filter would still mangle Khmer for anyone
+        # reading it (ភិរុណ -> ភរណ). Spaces still stripped for a dense, single-token look.
+        name_part = "".join(ch for ch in str(name) if ch.isalnum() or unicodedata.category(ch).startswith("M"))
+        if name_part:
+            return f"#{id_part}.{name_part}"
+    return f"#{id_part}"
 
 
 def forward_delivery_to_reporting_chat_job(report_name):
@@ -311,6 +418,14 @@ def forward_delivery_to_reporting_chat_job(report_name):
     voice_id = raw.get("voice")
 
     try:
+        # Sent first, on its own, so it lands on the boundary between the previous delivery's
+        # photos and this one's summary. Own try/except like every other piece here - a failed
+        # divider must not cost the report itself.
+        _send_telegram_message(chat_id, REPORT_SEPARATOR, **extra)
+    except Exception:
+        frappe.log_error(title="Failed to send report separator to reporting chat", message=report_name)
+
+    try:
         # delivery_timestamp is stored as the naive-UTC string the bot sent (see
         # ARCHITECTURE.md's payload gotchas), so it must be tagged UTC before converting - without
         # the replace() this would treat it as server-local and be hours off, which is exactly the
@@ -320,26 +435,38 @@ def forward_delivery_to_reporting_chat_job(report_name):
             .replace(tzinfo=timezone.utc)
             .astimezone(ZoneInfo(REPORTING_TZ))
         )
-        time_str = local.strftime("%Y-%m-%d %H:%M")
-        # reported_driver_name, not delivery_driver_name: this is the verbatim name the bot sent,
-        # matching what the Worker displayed here. delivery_driver_name is the *resolved* klik_pos
-        # record's name, which may differ or be blank when resolve_driver found no match.
-        driver_name = report.reported_driver_name or "Unknown Driver"
-        _send_telegram_message(
-            chat_id,
-            f"📦 <b>#{report.reported_invoice_no} Delivered</b>\n"
-            f"<b>Completion Status:</b> {report.completion_status}\n"
-            f"<b>Payment Status:</b> {report.payment_status}\n"
-            f"<b>Driver:</b> {driver_name}\n"
-            f"<b>Time:</b> {time_str}",
-            **extra,
-        )
+        time_str = _format_delivery_time(local)
+        # delivery_driver_name (the *registered* klik_pos name), not reported_driver_name (the
+        # driver's Telegram *profile* name at delivery time) - changed 2026-08-05 to match
+        # _driver_hashtag below, after a real report showed them disagreeing: a driver's Telegram
+        # display name was "ដេប៉ូ ហុងតារា" (apparently a business name they'd set on their account)
+        # while their registered name was "តារា", so the driver line and the hashtag named two
+        # different things for the same delivery. Falls back to reported_driver_name only when no
+        # driver record resolved at all (delivery_driver_name is then blank).
+        driver_name = report.delivery_driver_name or report.reported_driver_name or "អ្នកដឹកជញ្ជូនមិនស្គាល់"
+        completion = KH_COMPLETION.get(report.completion_status, report.completion_status)
+        payment = KH_PAYMENT.get(report.payment_status, report.payment_status)
+        # "ម៉ោង៖" (Time:) label dropped by request (2026-08-06) - the clock emoji alone now carries
+        # the line's meaning, same pattern as the other short labels in this report.
+        lines = [
+            f"📦 <b>វិក្កយបត្រ #{report.reported_invoice_no}</b>",
+            f"📋 <b>ស្ថានភាពដឹកជញ្ជូន៖</b> {completion}",
+            f"💰 <b>ការទូទាត់៖</b> {payment}",
+            f"🛵 <b>អ្នកដឹក៖</b> {driver_name}",
+            f"🕒 {time_str}",
+        ]
+        map_link = _location_link(report)
+        if map_link:
+            lines.append(f"📍ទីតាំង៖ {map_link}")
+        _send_telegram_message(chat_id, "\n".join(lines) + f"\n\n{_driver_hashtag(report)}", **extra)
     except Exception:
         frappe.log_error(title="Failed to forward delivery summary to reporting chat", message=report_name)
 
     try:
         if voice_id:
-            send_voice(chat_id, voice_id, caption="🎙️ Voice note attached below for review:", **extra)
+            # No caption - the voice message speaks for itself in the review chat, and bot.py's
+            # original "Voice note attached below for review:" line was just noise above it.
+            send_voice(chat_id, voice_id, **extra)
     except Exception:
         frappe.log_error(title="Failed to forward voice note to reporting chat", message=report_name)
 
