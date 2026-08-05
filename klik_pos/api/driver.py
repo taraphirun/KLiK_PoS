@@ -278,8 +278,9 @@ def push_driver_cache(doc, method=None):
     (PHASES.md 3.7).
 
     Guards on has_value_changed so an unrelated save (e.g. some future field the cache doesn't
-    use) doesn't push. Always true on creation - harmless, since a brand-new driver starts Pending
-    and isn't in the Active-only list pushed below anyway.
+    use) doesn't push. Always true on creation - and that now matters rather than being harmless:
+    a brand-new Pending driver belongs in the `drivers:all` key the bot reads to answer "is my
+    registration pending?", even though it's correctly absent from the Active-only key.
 
     Only *decides and enqueues* here, synchronously inside the save transaction. The actual
     Cloudflare HTTP call happens in push_driver_cache_job, after commit (enqueue_after_commit),
@@ -304,8 +305,10 @@ def push_driver_cache(doc, method=None):
 
 def push_driver_cache_job():
     """Background job (never call directly outside a queue context - runs post-commit). Full-list
-    replace of the single `drivers:approved` KV key (ARCHITECTURE.md: one key, not one per driver
-    - at five drivers, full-list replacement makes revocation automatic with no tombstones needed).
+    replace of two KV keys: `drivers:approved` (Active only - the approval gate) and `drivers:all`
+    (every status - lets the bot distinguish Pending/Rejected without calling this bench live).
+    One key each, not one per driver (ARCHITECTURE.md) - at five drivers, full-list replacement
+    makes revocation automatic with no tombstones needed.
 
     Silently no-ops if Telegram Bot Settings isn't enabled/configured yet - expected before Phase
     3's Cloudflare account/KV namespace exist (PHASES.md Prerequisites), not an error state.
@@ -324,25 +327,40 @@ def push_driver_cache_job():
         )
         return
 
-    drivers = frappe.get_all(
+    all_drivers = frappe.get_all(
         "Delivery Driver",
-        filters={"status": "Active"},
         fields=DRIVER_LIST_FIELDS,
         order_by="modified desc",
     )
+    active_drivers = [d for d in all_drivers if d.get("status") == "Active"]
 
-    # Cloudflare's "Write key-value pair" endpoint (verified against current API docs, 2026-08-04):
-    # PUT .../values/:key_name, Bearer auth, multipart/form-data with a `value` field - not a raw
-    # JSON body.
+    # Two keys, one query. `drivers:approved` gates every delivery (Active only, fail-closed);
+    # `drivers:all` carries every status so the bot can tell Pending from Rejected from unknown
+    # *without* calling this bench live. That live call previously sat on /start's and /register's
+    # hot path, which meant a home-lab outage stalled the bot's most-used command - the exact
+    # dependency the Worker architecture exists to remove. Filtered in Python rather than with a
+    # second get_all so both keys always describe the same instant.
+    for key_name, payload in (("drivers:approved", active_drivers), ("drivers:all", all_drivers)):
+        _put_kv(account_id, namespace_id, api_token, key_name, payload)
+
+
+def _put_kv(account_id, namespace_id, api_token, key_name, payload):
+    """Single KV write. Cloudflare's "Write key-value pair" endpoint (verified against current API
+    docs, 2026-08-04): PUT .../values/:key_name, Bearer auth, multipart/form-data with a `value`
+    field - not a raw JSON body.
+
+    Each key is written independently and logs its own failure, so one key failing still lets the
+    other land rather than leaving both stale.
+    """
     url = (
         f"https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/"
-        f"namespaces/{namespace_id}/values/drivers:approved"
+        f"namespaces/{namespace_id}/values/{key_name}"
     )
     try:
         response = requests.put(
             url,
             headers={"Authorization": f"Bearer {api_token}"},
-            files={"value": (None, json.dumps(drivers, default=str))},
+            files={"value": (None, json.dumps(payload, default=str))},
             timeout=15,
         )
         response.raise_for_status()
@@ -350,4 +368,4 @@ def push_driver_cache_job():
         if not body.get("success"):
             raise Exception(f"Cloudflare API returned success=false: {body.get('errors')}")
     except Exception:
-        frappe.log_error(title="Driver cache push to Cloudflare KV failed")
+        frappe.log_error(title=f"Driver cache push to Cloudflare KV failed ({key_name})")
