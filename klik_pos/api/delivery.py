@@ -1,6 +1,8 @@
 import difflib
 import json
 import re
+from datetime import timezone
+from zoneinfo import ZoneInfo
 
 import frappe
 from frappe.utils import add_days, flt, get_datetime, now_datetime, nowdate
@@ -10,7 +12,14 @@ from klik_pos.api.booklet import _extract_number as _extract_invoice_number
 from klik_pos.api.booklet import match_booklet_for_invoice
 from klik_pos.api.cloudflare_kv import get_acks_namespace_id, put_kv
 from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment_entry, queue_sales_invoice
-from klik_pos.api.telegram_notify import notify_driver, send_admin_alert
+from klik_pos.api.telegram_notify import (
+    _send_telegram_message,
+    get_reporting_chat,
+    notify_driver,
+    send_admin_alert,
+    send_media_group,
+    send_voice,
+)
 
 # completion_status (Delivery Report) -> custom_delivery_status (Sales Invoice, Todo 020).
 DELIVERY_STATUS_MAP = {"Full": "Delivered", "Partial": "Partially Delivered"}
@@ -261,6 +270,88 @@ def notify_driver_delivery_recorded_job(report_name):
     )
 
 
+# bot.py's LOCAL_TZ (Asia/Phnom_Penh), matching what the Worker's toLocalDisplayString used for this
+# same message. Hardcoded rather than configurable, same as the original - single-country deployment.
+REPORTING_TZ = "Asia/Phnom_Penh"
+
+
+def forward_delivery_to_reporting_chat_job(report_name):
+    """The delivery review-chat forward - summary, voice note, and photos, for human review.
+    Originally bot.py's group-forward (bot.py:844-889), then the Worker's `forwardToReportingChat`,
+    moved here 2026-08-05 (see PHASES.md Phase 9.3) for two reasons:
+
+      1. CPU. The Worker ran this under `waitUntil`, which extends the invocation but does *not*
+         exempt the work from that request's CPU accounting - it measured 10ms with the forward vs
+         6ms without, on a 10ms free-plan ceiling.
+      2. Correctness. In the Worker it fired when *Hookdeck accepted* the event, which isn't the
+         same as klik_pos having it - during the Phase 7 outage test a delivery could be announced
+         to the review chat while no record existed here at all. Enqueued from a genuine insert,
+         that can't happen.
+
+    Re-fetches the doc rather than trusting an enqueue-time snapshot, same as
+    notify_driver_delivery_recorded_job above.
+
+    Each piece (summary / voice / photos) is independently try/excepted - a deliberate improvement
+    over bot.py, which wrapped all three in one try/except so a voice failure also silently skipped
+    photos that would have sent fine. Kept when this moved.
+    """
+    target = get_reporting_chat()
+    if not target:
+        return  # forwarding disabled (no reporting_chat_id set) - not an error
+    chat_id, topic_id = target
+    extra = {"message_thread_id": topic_id} if topic_id else {}
+
+    report = frappe.get_doc("Delivery Report", report_name)
+
+    raw = report.telegram_file_ids
+    if isinstance(raw, str):
+        raw = frappe.parse_json(raw) if raw else {}
+    raw = raw or {}
+    photo_ids = raw.get("photos") or []
+    voice_id = raw.get("voice")
+
+    try:
+        # delivery_timestamp is stored as the naive-UTC string the bot sent (see
+        # ARCHITECTURE.md's payload gotchas), so it must be tagged UTC before converting - without
+        # the replace() this would treat it as server-local and be hours off, which is exactly the
+        # bug the Worker's own toLocalDisplayString comment records hitting.
+        local = (
+            get_datetime(report.delivery_timestamp)
+            .replace(tzinfo=timezone.utc)
+            .astimezone(ZoneInfo(REPORTING_TZ))
+        )
+        time_str = local.strftime("%Y-%m-%d %H:%M")
+        # reported_driver_name, not delivery_driver_name: this is the verbatim name the bot sent,
+        # matching what the Worker displayed here. delivery_driver_name is the *resolved* klik_pos
+        # record's name, which may differ or be blank when resolve_driver found no match.
+        driver_name = report.reported_driver_name or "Unknown Driver"
+        _send_telegram_message(
+            chat_id,
+            f"📦 <b>#{report.reported_invoice_no} Delivered</b>\n"
+            f"<b>Completion Status:</b> {report.completion_status}\n"
+            f"<b>Payment Status:</b> {report.payment_status}\n"
+            f"<b>Driver:</b> {driver_name}\n"
+            f"<b>Time:</b> {time_str}",
+            **extra,
+        )
+    except Exception:
+        frappe.log_error(title="Failed to forward delivery summary to reporting chat", message=report_name)
+
+    try:
+        if voice_id:
+            send_voice(chat_id, voice_id, caption="🎙️ Voice note attached below for review:", **extra)
+    except Exception:
+        frappe.log_error(title="Failed to forward voice note to reporting chat", message=report_name)
+
+    try:
+        if photo_ids:
+            # send_media_group chunks at 10 internally - see its docstring; an unchunked call sends
+            # *nothing* over that limit rather than a partial album.
+            send_media_group(chat_id, photo_ids, **extra)
+    except Exception:
+        frappe.log_error(title="Failed to forward photos to reporting chat", message=report_name)
+
+
 STUCK_JOB_AGE_MINUTES = 15
 
 
@@ -470,6 +561,20 @@ def submit_delivery_report(data):
                 )
             except Exception:
                 frappe.log_error(title="Failed to enqueue delivery media sync")
+
+        # The review-chat forward (moved here from the Worker 2026-08-05, see
+        # forward_delivery_to_reporting_chat_job). Enqueued only on this genuine-insert path -
+        # never from the two idempotent-replay branches above, which is what stops a Phase 7 ledger
+        # resubmit or a Hookdeck retry from announcing the same delivery to the review chat twice.
+        try:
+            frappe.enqueue(
+                "klik_pos.api.delivery.forward_delivery_to_reporting_chat_job",
+                queue="short",
+                enqueue_after_commit=True,
+                report_name=report.name,
+            )
+        except Exception:
+            frappe.log_error(title="Failed to enqueue delivery review-chat forward")
 
         _enqueue_delivery_ack(bot_delivery_id)
         return _delivery_report_response(report)

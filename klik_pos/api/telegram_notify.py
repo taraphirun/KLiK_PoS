@@ -60,6 +60,78 @@ def _send_telegram_message(chat_id, text, **extra):
         frappe.log_error(title="Telegram alert send failed", message=text)
 
 
+def _call_telegram(method, payload, what):
+    """One Bot API call for the non-sendMessage methods below. Same best-effort contract as
+    `_send_telegram_message` (never raises; logs instead) - these are all supervisory/notification
+    sends, and a failure to *report* something must never become a new unreported failure.
+    """
+    try:
+        token = get_bot_token()
+        if not token:
+            frappe.log_error(title="Telegram send skipped - bot token not configured", message=what)
+            return
+
+        response = requests.post(f"https://api.telegram.org/bot{token}/{method}", json=payload, timeout=30)
+        response.raise_for_status()
+        body = response.json()
+        if not body.get("ok"):
+            frappe.log_error(title=f"Telegram {method} failed", message=f"{what}\n\n{body}")
+    except Exception:
+        frappe.log_error(title=f"Telegram {method} failed", message=what)
+
+
+def send_photo(chat_id, file_id, **extra):
+    """Single photo by Telegram file_id - no download, the bot can resend its own file_ids directly."""
+    _call_telegram("sendPhoto", {"chat_id": chat_id, "photo": file_id, **extra}, f"photo {file_id}")
+
+
+def send_media_group(chat_id, file_ids, **extra):
+    """Album send, **chunked at 10**.
+
+    Telegram caps an album at 10 items and rejects the *entire* call over that with "400: too many
+    messages to send as an album" - so an unchunked 15-photo forward delivers **zero** photos, not
+    the first 10. That exact bug shipped in the Worker's TypeScript version and was caught live
+    (2026-08-05) only because a 15-photo test delivery was run; this is the same fix ported, and is
+    the single most important detail in this function.
+
+    Sequential, not concurrent: albums should land in order, and parallel sendMediaGroup calls to
+    one chat invite Telegram's per-chat rate limit for no useful gain on a background job.
+    A lone trailing item (e.g. the 11th of 11) falls back to sendPhoto, since sendMediaGroup
+    requires 2+ items.
+    """
+    CHUNK = 10
+    for i in range(0, len(file_ids), CHUNK):
+        batch = file_ids[i : i + CHUNK]
+        if len(batch) == 1:
+            send_photo(chat_id, batch[0], **extra)
+        else:
+            media = [{"type": "photo", "media": fid} for fid in batch]
+            _call_telegram("sendMediaGroup", {"chat_id": chat_id, "media": media, **extra}, f"album of {len(batch)}")
+
+
+def send_voice(chat_id, file_id, caption=None, **extra):
+    payload = {"chat_id": chat_id, "voice": file_id, **extra}
+    if caption:
+        payload["caption"] = caption
+    _call_telegram("sendVoice", payload, f"voice {file_id}")
+
+
+def get_reporting_chat():
+    """(chat_id, topic_id) for the delivery review chat, or None if unset/disabled.
+
+    Read straight from Telegram Bot Settings - no KV round-trip. The `config:reporting` KV key this
+    used to be pushed to existed only because the *Worker* needed the value; now that klik_pos owns
+    the forward itself (api/delivery.py), it just reads its own settings doc, and that key and its
+    push job are gone.
+    """
+    settings = frappe.get_doc("Telegram Bot Settings", "Telegram Bot Settings")
+    if not settings.enabled or not settings.reporting_chat_id:
+        return None
+    # cint: Frappe Data field is always a string ("671"), Telegram's message_thread_id must be an
+    # Integer - same gotcha already flagged for the driver-cache push and the delivery payload.
+    return settings.reporting_chat_id, (cint(settings.reporting_topic_id) if settings.reporting_topic_id else None)
+
+
 def notify_driver(chat_id, text):
     """DMs a single driver directly (not an admin) - Phase 8.1's driver-approved message, and the
     natural home for any future driver-facing push (e.g. a booklet-stalled nudge aimed at the
@@ -110,15 +182,10 @@ def send_booklet_status_alert(booklet_number, new_status):
     text = f"🚨 Booklet #{booklet_number} is {labels[new_status]}!"
 
     try:
-        settings = frappe.get_doc("Telegram Bot Settings", "Telegram Bot Settings")
-        chat_id = settings.reporting_chat_id
-        if chat_id:
-            extra = {}
-            if settings.reporting_topic_id:
-                # Frappe Data field -> Telegram Integer, same gotcha ARCHITECTURE.md flags for the
-                # KV push (driver.py) and the delivery-report payload - a string here makes
-                # Telegram reject message_thread_id silently landing in the wrong topic or failing.
-                extra["message_thread_id"] = cint(settings.reporting_topic_id)
+        target = get_reporting_chat()
+        if target:
+            chat_id, topic_id = target
+            extra = {"message_thread_id": topic_id} if topic_id else {}
             _send_telegram_message(chat_id, text, **extra)
     except Exception:
         frappe.log_error(title="Booklet status broadcast failed", message=f"{booklet_number}: {new_status}")

@@ -66,7 +66,7 @@
    "label": "Delivery Report Forwarding"
   },
   {
-   "description": "Telegram chat id the Worker forwards each completed delivery to (summary text, photos, voice note - for human review). A supergroup's id is negative, e.g. -1001234567890. Leave blank to disable forwarding. Pushed to the same DRIVERS KV namespace above under key `config:reporting`, read by src/klikpos/config.ts - not a live klik_pos call from the Worker.",
+   "description": "Telegram chat id each completed delivery is forwarded to (summary text, photos, voice note - for human review). A supergroup's id is negative, e.g. -1001234567890. Leave blank to disable forwarding. Read directly by klik_pos (api/delivery.py's forward_delivery_to_reporting_chat_job), which sends the forward itself once the Delivery Report is actually inserted - no KV push, and nothing to redeploy when you change it.",
    "fieldname": "reporting_chat_id",
    "fieldtype": "Data",
    "label": "Reporting Chat ID"
