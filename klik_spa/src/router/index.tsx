@@ -19,7 +19,6 @@ import InvoiceViewPage from "../pages/InvoiceViewPage";
 import CustomerDetailsPage from "../pages/CustomerPageDetails";
 import DeliveryReconciliationPage from "../pages/DeliveryReconciliationPage";
 import DriverManagementPage from "../pages/DriverManagementPage";
-import LiveDeliveryMapPage from "../pages/LiveDeliveryMapPage";
 import BookletsPage from "../pages/BookletsPage";
 import DailyReconciliationPage from "../pages/DailyReconciliationPage";
 
@@ -101,8 +100,13 @@ const router = createBrowserRouter([
         element: <ProtectedRoute element={<DriverManagementPage />} requiresDeliveryManagement />,
       },
       {
+        // Renders nothing - the actual page is LiveMapPersistent, mounted once in App.tsx outside
+        // this router so navigating away and back doesn't tear down and rebuild the live Google
+        // Map instance (2026-08-06). This route entry still exists purely so ProtectedRoute's
+        // auth/permission redirect fires for a direct or bookmarked visit, and so the sidebar's
+        // active-link highlighting (driven by the URL) still matches.
         path: "deliveries/map",
-        element: <ProtectedRoute element={<LiveDeliveryMapPage />} requiresDeliveryManagement />,
+        element: <ProtectedRoute element={<></>} requiresDeliveryManagement />,
       },
       {
         path: "deliveries/booklets",

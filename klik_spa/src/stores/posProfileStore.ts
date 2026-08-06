@@ -44,6 +44,9 @@ export interface POSProfile {
   custom_scale_barcodes_start_with?: string;
   custom_google_maps_api_key?: string;
   custom_google_maps_map_id?: string;
+  /** Default-on (Check field defaults to "1") - Live Delivery Map flies the camera to a brand new
+   * delivery automatically unless explicitly unchecked on this POS Profile (2026-08-06). */
+  custom_live_map_auto_focus?: boolean | number;
   is_tax_included_in_basic_rate?: boolean | number | string;
   warehouse?: string;
   restrict_cost_visibility_in_tooltip?: boolean;

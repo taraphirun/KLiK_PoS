@@ -1,7 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { APIProvider, ControlPosition, Map, MapControl, Marker, useMap } from "@vis.gl/react-google-maps";
-import { AlertTriangle, Crosshair, Layers, Loader2, MapPin, Minus, Plus, Receipt, Search, User, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Crosshair,
+  Layers,
+  Loader2,
+  MapPin as MapPinIcon,
+  Minus,
+  Plus,
+  Receipt,
+  Search,
+  User,
+  X,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "react-toastify";
 import BottomNavigation from "../components/BottomNavigation";
 import {
   getDeliveryReports,
@@ -14,6 +27,7 @@ import {
 } from "../services/delivery";
 import { getRealtimeSocket } from "../utils/realtime";
 import { usePOSProfileStore } from "../stores/posProfileStore";
+import { useLiveMapStore, type MapPin } from "../stores/liveMapStore";
 
 const ALL_STATUSES = "Unmatched,Suggested,Confirmed,Rejected";
 const DEFAULT_CENTER = { lat: 11.5564, lng: 104.9282 }; // Phnom Penh - used only when there are no pins yet.
@@ -37,22 +51,6 @@ const STATUS_COLOR: Record<ReconciliationStatus, string> = {
 const PIN_PATH = "M12 2C7.58 2 4 5.58 4 10c0 6.5 8 14 8 14s8-7.5 8-14c0-4.42-3.58-8-8-8z";
 const PIN_ANCHOR = { x: 12, y: 24 };
 const PIN_LABEL_ORIGIN = { x: 12, y: 9.5 };
-
-type MapPin = {
-  name: string;
-  gps_latitude: number;
-  gps_longitude: number;
-  delivery_driver_name: string | null;
-  completion_status: string;
-  payment_status: string;
-  reconciliation_status: ReconciliationStatus;
-  matched_invoice: string | null;
-  reported_invoice_no: string | null;
-  delivery_timestamp: string | null;
-  /** Client-side only, set when this pin was first seen (initial fetch or realtime event) - used
-   * purely to order the Live Feed by "what just happened", not delivery_timestamp itself. */
-  receivedAt: number;
-};
 
 function toPin(report: DeliveryReport, receivedAt: number): MapPin | null {
   if (report.gps_latitude == null || report.gps_longitude == null) return null;
@@ -87,14 +85,46 @@ function updateToPin(update: DeliveryRealtimeUpdate, receivedAt: number): MapPin
   };
 }
 
-/** Permissive by design (2026-08-03 follow-up): a report with no delivery_timestamp yet (e.g.
- * Unmatched, awaiting confirmation) is presumably very recent and shouldn't be hidden from the
- * feed just for lacking a stamp - only an *actually past-dated* timestamp excludes it. */
-function isToday(timestamp: string | null): boolean {
-  if (!timestamp) return true;
-  const today = new Date();
-  const ts = new Date(timestamp.replace(" ", "T"));
-  return ts.getFullYear() === today.getFullYear() && ts.getMonth() === today.getMonth() && ts.getDate() === today.getDate();
+function formatDeliveredDate(timestamp: string | null): string {
+  if (!timestamp) return "Delivered date unknown";
+  const date = new Date(timestamp.replace(" ", "T"));
+  if (isNaN(date.getTime())) return "Delivered date unknown";
+  return date.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+interface PinFilters {
+  statusFilter: Set<ReconciliationStatus>;
+  driverFilter: string;
+  search: string;
+  fromDate: string;
+  toDate: string;
+}
+
+/** Shared by visiblePins (below) and the realtime auto-focus check (2026-08-06, user request:
+ * "make sure the pin/count shown also respect the filters") - a new delivery that wouldn't
+ * actually be shown under the current filters (wrong driver, wrong status, outside the date range)
+ * shouldn't fly the camera to it either; that would fly to what looks like empty water with no pin
+ * there, since the marker itself is correctly hidden by these same rules. Split out so both call
+ * sites can't drift out of sync with each other. */
+function pinMatchesFilters(pin: MapPin, filters: PinFilters): boolean {
+  if (!filters.statusFilter.has(pin.reconciliation_status)) return false;
+  if (filters.driverFilter && pin.delivery_driver_name !== filters.driverFilter) return false;
+
+  const term = filters.search.trim().toLowerCase();
+  if (term) {
+    const haystack = `${pin.matched_invoice || ""} ${pin.reported_invoice_no || ""}`.toLowerCase();
+    if (!haystack.includes(term)) return false;
+  }
+
+  const fromTs = filters.fromDate ? new Date(`${filters.fromDate}T00:00:00`).getTime() : null;
+  const toTs = filters.toDate ? new Date(`${filters.toDate}T23:59:59`).getTime() : null;
+  if ((fromTs || toTs) && pin.delivery_timestamp) {
+    const ts = new Date(pin.delivery_timestamp.replace(" ", "T")).getTime();
+    if (fromTs && ts < fromTs) return false;
+    if (toTs && ts > toTs) return false;
+  }
+
+  return true;
 }
 
 function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -337,6 +367,8 @@ interface ClusterDetailPanelProps {
   onOpenReconcile: () => void;
 }
 
+const CLUSTER_PAGE_SIZE = 10;
+
 /** Bottom slide-up panel for a clicked cluster's deliveries - replaces a per-pin InfoWindow so a
  * multi-delivery cluster can show all of its items at once, matching the reference bot UI.
  *
@@ -346,8 +378,30 @@ interface ClusterDetailPanelProps {
  * (the sidebar is a separate column, not stacked underneath) and the user asked to keep desktop's
  * behavior exactly as it was. Everything this panel shows per-delivery (completion/payment status,
  * the reconciliation link) was also added to LiveFeedList's own cards, which is what mobile relies
- * on instead now that this is desktop-only. */
+ * on instead now that this is desktop-only.
+ *
+ * Paginated in pages of 10 (2026-08-06 follow-up, user request) - a VIP customer's location can
+ * accumulate a delivery history large enough that rendering every card at once is wasteful; the
+ * heading's count still reflects the true total regardless of how many cards are actually loaded.
+ * Sorted newest-first (latest delivered at the front) - a delivery with no timestamp yet sorts as
+ * if it were the newest, same "presumably very recent" reasoning this page already applies
+ * elsewhere (see pinMatchesFilters's date-range handling). Call site keys this component by
+ * cluster.id, so picking a different cluster always starts back at the first page rather than
+ * carrying over how far a previous cluster had been paged. */
 function ClusterDetailPanel({ cluster, onClose, onOpenInvoice, onOpenReconcile }: ClusterDetailPanelProps) {
+  const [visibleCount, setVisibleCount] = useState(CLUSTER_PAGE_SIZE);
+
+  const sortedItems = useMemo(
+    () =>
+      [...cluster.items].sort((a, b) => {
+        const bTs = b.delivery_timestamp ? new Date(b.delivery_timestamp.replace(" ", "T")).getTime() : Infinity;
+        const aTs = a.delivery_timestamp ? new Date(a.delivery_timestamp.replace(" ", "T")).getTime() : Infinity;
+        return bTs - aTs;
+      }),
+    [cluster.items]
+  );
+  const visibleItems = sortedItems.slice(0, visibleCount);
+
   return (
     <div className="absolute inset-x-0 bottom-0 z-20 max-h-[45%] overflow-hidden rounded-t-xl border-t border-gray-200 bg-white/95 shadow-2xl backdrop-blur-sm dark:border-gray-700 dark:bg-gray-900/95">
       <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
@@ -359,7 +413,7 @@ function ClusterDetailPanel({ cluster, onClose, onOpenInvoice, onOpenReconcile }
         </button>
       </div>
       <div className="flex gap-3 overflow-x-auto p-4">
-        {cluster.items.map((pin) => (
+        {visibleItems.map((pin) => (
           <div
             key={pin.name}
             className="min-w-[220px] shrink-0 rounded-lg border border-gray-200 bg-white p-3 shadow-sm dark:border-gray-700 dark:bg-gray-800"
@@ -375,10 +429,14 @@ function ClusterDetailPanel({ cluster, onClose, onOpenInvoice, onOpenReconcile }
                 {pin.reconciliation_status}
               </span>
             </div>
+            <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{formatDeliveredDate(pin.delivery_timestamp)}</div>
             <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
               {pin.completion_status} · {pin.payment_status}
             </div>
-            {pin.matched_invoice && (
+            {pin.matched_invoice ? (
+              // Already matched (2026-08-06, user request) - the invoice link right above is the
+              // useful action at that point; "Open reconciliation" was for finding/fixing this
+              // delivery, which there's nothing left to do for once it has a matched invoice.
               <button
                 type="button"
                 onClick={() => onOpenInvoice(pin.matched_invoice as string)}
@@ -386,12 +444,24 @@ function ClusterDetailPanel({ cluster, onClose, onOpenInvoice, onOpenReconcile }
               >
                 {pin.matched_invoice}
               </button>
+            ) : (
+              <button type="button" onClick={onOpenReconcile} className="mt-1 block text-xs text-beveren-600 hover:underline dark:text-beveren-400">
+                Open reconciliation →
+              </button>
             )}
-            <button type="button" onClick={onOpenReconcile} className="mt-1 block text-xs text-beveren-600 hover:underline dark:text-beveren-400">
-              Open reconciliation →
-            </button>
           </div>
         ))}
+        {visibleCount < sortedItems.length && (
+          <button
+            type="button"
+            onClick={() => setVisibleCount((count) => count + CLUSTER_PAGE_SIZE)}
+            className="flex min-w-[100px] shrink-0 items-center justify-center rounded-lg border border-dashed border-gray-300 px-3 text-xs font-medium text-beveren-600 hover:bg-gray-50 dark:border-gray-600 dark:text-beveren-400 dark:hover:bg-gray-800"
+          >
+            Load 10 more
+            <br />
+            ({sortedItems.length - visibleCount} left)
+          </button>
+        )}
       </div>
     </div>
   );
@@ -502,37 +572,25 @@ function LiveFeedList({
   onFocus: (pin: MapPin) => void;
   onOpenReconcile: () => void;
 }) {
-  // Defaults to today only (2026-08-03 follow-up, user request) - a "live" feed showing months of
-  // old history by default isn't actually useful; toggle-able for catching up on older activity.
-  const [todayOnly, setTodayOnly] = useState(true);
-  const feed = useMemo(() => {
-    const scoped = todayOnly ? pins.filter((pin) => isToday(pin.delivery_timestamp)) : pins;
-    return [...scoped].sort((a, b) => b.receivedAt - a.receivedAt).slice(0, 50);
-  }, [pins, todayOnly]);
+  // No longer has its own "Today only" toggle (2026-08-06, user request) - it filtered
+  // independently of the Filters panel's date range and could disagree with it (pins on the map
+  // would respect a chosen range while this list silently stayed today-only regardless). The date
+  // range itself now defaults to today (see liveMapStore) and is the single source of truth for
+  // both the map and this feed.
+  const feed = useMemo(() => [...pins].sort((a, b) => b.receivedAt - a.receivedAt).slice(0, 50), [pins]);
 
   return (
     <div className="flex h-full flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs font-medium">
-          <span className={`h-2 w-2 rounded-full ${isConnected ? "animate-pulse bg-green-500" : "bg-red-500"}`} />
-          <span className={isConnected ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
-            {isConnected ? "Connected" : "Disconnected"}
-          </span>
-        </div>
-        <label className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
-          <input
-            type="checkbox"
-            checked={todayOnly}
-            onChange={(event) => setTodayOnly(event.target.checked)}
-            className="rounded border-gray-300 text-beveren-600 focus:ring-beveren-500 dark:border-gray-600"
-          />
-          Today only
-        </label>
+      <div className="flex items-center gap-2 text-xs font-medium">
+        <span className={`h-2 w-2 rounded-full ${isConnected ? "animate-pulse bg-green-500" : "bg-red-500"}`} />
+        <span className={isConnected ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"}>
+          {isConnected ? "Connected" : "Disconnected"}
+        </span>
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
         {feed.length === 0 ? (
           <div className="rounded-md border border-dashed border-gray-200 p-4 text-center text-sm text-gray-500 dark:border-gray-700 dark:text-gray-400">
-            {todayOnly ? "No deliveries today yet." : "No deliveries yet."}
+            No deliveries match the current filters.
           </div>
         ) : (
           feed.map((pin) => (
@@ -548,7 +606,7 @@ function LiveFeedList({
               <div className="flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium text-gray-900 dark:text-white">
                   <Receipt size={14} className="shrink-0 text-beveren-500" />
-                  {pin.matched_invoice || pin.reported_invoice_no || "Unmatched"}
+                  {pin.reported_invoice_no || "Unmatched"}
                 </span>
                 <span
                   className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
@@ -557,6 +615,14 @@ function LiveFeedList({
                   {pin.reconciliation_status}
                 </span>
               </div>
+              {/* The physical/paper invoice number above stays put once matched (2026-08-06, user
+                  request) - it's what's actually written on the slip and what staff use to find
+                  it again, not something that should get swapped out for the POS-side docname the
+                  moment a match happens. The matched Sales Invoice shows here instead, faded, once
+                  it exists. */}
+              {pin.matched_invoice && (
+                <div className="truncate text-xs text-gray-400 dark:text-gray-500">{pin.matched_invoice}</div>
+              )}
               <div className="mt-1.5 flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
                 <User size={12} className="opacity-60" />
                 {pin.delivery_driver_name || "N/A"}
@@ -567,16 +633,20 @@ function LiveFeedList({
               <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                 {pin.completion_status} · {pin.payment_status}
               </div>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onOpenReconcile();
-                }}
-                className="mt-1.5 block text-xs font-medium text-beveren-600 hover:underline dark:text-beveren-400"
-              >
-                Open reconciliation →
-              </button>
+              {/* Already matched (2026-08-06, user request) - the matched invoice above is the
+                  useful reference at that point; nothing left to reconcile. */}
+              {!pin.matched_invoice && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onOpenReconcile();
+                  }}
+                  className="mt-1.5 block text-xs font-medium text-beveren-600 hover:underline dark:text-beveren-400"
+                >
+                  Open reconciliation →
+                </button>
+              )}
             </div>
           ))
         )}
@@ -590,22 +660,63 @@ export default function LiveDeliveryMapPage() {
   const { posDetails } = usePOSProfileStore();
   const apiKey = posDetails?.custom_google_maps_api_key;
   const mapId = posDetails?.custom_google_maps_map_id;
+  // Check field, default "1" - treat anything but an explicit 0/false as enabled, so a site that
+  // hasn't loaded posDetails yet (or predates this field) still gets the default-on behavior
+  // rather than reading undefined as "off" (2026-08-06, user request).
+  const autoFocusEnabled = posDetails?.custom_live_map_auto_focus !== 0 && posDetails?.custom_live_map_auto_focus !== false;
+  // Read via a ref, not the value directly, inside the subscription effect below - the effect
+  // itself only needs to subscribe once (see its own comment), and a ref keeps it reading whatever
+  // the setting currently is without forcing a resubscribe every time it changes.
+  const autoFocusEnabledRef = useRef(autoFocusEnabled);
+  autoFocusEnabledRef.current = autoFocusEnabled;
 
-  const [pins, setPins] = useState<Record<string, MapPin>>({});
-  const [shopLocations, setShopLocations] = useState<ShopLocation[]>([]);
-  const [statusFilter, setStatusFilter] = useState<Set<ReconciliationStatus>>(new Set(["Unmatched", "Suggested", "Confirmed"]));
-  const [driverFilter, setDriverFilter] = useState("");
-  const [search, setSearch] = useState("");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
+  // Pins/shopLocations/filters/hasLoadedOnce all live in useLiveMapStore, not useState, so they
+  // survive this component unmounting and remounting on navigation (2026-08-06 - see the store's
+  // own comment for why). error/isConnected/selectedCluster/focusTarget stay local: they're
+  // transient per-visit UI state, not data worth carrying across a navigation.
+  const pins = useLiveMapStore((s) => s.pins);
+  const setPins = useLiveMapStore((s) => s.setPins);
+  const shopLocations = useLiveMapStore((s) => s.shopLocations);
+  const setShopLocations = useLiveMapStore((s) => s.setShopLocations);
+  const hasLoadedOnce = useLiveMapStore((s) => s.hasLoadedOnce);
+  const markLoaded = useLiveMapStore((s) => s.markLoaded);
+  const statusFilter = useLiveMapStore((s) => s.statusFilter);
+  const setStatusFilter = useLiveMapStore((s) => s.setStatusFilter);
+  const driverFilter = useLiveMapStore((s) => s.driverFilter);
+  const setDriverFilter = useLiveMapStore((s) => s.setDriverFilter);
+  const search = useLiveMapStore((s) => s.search);
+  const setSearch = useLiveMapStore((s) => s.setSearch);
+  const fromDate = useLiveMapStore((s) => s.fromDate);
+  const setFromDate = useLiveMapStore((s) => s.setFromDate);
+  const toDate = useLiveMapStore((s) => s.toDate);
+  const setToDate = useLiveMapStore((s) => s.setToDate);
+
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [selectedCluster, setSelectedCluster] = useState<ClusterData | null>(null);
   const [focusTarget, setFocusTarget] = useState<{ lat: number; lng: number } | null>(null);
 
+  // Read the camera's last known position once via getState() (not a reactive selector) - it's
+  // only ever consumed as the Map's defaultCenter/defaultZoom below, which the library itself
+  // treats as "read once at construction, then ignore" (see MapFocuser's comment on why this page
+  // doesn't use controlled center/zoom props). Subscribing reactively here would re-render this
+  // whole page on every pan/zoom tick for no benefit, fighting the exact thing that comment warns
+  // against.
+  const [initialCamera] = useState(() => {
+    const stored = useLiveMapStore.getState();
+    return { center: stored.cameraCenter, zoom: stored.cameraZoom };
+  });
+
+  // Names already accounted for, so the realtime subscription below can tell a genuinely new
+  // delivery apart from an update to one it already knows about (e.g. a status change) - only the
+  // former should auto-focus the camera (2026-08-06, user request). null until fetchPins seeds it
+  // with everything that already existed, so nothing already on the map at load time triggers a
+  // fly-to. This page is now kept mounted for the whole session (see LiveMapPersistent), so this
+  // ref - and the one seeding it - only ever run through that seed-then-diff cycle once, not on
+  // every visit.
+  const seenPinNamesRef = useRef<Set<string> | null>(null);
+
   const fetchPins = useCallback(async () => {
-    setIsLoading(true);
     setError(null);
     try {
       const response = await getDeliveryReports(ALL_STATUSES, "", 0, 200);
@@ -616,24 +727,33 @@ export default function LiveDeliveryMapPage() {
         if (pin) next[pin.name] = pin;
       }
       setPins(next);
+      markLoaded();
+      seenPinNamesRef.current = new Set(Object.keys(next));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load deliveries");
-    } finally {
-      setIsLoading(false);
+      const message = err instanceof Error ? err.message : "Failed to load deliveries";
+      // Only the very first load (this session) blanks the map for an error - a remount's
+      // background refresh failing shouldn't throw away an already-working map full of cached
+      // pins, so that case just toasts instead (see the render branch below).
+      if (useLiveMapStore.getState().hasLoadedOnce) {
+        toast.error(message);
+      } else {
+        setError(message);
+      }
     }
-  }, []);
+  }, [setPins, markLoaded]);
 
   useEffect(() => {
     fetchPins();
   }, [fetchPins]);
 
   // Shop pins are static reference data (unlike deliveries, no realtime subscription needed) -
-  // fetched once on mount.
+  // fetched once per mount, but seeded from the store's cached value in the meantime so a remount
+  // doesn't blank the shop marker out while this resolves.
   useEffect(() => {
     getShopLocations()
       .then((response) => setShopLocations(response.data || []))
-      .catch(() => setShopLocations([]));
-  }, []);
+      .catch(() => {});
+  }, [setShopLocations]);
 
   // Connection indicator for the Live Feed panel - separate from the delivery_report_update
   // subscription below, since this tracks the socket's own connect/disconnect state.
@@ -652,7 +772,32 @@ export default function LiveDeliveryMapPage() {
 
   useEffect(() => {
     return subscribeToDeliveryUpdates((update) => {
-      setPins((prev) => ({ ...prev, [update.name]: updateToPin(update, Date.now()) }));
+      const pin = updateToPin(update, Date.now());
+      useLiveMapStore.getState().upsertPin(pin);
+
+      // Auto-focus (2026-08-06, user request): fly the camera to a delivery the very first time
+      // its name is seen - not on every update it gets afterward (a status change re-publishes
+      // the same name). seenPinNamesRef is null until the initial fetchPins load finishes, so
+      // nothing fires before there's a real baseline to diff against. Also gated on the *current*
+      // filters (read live off the store, not a closed-over value - this effect only subscribes
+      // once) - a delivery the active driver/status/date filters would hide shouldn't fly the
+      // camera to it either, per the same "what's shown should match the filters" rule applied to
+      // visiblePins/the map markers/the count.
+      const seen = seenPinNamesRef.current;
+      if (seen && !seen.has(pin.name)) {
+        seen.add(pin.name);
+        const store = useLiveMapStore.getState();
+        const filters: PinFilters = {
+          statusFilter: store.statusFilter,
+          driverFilter: store.driverFilter,
+          search: store.search,
+          fromDate: store.fromDate,
+          toDate: store.toDate,
+        };
+        if (autoFocusEnabledRef.current && pinMatchesFilters(pin, filters)) {
+          setFocusTarget({ lat: pin.gps_latitude, lng: pin.gps_longitude });
+        }
+      }
     });
   }, []);
 
@@ -662,27 +807,8 @@ export default function LiveDeliveryMapPage() {
   }, [pins]);
 
   const visiblePins = useMemo(() => {
-    const fromTs = fromDate ? new Date(`${fromDate}T00:00:00`).getTime() : null;
-    const toTs = toDate ? new Date(`${toDate}T23:59:59`).getTime() : null;
-    const term = search.trim().toLowerCase();
-
-    return Object.values(pins).filter((pin) => {
-      if (!statusFilter.has(pin.reconciliation_status)) return false;
-      if (driverFilter && pin.delivery_driver_name !== driverFilter) return false;
-
-      if (term) {
-        const haystack = `${pin.matched_invoice || ""} ${pin.reported_invoice_no || ""}`.toLowerCase();
-        if (!haystack.includes(term)) return false;
-      }
-
-      if ((fromTs || toTs) && pin.delivery_timestamp) {
-        const ts = new Date(pin.delivery_timestamp.replace(" ", "T")).getTime();
-        if (fromTs && ts < fromTs) return false;
-        if (toTs && ts > toTs) return false;
-      }
-
-      return true;
-    });
+    const filters: PinFilters = { statusFilter, driverFilter, search, fromDate, toDate };
+    return Object.values(pins).filter((pin) => pinMatchesFilters(pin, filters));
   }, [pins, statusFilter, driverFilter, search, fromDate, toDate]);
 
   const clusters = useMemo(() => buildClusters(visiblePins, CLUSTER_RADIUS_METERS), [visiblePins]);
@@ -759,18 +885,22 @@ export default function LiveDeliveryMapPage() {
                 Set "Google Maps API Key" on this POS Profile (Desk → POS Profile) to enable the live map.
               </p>
             </div>
-          ) : isLoading ? (
+          ) : !hasLoadedOnce && error ? (
+            // A background refetch failing (e.g. on a remount after the map has already loaded
+            // once this session) doesn't hit this branch - see the toast in fetchPins's catch
+            // instead, so a transient network blip doesn't blank out an already-working map.
+            <div className="flex h-full items-center justify-center p-6 text-center text-red-600 dark:text-red-400">{error}</div>
+          ) : !hasLoadedOnce ? (
             <div className="flex h-full items-center justify-center gap-2 text-gray-500 dark:text-gray-400">
               <Loader2 size={18} className="animate-spin" /> Loading deliveries...
             </div>
-          ) : error ? (
-            <div className="flex h-full items-center justify-center p-6 text-center text-red-600 dark:text-red-400">{error}</div>
           ) : (
             <div className="absolute inset-0">
               <APIProvider apiKey={apiKey}>
                 <Map
-                  defaultCenter={center}
-                  defaultZoom={shopLocations.length ? 14 : visiblePins.length ? 12 : 6}
+                  defaultCenter={initialCamera.center ?? center}
+                  defaultZoom={initialCamera.zoom ?? (shopLocations.length ? 14 : visiblePins.length ? 12 : 6)}
+                  onCameraChanged={(event) => useLiveMapStore.getState().setCamera(event.detail.center, event.detail.zoom)}
                   mapId={mapId || undefined}
                   gestureHandling="greedy"
                   disableDefaultUI
@@ -791,6 +921,7 @@ export default function LiveDeliveryMapPage() {
               {selectedCluster && (
                 <div className="hidden lg:block">
                   <ClusterDetailPanel
+                    key={selectedCluster.id}
                     cluster={selectedCluster}
                     onClose={() => setSelectedCluster(null)}
                     onOpenInvoice={(invoice) => navigate(`/invoice/${invoice}`)}
@@ -811,7 +942,7 @@ export default function LiveDeliveryMapPage() {
             lg:. */}
         <aside className="flex h-1/2 min-h-0 w-full flex-none flex-col border-t border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 lg:h-full lg:w-[360px] lg:border-l lg:border-t-0">
           <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-4 dark:border-gray-700">
-            <MapPin className="text-beveren-600 dark:text-beveren-400" size={22} />
+            <MapPinIcon className="text-beveren-600 dark:text-beveren-400" size={22} />
             <div>
               <h1 className="text-lg font-bold text-gray-900 dark:text-white">Live Delivery Map</h1>
               <p className="text-xs text-gray-500 dark:text-gray-400">

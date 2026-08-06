@@ -291,6 +291,13 @@ def ensure_google_maps_api_key_field():
     mirrors exactly how the companion hd-delivery-telegram bot's own live map already works
     (frontend/src/components/DeliveryMap.tsx sets a mapId + drives smooth flyTo via
     map.moveCamera(), ported into klik_spa's MapFocuser).
+
+    custom_live_map_auto_focus (2026-08-06 follow-up, user request) - toggles whether a brand-new
+    delivery reported while the Live Delivery Map is open flies the camera to it automatically
+    (same MapFocuser flyTo, mirroring the companion bot's own confettiMode: "pan" behavior).
+    Default checked ("1") - Frappe backfills that default onto the column for existing POS Profile
+    rows too when the column is first added, not just new ones, so this doesn't silently turn off
+    for sites that already had the map configured before this field existed.
     """
     create_custom_fields(
         {
@@ -308,6 +315,14 @@ def ensure_google_maps_api_key_field():
                     "fieldtype": "Data",
                     "insert_after": "custom_google_maps_api_key",
                     "description": "Optional. Create one in Google Cloud Console (Google Maps Platform → Map Management), same project as the API key above, to enable smooth vector-rendered zoom on the Live Delivery Map. Leave blank to keep classic raster tiles.",
+                },
+                {
+                    "fieldname": "custom_live_map_auto_focus",
+                    "label": "Live Map Auto-Focus on New Delivery",
+                    "fieldtype": "Check",
+                    "default": "1",
+                    "insert_after": "custom_google_maps_map_id",
+                    "description": "When a new delivery is reported while the Live Delivery Map is open, automatically pan/zoom the camera to it. Uncheck to leave the camera where staff last left it.",
                 },
             ]
         },

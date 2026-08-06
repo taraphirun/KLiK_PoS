@@ -10,6 +10,7 @@ import "react-toastify/dist/ReactToastify.css";
 import { setupGlobalErrorHandling } from "./utils/apiUtils";
 import Footer from "./components/Footer";
 import RetailSidebar from "./components/RetailSidebar";
+import LiveMapPersistent from "./components/delivery/LiveMapPersistent";
 
 const queryClient = new QueryClient();
 
@@ -28,6 +29,10 @@ function App() {
               <RetailSidebar />
               <Outlet />
               <Footer />
+              {/* Always mounted, shown/hidden with CSS rather than routed - see its own comment
+                  for why (2026-08-06: keeps the live Google Map instance alive across
+                  navigation instead of tearing it down and rebuilding it every visit). */}
+              <LiveMapPersistent />
               <ToastContainer position="top-center" autoClose={3000} aria-label="Notification" />
             </ProductProvider>
           </I18nProvider>
