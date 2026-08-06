@@ -984,6 +984,51 @@ def unreject_delivery_match(report_name):
         return {"success": False, "message": str(e)}
 
 
+@frappe.whitelist()
+def correct_reported_invoice_no(report_name, invoice_no):
+    """Overrides a driver-mistyped invoice number (2026-08-06, user request: "sometime my driver
+    would just input the wrong invoice number") - editable from the Link Invoice dialog. Re-runs
+    match_delivery_report against the corrected value so fixing a typo can immediately surface (or
+    improve) a match in the same step, rather than requiring a separate re-match action.
+
+    Refuses on a Confirmed or Rejected report - match_delivery_report itself is a no-op past either
+    status, so correcting the number here wouldn't do anything but silently fail to re-match;
+    surfacing that plainly is clearer than a silent no-op. Rejected rows don't reach this dialog
+    from the reconciliation page anyway (History shows "Un-reject" there instead) - un-reject first
+    (which returns the report to Unmatched), then correct.
+    """
+    try:
+        invoice_no = (invoice_no or "").strip()
+        if not invoice_no:
+            frappe.throw("Invoice number is required")
+
+        report = frappe.get_doc("Delivery Report", report_name)
+
+        if report.reconciliation_status in ("Confirmed", "Rejected"):
+            frappe.throw(
+                f"Cannot correct the invoice number on a {report.reconciliation_status.lower()} "
+                "delivery report - un-reject or unlink it first"
+            )
+
+        report.reported_invoice_no = invoice_no
+        match_delivery_report(report)
+        report.save(ignore_permissions=True)
+
+        return {
+            "success": True,
+            "reported_invoice_no": report.reported_invoice_no,
+            "matched_invoice": report.matched_invoice,
+            "match_confidence": report.match_confidence,
+            "reconciliation_status": report.reconciliation_status,
+        }
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Correct reported invoice number failed")
+        return {"success": False, "message": str(e)}
+
+
 DELIVERY_REPORT_LIST_FIELDS = [
     "name",
     "bot_delivery_id",
@@ -1046,13 +1091,21 @@ def _group_info_for_keys(group_keys):
 
 
 @frappe.whitelist()
-def get_delivery_reports(status=None, search="", start=0, limit=100):
+def get_delivery_reports(status=None, search="", start=0, limit=100, driver=None, date_from=None, date_to=None):
     """List Delivery Reports for the reconciliation queue (Todo 024 frontend).
 
     status: comma-separated reconciliation_status values. Defaults to the actionable queue
     (Unmatched + Suggested) - pass e.g. "Confirmed,Rejected" to view resolved history instead.
     search: matches bot_delivery_id / reported_invoice_no / reported_driver_name / delivery_driver_name /
     matched_invoice.
+    driver: exact Delivery Driver docname (2026-08-06, History tab filter) - matches the resolved
+    `delivery_driver` link, not the verbatim `reported_driver_name` string, so it only ever narrows
+    to reports that actually resolved to that driver.
+    date_from/date_to: "YYYY-MM-DD", inclusive, filtered against `delivery_timestamp` (2026-08-06,
+    History tab filter) - the reported delivery time, not `creation` (when the row was ingested).
+    Compared as naive strings, same convention the rest of this module and the frontend's own
+    formatTimestamp already use (delivery_timestamp is stored and displayed without a timezone
+    conversion), so a date typed here lines up with what's shown in the table.
 
     Ordering (2026-07-31 addendum, decided with the user): rows are grouped by invoice
     (_group_key) and sorted so "flagged" groups - more than one report for that invoice across ANY
@@ -1073,6 +1126,18 @@ def get_delivery_reports(status=None, search="", start=0, limit=100):
 
         statuses = [s.strip() for s in (status.split(",") if status else ["Unmatched", "Suggested"]) if s.strip()]
         filters = [["reconciliation_status", "in", statuses]] if statuses else []
+
+        driver = (driver or "").strip()
+        if driver:
+            filters.append(["delivery_driver", "=", driver])
+
+        date_from = (date_from or "").strip()
+        if date_from:
+            filters.append(["delivery_timestamp", ">=", f"{date_from} 00:00:00"])
+
+        date_to = (date_to or "").strip()
+        if date_to:
+            filters.append(["delivery_timestamp", "<=", f"{date_to} 23:59:59"])
 
         or_filters = None
         search = (search or "").strip()

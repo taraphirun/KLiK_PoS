@@ -94,7 +94,13 @@ export async function getDeliveryReports(
   status?: string,
   search = "",
   start = 0,
-  limit = 100
+  limit = 100,
+  /** Exact Delivery Driver docname (2026-08-06, History tab filter). */
+  driver?: string,
+  /** "YYYY-MM-DD", inclusive - see get_delivery_reports for how these compare against
+   * delivery_timestamp (2026-08-06, History tab filter). */
+  dateFrom?: string,
+  dateTo?: string
 ): Promise<DeliveryReportsResponse> {
   const params = new URLSearchParams({
     start: String(start),
@@ -102,6 +108,9 @@ export async function getDeliveryReports(
   });
   if (status) params.set("status", status);
   if (search.trim()) params.set("search", search.trim());
+  if (driver) params.set("driver", driver);
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
 
   const response = await fetch(`/api/method/klik_pos.api.delivery.get_delivery_reports?${params.toString()}`, {
     method: "GET",
@@ -158,6 +167,26 @@ export async function unrejectDeliveryMatch(
 }> {
   return postJson("klik_pos.api.delivery.unreject_delivery_match", {
     report_name: reportName,
+  });
+}
+
+/** Overrides a driver-mistyped invoice number and re-runs matching against the corrected value
+ * (2026-08-06, user request - see correct_reported_invoice_no). Only valid on an
+ * Unmatched/Suggested report - correcting a Confirmed or Rejected one is rejected server-side. */
+export async function correctReportedInvoiceNo(
+  reportName: string,
+  invoiceNo: string
+): Promise<{
+  success: boolean;
+  reported_invoice_no?: string;
+  matched_invoice?: string | null;
+  match_confidence?: number;
+  reconciliation_status?: string;
+  message?: string;
+}> {
+  return postJson("klik_pos.api.delivery.correct_reported_invoice_no", {
+    report_name: reportName,
+    invoice_no: invoiceNo,
   });
 }
 

@@ -10,6 +10,7 @@ import {
   type DeliveryReport,
 } from "../services/delivery";
 import { getCandidateBooklets, resolveBooklet, type DeliveryBooklet } from "../services/booklet";
+import { getDrivers, type DeliveryDriver } from "../services/driver";
 import CreateInvoiceFromReportModal from "../components/delivery/CreateInvoiceFromReportModal";
 import DeliveryPhotoStrip from "../components/delivery/DeliveryPhotoStrip";
 
@@ -17,6 +18,14 @@ type QueueTab = "pending" | "history";
 
 const PENDING_STATUSES = "Unmatched,Suggested";
 const HISTORY_STATUSES = "Confirmed,Rejected";
+
+/** Local (browser) YYYY-MM-DD, not UTC - matches how formatTimestamp below and delivery_timestamp
+ * filtering on the backend both treat these values, so "today" here lines up with what the table
+ * actually shows. */
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 function formatTimestamp(value?: string): string {
   if (!value) return "—";
@@ -736,12 +745,39 @@ export default function DeliveryReconciliationPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // History tab filters (2026-08-06, user request) - date range defaults to today, driver and
+  // status default to "all". Deliberately scoped to History only: the Pending queue is small
+  // enough (bounded by unresolved throughput, not a date range someone would want to narrow) that
+  // these would just add clutter there.
+  const [historyDateFrom, setHistoryDateFrom] = useState(todayStr());
+  const [historyDateTo, setHistoryDateTo] = useState(todayStr());
+  const [historyDriver, setHistoryDriver] = useState("");
+  const [historyStatus, setHistoryStatus] = useState<"" | "Confirmed" | "Rejected">("");
+  const [drivers, setDrivers] = useState<DeliveryDriver[]>([]);
+
+  useEffect(() => {
+    getDrivers()
+      .then((res) => setDrivers(res.data || []))
+      .catch(() => {
+        // Non-fatal - the filter dropdown just falls back to "All Drivers" only.
+      });
+  }, []);
+
   const fetchReports = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const status = activeTab === "pending" ? PENDING_STATUSES : HISTORY_STATUSES;
-      const response = await getDeliveryReports(status, search);
+      const isHistory = activeTab === "history";
+      const status = isHistory ? historyStatus || HISTORY_STATUSES : PENDING_STATUSES;
+      const response = await getDeliveryReports(
+        status,
+        search,
+        0,
+        100,
+        isHistory ? historyDriver || undefined : undefined,
+        isHistory ? historyDateFrom || undefined : undefined,
+        isHistory ? historyDateTo || undefined : undefined
+      );
       setReports(response.data || []);
       setTotalCount(response.total_count || 0);
     } catch (err) {
@@ -751,12 +787,22 @@ export default function DeliveryReconciliationPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeTab, search]);
+  }, [activeTab, search, historyStatus, historyDriver, historyDateFrom, historyDateTo]);
 
   useEffect(() => {
     const timer = window.setTimeout(fetchReports, search ? 300 : 0);
     return () => window.clearTimeout(timer);
   }, [fetchReports, search]);
+
+  const historyFiltersActive =
+    historyDateFrom !== todayStr() || historyDateTo !== todayStr() || historyDriver !== "" || historyStatus !== "";
+
+  const resetHistoryFilters = () => {
+    setHistoryDateFrom(todayStr());
+    setHistoryDateTo(todayStr());
+    setHistoryDriver("");
+    setHistoryStatus("");
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20 dark:bg-gray-900 lg:ml-20 lg:pb-12">
@@ -816,6 +862,65 @@ export default function DeliveryReconciliationPage() {
             className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-3 text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
           />
         </div>
+
+        {activeTab === "history" && (
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">From</label>
+              <input
+                type="date"
+                value={historyDateFrom}
+                onChange={(event) => setHistoryDateFrom(event.target.value)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">To</label>
+              <input
+                type="date"
+                value={historyDateTo}
+                onChange={(event) => setHistoryDateTo(event.target.value)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Driver</label>
+              <select
+                value={historyDriver}
+                onChange={(event) => setHistoryDriver(event.target.value)}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              >
+                <option value="">All Drivers</option>
+                {drivers.map((driver) => (
+                  <option key={driver.name} value={driver.name}>
+                    {driver.driver_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Status</label>
+              <select
+                value={historyStatus}
+                onChange={(event) => setHistoryStatus(event.target.value as "" | "Confirmed" | "Rejected")}
+                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+              >
+                <option value="">All</option>
+                <option value="Confirmed">Confirmed</option>
+                <option value="Rejected">Rejected</option>
+              </select>
+            </div>
+            {historyFiltersActive && (
+              <button
+                type="button"
+                onClick={resetHistoryFilters}
+                className="flex items-center gap-1 rounded-lg px-2 py-2 text-sm font-medium text-beveren-600 hover:text-beveren-700 dark:text-beveren-400 dark:hover:text-beveren-300"
+              >
+                <X size={14} /> Reset filters
+              </button>
+            )}
+          </div>
+        )}
 
         {isLoading ? (
           <div className="flex items-center gap-2 rounded-lg border border-gray-200 bg-white p-6 text-gray-500 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-400">

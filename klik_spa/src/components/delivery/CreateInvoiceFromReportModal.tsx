@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link2, Loader2, Plus, RotateCcw, RotateCw, Search, Trash2, X } from "lucide-react";
+import { Check, Link2, Loader2, Pencil, Plus, RotateCcw, RotateCw, Search, Trash2, X } from "lucide-react";
 import { toast } from "react-toastify";
 import Lightbox, { type SlideImage } from "yet-another-react-lightbox";
 import Inline from "yet-another-react-lightbox/plugins/inline";
@@ -11,6 +11,7 @@ import { CustomerSearchSection } from "../order/CustomerSearchSection";
 import DeliveryPhotoStrip from "./DeliveryPhotoStrip";
 import {
   confirmDeliveryMatch,
+  correctReportedInvoiceNo,
   createInvoiceFromDeliveryReport,
   parseDeliveryPhotos,
   type DeliveryReport,
@@ -121,6 +122,44 @@ export default function CreateInvoiceFromReportModal({
   const [showItemDropdown, setShowItemDropdown] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // ── Reported invoice number correction (2026-08-06, user request: "sometime my driver would
+  // just input the wrong invoice number") ────────────────────────────────────────────────────
+  // Local override of what the bot reported, independent of matchSearch below - matchSearch is
+  // just this dialog's search box and can be typed into freely without touching the underlying
+  // report, whereas this is a real correction persisted server-side (and re-run through matching).
+  const [reportedInvoiceNo, setReportedInvoiceNo] = useState(report.reported_invoice_no || "");
+  const [isEditingInvoiceNo, setIsEditingInvoiceNo] = useState(false);
+  const [invoiceNoDraft, setInvoiceNoDraft] = useState(reportedInvoiceNo);
+  const [isSavingInvoiceNo, setIsSavingInvoiceNo] = useState(false);
+
+  const handleSaveInvoiceNo = async () => {
+    const value = invoiceNoDraft.trim();
+    if (!value || value === reportedInvoiceNo) {
+      setIsEditingInvoiceNo(false);
+      setInvoiceNoDraft(reportedInvoiceNo);
+      return;
+    }
+    setIsSavingInvoiceNo(true);
+    try {
+      const result = await correctReportedInvoiceNo(report.name, value);
+      if (!result.success) throw new Error(result.message || "Failed to update invoice number");
+      setReportedInvoiceNo(result.reported_invoice_no || value);
+      setIsEditingInvoiceNo(false);
+      // Re-run the match list against the corrected number, same as if staff had retyped the
+      // search box themselves.
+      setMatchSearch(result.reported_invoice_no || value);
+      toast.success(
+        result.matched_invoice
+          ? `Invoice number updated - matched ${result.matched_invoice}`
+          : "Invoice number updated - no match found yet"
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update invoice number");
+    } finally {
+      setIsSavingInvoiceNo(false);
+    }
+  };
+
   // ── Match tab state ────────────────────────────────────────────────────────
   const [matchSearch, setMatchSearch] = useState(report.reported_invoice_no || "");
   const [matchInvoices, setMatchInvoices] = useState<OutstandingSalesInvoice[]>([]);
@@ -159,7 +198,7 @@ export default function CreateInvoiceFromReportModal({
   }, [matchSearch]);
 
   const sortedMatchInvoices = [...matchInvoices].sort(
-    (a, b) => invoiceMatchScore(b, report.reported_invoice_no) - invoiceMatchScore(a, report.reported_invoice_no)
+    (a, b) => invoiceMatchScore(b, reportedInvoiceNo) - invoiceMatchScore(a, reportedInvoiceNo)
   );
 
   const handleSelectMatch = async (invoiceName: string) => {
@@ -476,10 +515,66 @@ export default function CreateInvoiceFromReportModal({
         <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-gray-700">
           <div>
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Link Invoice</h2>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Delivery report {report.name}
-              {report.reported_invoice_no ? ` · Invoice Reference ${report.reported_invoice_no}` : ""}
-            </p>
+            <div className="flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400">
+              <span>
+                Delivery report {report.name} · Invoice Reference{" "}
+              </span>
+              {isEditingInvoiceNo ? (
+                <span className="inline-flex items-center gap-1">
+                  <input
+                    type="text"
+                    autoFocus
+                    value={invoiceNoDraft}
+                    onChange={(event) => setInvoiceNoDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") handleSaveInvoiceNo();
+                      if (event.key === "Escape") {
+                        setIsEditingInvoiceNo(false);
+                        setInvoiceNoDraft(reportedInvoiceNo);
+                      }
+                    }}
+                    disabled={isSavingInvoiceNo}
+                    className="w-24 rounded border border-gray-300 bg-white px-1.5 py-0.5 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveInvoiceNo}
+                    disabled={isSavingInvoiceNo}
+                    title="Save"
+                    className="rounded p-0.5 text-beveren-600 hover:bg-beveren-50 disabled:opacity-50 dark:hover:bg-beveren-900/20"
+                  >
+                    {isSavingInvoiceNo ? <Loader2 size={13} className="animate-spin" /> : <Check size={13} />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditingInvoiceNo(false);
+                      setInvoiceNoDraft(reportedInvoiceNo);
+                    }}
+                    disabled={isSavingInvoiceNo}
+                    title="Cancel"
+                    className="rounded p-0.5 text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                    <X size={13} />
+                  </button>
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1">
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{reportedInvoiceNo || "—"}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInvoiceNoDraft(reportedInvoiceNo);
+                      setIsEditingInvoiceNo(true);
+                    }}
+                    title="Correct invoice number"
+                    className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                  >
+                    <Pencil size={12} />
+                  </button>
+                </span>
+              )}
+            </div>
           </div>
           <button
             type="button"
@@ -543,7 +638,7 @@ export default function CreateInvoiceFromReportModal({
                 ) : (
                   <div className="divide-y divide-gray-200 dark:divide-gray-700">
                     {sortedMatchInvoices.map((invoice) => {
-                      const score = invoiceMatchScore(invoice, report.reported_invoice_no);
+                      const score = invoiceMatchScore(invoice, reportedInvoiceNo);
                       const isSelected = selectedMatchInvoice === invoice.name;
                       return (
                         <button
