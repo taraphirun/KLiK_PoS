@@ -51,3 +51,6 @@ next-env.d.ts
 klik_pos/public/klik_spa/assets/
 klik_pos/public/klik_spa/index.html
 klik_pos/www/klik_spa.html
+
+# Local-only production secrets (2026-08-06) - never commit, see DEPLOYMENT_CHECKLIST.md
+.secrets/
