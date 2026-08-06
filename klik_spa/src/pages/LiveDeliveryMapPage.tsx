@@ -338,7 +338,15 @@ interface ClusterDetailPanelProps {
 }
 
 /** Bottom slide-up panel for a clicked cluster's deliveries - replaces a per-pin InfoWindow so a
- * multi-delivery cluster can show all of its items at once, matching the reference bot UI. */
+ * multi-delivery cluster can show all of its items at once, matching the reference bot UI.
+ *
+ * Desktop only (2026-08-06) - on mobile this used to slide up over both the page header and the
+ * Live Feed below it, because the map column had no height cap of its own back then; it's rendered
+ * `hidden lg:block` at the call site now, not removed, since on desktop it never had that problem
+ * (the sidebar is a separate column, not stacked underneath) and the user asked to keep desktop's
+ * behavior exactly as it was. Everything this panel shows per-delivery (completion/payment status,
+ * the reconciliation link) was also added to LiveFeedList's own cards, which is what mobile relies
+ * on instead now that this is desktop-only. */
 function ClusterDetailPanel({ cluster, onClose, onOpenInvoice, onOpenReconcile }: ClusterDetailPanelProps) {
   return (
     <div className="absolute inset-x-0 bottom-0 z-20 max-h-[45%] overflow-hidden rounded-t-xl border-t border-gray-200 bg-white/95 shadow-2xl backdrop-blur-sm dark:border-gray-700 dark:bg-gray-900/95">
@@ -483,7 +491,17 @@ function FiltersPanel({
   );
 }
 
-function LiveFeedList({ pins, isConnected, onFocus }: { pins: MapPin[]; isConnected: boolean; onFocus: (pin: MapPin) => void }) {
+function LiveFeedList({
+  pins,
+  isConnected,
+  onFocus,
+  onOpenReconcile,
+}: {
+  pins: MapPin[];
+  isConnected: boolean;
+  onFocus: (pin: MapPin) => void;
+  onOpenReconcile: () => void;
+}) {
   // Defaults to today only (2026-08-03 follow-up, user request) - a "live" feed showing months of
   // old history by default isn't actually useful; toggle-able for catching up on older activity.
   const [todayOnly, setTodayOnly] = useState(true);
@@ -518,11 +536,14 @@ function LiveFeedList({ pins, isConnected, onFocus }: { pins: MapPin[]; isConnec
           </div>
         ) : (
           feed.map((pin) => (
-            <button
+            // A plain div, not a button - "Open reconciliation" below is its own clickable
+            // control, and nested buttons are invalid HTML (and break click handling). The card
+            // itself still focuses the map on click; the link inside stops that click from also
+            // bubbling into it before navigating away.
+            <div
               key={pin.name}
-              type="button"
               onClick={() => onFocus(pin)}
-              className="block w-full rounded-lg border border-gray-200 bg-white p-3 text-left shadow-sm transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700"
+              className="cursor-pointer rounded-lg border border-gray-200 bg-white p-3 text-left shadow-sm transition-colors hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:hover:bg-gray-700"
             >
               <div className="flex items-center justify-between gap-2">
                 <span className="flex min-w-0 items-center gap-1.5 truncate text-sm font-medium text-gray-900 dark:text-white">
@@ -540,7 +561,23 @@ function LiveFeedList({ pins, isConnected, onFocus }: { pins: MapPin[]; isConnec
                 <User size={12} className="opacity-60" />
                 {pin.delivery_driver_name || "N/A"}
               </div>
-            </button>
+              {/* Completion/payment status + the reconciliation link - moved here 2026-08-06 from
+                  the now-removed ClusterDetailPanel ("N deliveries at this location" sheet), so
+                  this is still reachable with that panel gone. */}
+              <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {pin.completion_status} · {pin.payment_status}
+              </div>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onOpenReconcile();
+                }}
+                className="mt-1.5 block text-xs font-medium text-beveren-600 hover:underline dark:text-beveren-400"
+              >
+                Open reconciliation →
+              </button>
+            </div>
           ))
         )}
       </div>
@@ -678,20 +715,42 @@ export default function LiveDeliveryMapPage() {
 
   const focusOnPin = (pin: MapPin) => {
     // 2026-08-03 follow-up, user request: clicking a Live Feed item teleports the map there, on
-    // top of the existing behavior of opening its cluster's detail panel.
+    // top of the existing behavior of opening its cluster's detail panel. Unchanged 2026-08-06 -
+    // the panel itself is now desktop-only (hidden lg:block at the call site), so on mobile this
+    // still just flies the map; on desktop it still does both, exactly as before.
     setFocusTarget({ lat: pin.gps_latitude, lng: pin.gps_longitude });
     const cluster = clusters.find((c) => c.items.some((item) => item.name === pin.name));
     if (cluster) setSelectedCluster(cluster);
   };
 
+  // Pin taps need different behavior per breakpoint (fly-to on mobile since the detail panel is
+  // desktop-only; open-in-place on desktop, matching its pre-2026-08-06 behavior exactly, with no
+  // camera movement) - that split can't be expressed in CSS alone like the panel's own visibility
+  // can, so this is the one spot that checks the viewport directly rather than through a class.
+  // Read at click time (not tracked reactively) - a resize mid-session changing which behavior a
+  // tap gets is an acceptable edge case for how rarely that actually happens.
+  const isDesktopViewport = () => window.matchMedia("(min-width: 1024px)").matches;
+
+  const focusOnCluster = (cluster: ClusterData) => {
+    if (isDesktopViewport()) {
+      setSelectedCluster(cluster);
+    } else {
+      setFocusTarget({ lat: cluster.lat, lng: cluster.lng });
+    }
+  };
+
   return (
-    <div className="flex h-screen flex-col bg-gray-50 pb-20 dark:bg-gray-900 lg:ml-20 lg:pb-0">
+    <div className="flex h-dvh flex-col bg-gray-50 pb-20 dark:bg-gray-900 lg:ml-20 lg:pb-0">
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-        {/* Map - min-h-0 lets this flex-1 child actually shrink to its allotted space instead of
-            the classic flexbox min-height:auto collapse (see Todo 032 notes: this exact pattern
-            caused Google Maps to render zoomed-in and offset toward one corner). The map itself
-            is positioned absolute/inset-0 rather than height:100% for the same reason. */}
-        <div className="relative min-h-[50vh] min-w-0 flex-1 lg:min-h-0">
+        {/* Map - fixed at exactly half the viewport height on mobile (user request: "take 50% at
+            all times"), regardless of how tall the filters/feed panel below happens to be -
+            `flex-none` stops flex-grow from stretching it to fill leftover space, same as the
+            aside below. min-h-0 lets this child actually shrink to that 50% instead of the classic
+            flexbox min-height:auto collapse (see Todo 032 notes: this exact pattern caused Google
+            Maps to render zoomed-in and offset toward one corner). The map itself is positioned
+            absolute/inset-0 rather than height:100% for the same reason. Reverts to a plain
+            flex-1 row member at lg: (side-by-side desktop layout, no fixed split). */}
+        <div className="relative h-1/2 min-h-0 min-w-0 flex-none lg:h-auto lg:flex-1">
           {!apiKey ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-gray-500 dark:text-gray-400">
               <AlertTriangle size={28} className="text-amber-500" />
@@ -723,25 +782,34 @@ export default function LiveDeliveryMapPage() {
                     <ShopMarker key={location.warehouse} location={location} />
                   ))}
                   {clusters.map((cluster) => (
-                    <ClusterMarker key={cluster.id} cluster={cluster} onClick={() => setSelectedCluster(cluster)} />
+                    <ClusterMarker key={cluster.id} cluster={cluster} onClick={() => focusOnCluster(cluster)} />
                   ))}
                 </Map>
               </APIProvider>
 
+              {/* Desktop only - see ClusterDetailPanel's own comment for why. */}
               {selectedCluster && (
-                <ClusterDetailPanel
-                  cluster={selectedCluster}
-                  onClose={() => setSelectedCluster(null)}
-                  onOpenInvoice={(invoice) => navigate(`/invoice/${invoice}`)}
-                  onOpenReconcile={() => navigate("/deliveries/reconcile")}
-                />
+                <div className="hidden lg:block">
+                  <ClusterDetailPanel
+                    cluster={selectedCluster}
+                    onClose={() => setSelectedCluster(null)}
+                    onOpenInvoice={(invoice) => navigate(`/invoice/${invoice}`)}
+                    onOpenReconcile={() => navigate("/deliveries/reconcile")}
+                  />
+                </div>
               )}
             </div>
           )}
         </div>
 
-        {/* Sidebar */}
-        <aside className="flex w-full flex-col border-t border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 lg:h-full lg:w-[360px] lg:border-l lg:border-t-0">
+        {/* Sidebar - the other half of the mobile split (h-1/2, flex-none, matching the map above)
+            with its own min-h-0 so it can't be stretched taller than that by its own content
+            (same min-height:auto trap as the map). Header stays fixed height; the scrolling
+            container below (Filters + Live Feed) is what actually gets the leftover space and
+            scrolls internally, per "the bottom can be scrollable" - the page itself never scrolls
+            on mobile, only this panel does. Reverts to the original fixed-width desktop column at
+            lg:. */}
+        <aside className="flex h-1/2 min-h-0 w-full flex-none flex-col border-t border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900 lg:h-full lg:w-[360px] lg:border-l lg:border-t-0">
           <div className="flex items-center gap-2 border-b border-gray-200 px-4 py-4 dark:border-gray-700">
             <MapPin className="text-beveren-600 dark:text-beveren-400" size={22} />
             <div>
@@ -773,7 +841,12 @@ export default function LiveDeliveryMapPage() {
             <section className="flex min-h-[240px] flex-1 flex-col">
               <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-gray-500">Live Feed</h2>
               <div className="min-h-0 flex-1">
-                <LiveFeedList pins={visiblePins} isConnected={isConnected} onFocus={focusOnPin} />
+                <LiveFeedList
+                  pins={visiblePins}
+                  isConnected={isConnected}
+                  onFocus={focusOnPin}
+                  onOpenReconcile={() => navigate("/deliveries/reconcile")}
+                />
               </div>
             </section>
           </div>
