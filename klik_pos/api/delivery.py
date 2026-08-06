@@ -6,7 +6,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 import frappe
-from frappe.utils import add_days, flt, get_datetime, now_datetime, nowdate
+from frappe.utils import add_days, flt, get_datetime, get_url, now_datetime, nowdate
 from frappe.utils.file_manager import save_file
 
 from klik_pos.api.booklet import _extract_number as _extract_invoice_number
@@ -16,7 +16,6 @@ from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment
 from klik_pos.api.telegram_notify import (
     _send_telegram_message,
     get_reporting_chat,
-    notify_driver,
     send_admin_alert,
     send_media_group,
     send_voice,
@@ -155,13 +154,26 @@ def match_delivery_report(report):
     Structured-to-structured matching only, per the Phase 9 system boundary - the bot already
     resolved everything it can (no OCR/AI here). Only invoice-number signals exist to match on
     (see module docstring above for why customer/amount attribute matching was dropped: Delivery
-    Report has neither field populated by the bot). Three tiers, highest confidence first:
-      1. Verbatim exact match against Sales Invoice `name` or `custom_invoice_ref`.
+    Report has neither field populated by the bot).
+
+    custom_invoice_ref ("Invoice Reference") only (2026-08-06, user request) - Sales Invoice's own
+    `name` (the ERPNext-generated docname, e.g. "ACC-SINV-2026-00021") is no longer considered at
+    all, even though it happens to be numeric-suffixed and used to be tier 1's first attempt. Staff
+    write down the paper invoice's own reference number, never its ERPNext docname, so matching
+    against the docname was matching against something the driver/paper trail never actually
+    reported - custom_invoice_ref is the one field that represents what was truly written down.
+    Fails closed, not just "no match": if custom_invoice_ref isn't even installed on this site's
+    Sales Invoice (has_field check below), no matching is attempted at all rather than silently
+    falling back to some other heuristic.
+
+    Three tiers, highest confidence first:
+      1. Verbatim exact match against Sales Invoice `custom_invoice_ref`.
       2. Match after normalizing case/punctuation (typo/format tolerant).
       3. Fuzzy string similarity (difflib) against a bounded recent-invoice pool.
     A suggestion only - mutates the in-memory `report` doc alone, never the invoice. Read-only
-    with respect to Sales Invoices. Safe to call again (e.g. a manual re-match, Todo 023), except
-    it refuses to touch a report a human has already confirmed or rejected.
+    with respect to Sales Invoices. Safe to call again (e.g. a manual re-match, Todo 023, or
+    unreject_delivery_match below), except it refuses to touch a report a human has already
+    confirmed or rejected.
     """
     if report.reconciliation_status in ("Confirmed", "Rejected"):
         return
@@ -170,6 +182,9 @@ def match_delivery_report(report):
     report.match_confidence = 0
     report.reconciliation_status = "Unmatched"
     report.match_notes = None
+
+    if not frappe.get_meta("Sales Invoice").has_field("custom_invoice_ref"):
+        return
 
     reported_no = (report.reported_invoice_no or "").strip()
     if not reported_no:
@@ -180,13 +195,14 @@ def match_delivery_report(report):
     # naive string filter lets MySQL coerce a non-numeric reported_no to 0 and match every
     # invoice that still has the untouched default. Only query it when reported_no is itself a
     # non-zero integer, and compare as an int.
-    exact_name = frappe.db.get_value("Sales Invoice", {"name": reported_no}, "name")
-    if not exact_name:
-        ref_as_int = _safe_nonzero_int(reported_no)
-        if ref_as_int is not None:
-            exact_name = frappe.db.get_value("Sales Invoice", {"custom_invoice_ref": ref_as_int}, "name")
+    ref_as_int = _safe_nonzero_int(reported_no)
+    exact_name = (
+        frappe.db.get_value("Sales Invoice", {"custom_invoice_ref": ref_as_int}, "name")
+        if ref_as_int is not None
+        else None
+    )
     if exact_name:
-        _apply_match(report, exact_name, EXACT_CONFIDENCE, "Exact invoice number match")
+        _apply_match(report, exact_name, EXACT_CONFIDENCE, "Exact invoice reference match")
         return
 
     normalized_reported = _normalize_invoice_no(reported_no)
@@ -197,10 +213,7 @@ def match_delivery_report(report):
 
     # Tier 2: match after normalizing (case/punctuation-tolerant).
     normalized_hits = [
-        c
-        for c in candidates
-        if _normalize_invoice_no(c.name) == normalized_reported
-        or (c.custom_invoice_ref and _normalize_invoice_no(c.custom_invoice_ref) == normalized_reported)
+        c for c in candidates if c.custom_invoice_ref and _normalize_invoice_no(c.custom_invoice_ref) == normalized_reported
     ]
     if normalized_hits:
         best = _prefer_undelivered_unpaid(normalized_hits)
@@ -212,14 +225,11 @@ def match_delivery_report(report):
     # Tier 3: fuzzy similarity - bias toward leaving Unmatched when uncertain (Todo 022 risk note).
     scored = []
     for c in candidates:
-        score = difflib.SequenceMatcher(None, normalized_reported, _normalize_invoice_no(c.name)).ratio()
-        if c.custom_invoice_ref:
-            score = max(
-                score,
-                difflib.SequenceMatcher(
-                    None, normalized_reported, _normalize_invoice_no(c.custom_invoice_ref)
-                ).ratio(),
-            )
+        if not c.custom_invoice_ref:
+            continue
+        score = difflib.SequenceMatcher(
+            None, normalized_reported, _normalize_invoice_no(c.custom_invoice_ref)
+        ).ratio()
         if score >= FUZZY_MIN_CONFIDENCE:
             scored.append((score, c))
 
@@ -230,7 +240,7 @@ def match_delivery_report(report):
     best_candidates = [c for s, c in scored if s == best_score]
     best = _prefer_undelivered_unpaid(best_candidates)
     confidence = min(best_score, FUZZY_MAX_CONFIDENCE)
-    _apply_match(report, best.name, confidence, f"Fuzzy invoice number match (similarity {best_score:.2f})")
+    _apply_match(report, best.name, confidence, f"Fuzzy invoice reference match (similarity {best_score:.2f})")
 
 
 def _delivery_report_response(report):
@@ -244,35 +254,29 @@ def _delivery_report_response(report):
     }
 
 
-def notify_driver_delivery_recorded_job(report_name):
-    """Phase 6.6. Background job, enqueued once by `submit_delivery_report` right after a new
-    report is inserted. Re-fetches rather than trusting an enqueue-time snapshot, same reasoning as
-    driver.py's notify_driver_approved_job - the report could be edited (e.g. a bad invoice number
-    corrected) between enqueue and run, and re-reading avoids sending a confirmation that's already
-    stale by the time it lands.
+def notify_admin_delivery_recorded_job(report_name):
+    """Phase 6.6, revised 2026-08-06: originally DMed the driver directly ("recorded, matched to
+    X" / "awaiting manual match"). Changed by explicit request - the driver gets no value from
+    being told the invoice is still unmatched, and only an admin can act on it, so this is now an
+    admin-only alert. English, not Khmer: it's addressed to an admin, same as every other
+    send_admin_alert call, not a driver-facing string (see strings.ts's/telegram_notify.py's own
+    "admin stays English" convention).
 
-    Uses `driver_telegram_id` directly as the DM's chat_id, not a Delivery Driver lookup - for a
-    *private* one-on-one chat with the bot (the only kind this bot has; there's no group-chat
-    delivery flow), Telegram's chat_id and the driver's user_id are the same number. That's the
-    same assumption `sync_driver_from_bot`'s `chat_id` field already rests on.
+    Background job, enqueued once by `submit_delivery_report` right after a new report is
+    inserted. Re-fetches rather than trusting an enqueue-time snapshot, same reasoning as
+    driver.py's notify_driver_approved_job - the report could be edited (e.g. a bad invoice number
+    corrected) between enqueue and run, and re-reading avoids alerting on something already stale
+    by the time it lands.
     """
     report = frappe.get_doc("Delivery Report", report_name)
-    if not report.driver_telegram_id:
-        return  # can't happen via the bot's own flow (always sends it) - guards direct API use
 
     if report.matched_invoice:
-        # "Matched to Invoice X."
-        detail = f"ត្រូវបានផ្គូផ្គងជាមួយវិក្កយបត្រ {report.matched_invoice}។"
+        detail = f"Matched to invoice {report.matched_invoice}."
     else:
-        # "Awaiting manual match by staff."
-        detail = "កំពុងរង់ចាំបុគ្គលិកផ្គូផ្គងដោយដៃ។"
+        detail = "Pending manual match."
 
-    # "Delivery for Invoice #X recorded (DR-...)."
-    notify_driver(
-        report.driver_telegram_id,
-        f"✅ បានកត់ត្រាការដឹកជញ្ជូនសម្រាប់វិក្កយបត្រ <b>#{report.reported_invoice_no}</b> "
-        f"(<code>{report.name}</code>)។\n{detail}",
-    )
+    link = f'<a href="{get_url()}/app/delivery-report/{report.name}">{report.name}</a>'
+    send_admin_alert(f"✅ #{report.reported_invoice_no} delivered - {link}\n{detail}")
 
 
 # bot.py's LOCAL_TZ (Asia/Phnom_Penh), matching what the Worker's toLocalDisplayString used for this
@@ -396,7 +400,7 @@ def forward_delivery_to_reporting_chat_job(report_name):
          that can't happen.
 
     Re-fetches the doc rather than trusting an enqueue-time snapshot, same as
-    notify_driver_delivery_recorded_job above.
+    notify_admin_delivery_recorded_job above.
 
     Each piece (summary / voice / photos) is independently try/excepted - a deliberate improvement
     over bot.py, which wrapped all three in one try/except so a voice failure also silently skipped
@@ -525,7 +529,7 @@ def sweep_stuck_delivery_jobs():
     for name in names:
         try:
             frappe.enqueue("klik_pos.api.telegram_media.sync_delivery_media_job", queue="short", report_name=name)
-            frappe.enqueue("klik_pos.api.delivery.notify_driver_delivery_recorded_job", queue="short", report_name=name)
+            frappe.enqueue("klik_pos.api.delivery.notify_admin_delivery_recorded_job", queue="short", report_name=name)
         except Exception:
             frappe.log_error(title="Failed to re-enqueue stuck delivery jobs", message=name)
 
@@ -661,20 +665,19 @@ def submit_delivery_report(data):
             _enqueue_delivery_ack(bot_delivery_id)
             return _delivery_report_response(frappe.get_doc("Delivery Report", existing_name))
 
-        # Phase 6.6: the driver-facing confirmation. The Worker's write is fire-and-forget through
-        # Hookdeck - it never learns this report's name or match outcome back, so without this the
-        # driver has no way to tell "recorded" from "vanished into a Hookdeck failure". Enqueued
-        # unconditionally (unlike the media job below), since a delivery is never expected to be
-        # medialess but this shouldn't silently depend on that holding true.
+        # Phase 6.6, revised 2026-08-06: admin-only alert (was a driver-facing confirmation DM -
+        # dropped by explicit request, see notify_admin_delivery_recorded_job's own docstring).
+        # Still enqueued unconditionally (unlike the media job below), since a delivery is never
+        # expected to be medialess but this shouldn't silently depend on that holding true.
         try:
             frappe.enqueue(
-                "klik_pos.api.delivery.notify_driver_delivery_recorded_job",
+                "klik_pos.api.delivery.notify_admin_delivery_recorded_job",
                 queue="short",
                 enqueue_after_commit=True,
                 report_name=report.name,
             )
         except Exception:
-            frappe.log_error(title="Failed to enqueue delivery confirmation DM")
+            frappe.log_error(title="Failed to enqueue delivery-recorded admin alert")
 
         # Phase 6.1-6.4: klik_pos-side media download. Only when the bot actually forwarded
         # something - see telegram_media.py for why this can't be the Worker's job.
@@ -946,6 +949,41 @@ def reject_delivery_match(report_name, reason=None):
         return {"success": False, "message": str(e)}
 
 
+@frappe.whitelist()
+def unreject_delivery_match(report_name):
+    """Reverses reject_delivery_match (2026-08-06, user request: rejecting had no way back short
+    of a Desk edit). Puts the report back to Unmatched first - not straight back to whatever it
+    was before rejection - then immediately re-runs match_delivery_report against it, same as a
+    freshly-ingested report gets. match_delivery_report itself refuses to touch a Confirmed or
+    Rejected report, which is exactly why the status has to flip to Unmatched *before* calling it,
+    not after.
+    """
+    try:
+        report = frappe.get_doc("Delivery Report", report_name)
+
+        if report.reconciliation_status != "Rejected":
+            frappe.throw("Only a rejected Delivery Report can be un-rejected")
+
+        report.reconciliation_status = "Unmatched"
+        match_delivery_report(report)
+        report.save(ignore_permissions=True)
+
+        return {
+            "success": True,
+            "delivery_report": report.name,
+            "matched_invoice": report.matched_invoice,
+            "match_confidence": report.match_confidence,
+            "match_notes": report.match_notes,
+            "reconciliation_status": report.reconciliation_status,
+        }
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Delivery Report un-reject failed")
+        return {"success": False, "message": str(e)}
+
+
 DELIVERY_REPORT_LIST_FIELDS = [
     "name",
     "bot_delivery_id",
@@ -960,6 +998,7 @@ DELIVERY_REPORT_LIST_FIELDS = [
     "gps_latitude",
     "gps_longitude",
     "photos",
+    "photo_thumbnails",
     "voice_note",
     "matched_invoice",
     "amount_collected",
@@ -1182,7 +1221,7 @@ def upload_delivery_file(report_name):
 
 
 @frappe.whitelist()
-def _attach_delivery_media(report, photo_urls=None, voice_url=None, error=None):
+def _attach_delivery_media(report, photo_urls=None, thumbnail_urls=None, voice_url=None, error=None):
     """Core merge-and-save, shared by the old bot's two-step `attach_delivery_media` endpoint below
     and Phase 6's `sync_delivery_media_job` (api/telegram_media.py). Operates on an already-fetched
     doc and does not catch exceptions itself - each caller wraps this in its own try/except with a
@@ -1192,8 +1231,15 @@ def _attach_delivery_media(report, photo_urls=None, voice_url=None, error=None):
     `error`, when given, replaces `media_sync_error` outright rather than appending - the one
     caller that passes it (`sync_delivery_media_job`) runs at most once per report, so there's
     never a prior value worth preserving.
+
+    thumbnail_urls (2026-08-06): same shape as photo_urls and expected index-aligned with it by
+    every current caller (each photo's thumbnail generated in the same loop as the photo itself,
+    see sync_delivery_media_job) - the frontend zips the two arrays by index to show a thumbnail
+    but open the full photo. Old bot's attach_delivery_media below never passes this; reports
+    synced before this field existed just have none, and the frontend falls back to photos itself.
     """
     photo_urls = photo_urls or []
+    thumbnail_urls = thumbnail_urls or []
 
     if photo_urls:
         existing = report.photos or []
@@ -1203,13 +1249,21 @@ def _attach_delivery_media(report, photo_urls=None, voice_url=None, error=None):
         # raw list outright (see submit_delivery_report's photos handling above).
         report.photos = json.dumps(existing + [url for url in photo_urls if url not in existing])
 
+    if thumbnail_urls:
+        existing_thumbs = report.photo_thumbnails or []
+        if isinstance(existing_thumbs, str):
+            existing_thumbs = json.loads(existing_thumbs) if existing_thumbs else []
+        report.photo_thumbnails = json.dumps(
+            existing_thumbs + [url for url in thumbnail_urls if url not in existing_thumbs]
+        )
+
     if voice_url:
         report.voice_note = voice_url
 
     if error is not None:
         report.media_sync_error = error
 
-    if photo_urls or voice_url or error is not None:
+    if photo_urls or thumbnail_urls or voice_url or error is not None:
         report.save(ignore_permissions=True)
 
 

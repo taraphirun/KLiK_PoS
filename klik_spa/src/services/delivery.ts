@@ -25,6 +25,11 @@ export interface DeliveryReport {
    * parsed array - frappe.get_all() returns JSON fieldtype columns as their raw string value.
    * Use parseDeliveryPhotos() rather than reading this directly. */
   photos?: string | null;
+  /** Same shape as photos and index-aligned with it (2026-08-06) - small resized copies generated
+   * at media-sync time for the thumbnail strip, so it doesn't download full-resolution originals
+   * just to paint a 64px preview. Reports synced before this field existed have none; fall back to
+   * photos itself (see DeliveryPhotoStrip). */
+  photo_thumbnails?: string | null;
   voice_note?: string;
   matched_invoice?: string | null;
   amount_collected?: number;
@@ -136,6 +141,23 @@ export async function rejectDeliveryMatch(
   return postJson("klik_pos.api.delivery.reject_delivery_match", {
     report_name: reportName,
     reason,
+  });
+}
+
+/** Reverses rejectDeliveryMatch (2026-08-06) - puts the report back to Unmatched and immediately
+ * re-runs matching against it server-side, so it can land straight on Suggested rather than
+ * requiring a second manual step. */
+export async function unrejectDeliveryMatch(
+  reportName: string
+): Promise<{
+  success: boolean;
+  matched_invoice?: string | null;
+  match_confidence?: number;
+  reconciliation_status?: string;
+  message?: string;
+}> {
+  return postJson("klik_pos.api.delivery.unreject_delivery_match", {
+    report_name: reportName,
   });
 }
 

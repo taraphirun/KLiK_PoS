@@ -25,6 +25,12 @@ export interface CustomerPaymentEntryResponse {
 
 export interface OutstandingSalesInvoice {
   name: string;
+  /** "Invoice Reference" - the paper/booklet reference number staff actually write down, distinct
+   * from this invoice's own ERPNext docname (2026-08-06: this is now the *only* thing delivery
+   * matching considers - see match_delivery_report). Absent if the site has no such field
+   * installed at all (get_outstanding_sales_invoices omits the column entirely in that case,
+   * rather than sending a misleading 0/null). */
+  custom_invoice_ref?: number | null;
   posting_date: string;
   due_date?: string;
   customer: string;
@@ -95,13 +101,25 @@ export async function createCustomerPaymentEntry(
 export async function getOutstandingSalesInvoices(
   search = "",
   start = 0,
-  limit = 100
+  limit = 100,
+  /** Default false, matching the endpoint's own default - most callers (payment collection
+   * flows) genuinely only want unpaid invoices. The Link Invoice match picker passes true, since
+   * a delivery can legitimately match an invoice that's already been paid in full elsewhere. */
+  includePaid = false,
+  /** Default false. The Link Invoice match picker passes true to hide invoices whose
+   * custom_delivery_status is already "Delivered" - re-matching a finished delivery is pointless.
+   * Deliberately independent of includePaid (delivery completion and payment are separate axes
+   * throughout this app) and of "Partially Delivered", which stays visible for a follow-up
+   * delivery against the remainder. */
+  excludeDelivered = false
 ): Promise<OutstandingSalesInvoicesResponse> {
   const params = new URLSearchParams({
     start: String(start),
     limit: String(limit),
   });
   if (search.trim()) params.set("search", search.trim());
+  if (includePaid) params.set("include_paid", "1");
+  if (excludeDelivered) params.set("exclude_delivered", "1");
 
   const response = await fetch(
     `/api/method/klik_pos.api.payment.get_outstanding_sales_invoices?${params.toString()}`,

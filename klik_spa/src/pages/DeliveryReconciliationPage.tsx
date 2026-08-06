@@ -1,32 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  BookOpen,
-  CheckCircle2,
-  ChevronDown,
-  FilePlus2,
-  Loader2,
-  MapPin,
-  RefreshCcw,
-  Search,
-  Truck,
-  X,
-  XCircle,
-} from "lucide-react";
+import { BookOpen, ChevronDown, Link2, Loader2, MapPin, Search, Truck, Undo2, X, XCircle } from "lucide-react";
 import { toast } from "react-toastify";
 import { useNavigate } from "react-router-dom";
 import BottomNavigation from "../components/BottomNavigation";
 import {
-  confirmDeliveryMatch,
   getDeliveryReports,
   rejectDeliveryMatch,
-  rematchDeliveryReport,
+  unrejectDeliveryMatch,
   type DeliveryReport,
 } from "../services/delivery";
 import { getCandidateBooklets, resolveBooklet, type DeliveryBooklet } from "../services/booklet";
 import CreateInvoiceFromReportModal from "../components/delivery/CreateInvoiceFromReportModal";
 import DeliveryPhotoStrip from "../components/delivery/DeliveryPhotoStrip";
-import { getOutstandingSalesInvoices, type OutstandingSalesInvoice } from "../services/paymentEntry";
-import { formatCurrencyWithSymbol } from "../utils/currency";
 
 type QueueTab = "pending" | "history";
 
@@ -64,108 +49,6 @@ function statusBadgeClass(status: string): string {
     default:
       return "bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300";
   }
-}
-
-interface RematchPickerProps {
-  reportName: string;
-  onCancel: () => void;
-  onMatched: (invoiceName: string) => void;
-}
-
-function RematchPicker({ reportName, onCancel, onMatched }: RematchPickerProps) {
-  const [search, setSearch] = useState("");
-  const [invoices, setInvoices] = useState<OutstandingSalesInvoice[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    let isCurrent = true;
-    const timer = window.setTimeout(async () => {
-      setIsLoading(true);
-      try {
-        const response = await getOutstandingSalesInvoices(search, 0, 20);
-        if (!isCurrent) return;
-        setInvoices(response.data || []);
-      } catch {
-        if (isCurrent) setInvoices([]);
-      } finally {
-        if (isCurrent) setIsLoading(false);
-      }
-    }, search ? 300 : 0);
-
-    return () => {
-      isCurrent = false;
-      window.clearTimeout(timer);
-    };
-  }, [search]);
-
-  const handlePick = async (invoiceName: string) => {
-    setIsSubmitting(true);
-    try {
-      const result = await rematchDeliveryReport(reportName, invoiceName);
-      if (!result.success) throw new Error("Re-match failed");
-      toast.success(`Re-matched to ${invoiceName}`);
-      onMatched(invoiceName);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to re-match");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  return (
-    <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Pick an invoice</span>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="rounded p-1 text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
-        >
-          <X size={16} />
-        </button>
-      </div>
-      <div className="relative mb-2">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" size={14} />
-        <input
-          type="text"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search invoice or customer"
-          className="w-full rounded-md border border-gray-300 bg-white py-1.5 pl-8 pr-3 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-        />
-      </div>
-      <div className="max-h-56 overflow-y-auto divide-y divide-gray-200 dark:divide-gray-700">
-        {isLoading ? (
-          <div className="flex items-center gap-2 p-3 text-sm text-gray-500 dark:text-gray-400">
-            <Loader2 size={14} className="animate-spin" /> Loading invoices...
-          </div>
-        ) : invoices.length === 0 ? (
-          <div className="p-3 text-sm text-gray-500 dark:text-gray-400">No outstanding invoices found.</div>
-        ) : (
-          invoices.map((invoice) => (
-            <button
-              key={invoice.name}
-              type="button"
-              disabled={isSubmitting}
-              onClick={() => handlePick(invoice.name)}
-              className="flex w-full items-center justify-between px-2 py-2 text-left text-sm hover:bg-white disabled:opacity-50 dark:hover:bg-gray-800"
-            >
-              <span className="min-w-0 truncate text-gray-900 dark:text-white">
-                {invoice.name}
-                <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">
-                  {invoice.customer_name || invoice.customer}
-                </span>
-              </span>
-              <span className="ml-2 shrink-0 font-medium text-gray-700 dark:text-gray-300">
-                {formatCurrencyWithSymbol(invoice.outstanding_amount, invoice.currency)}
-              </span>
-            </button>
-          ))
-        )}
-      </div>
-    </div>
-  );
 }
 
 interface ResolveBookletPickerProps {
@@ -262,48 +145,28 @@ interface ReportCardProps {
   onChanged: () => void;
 }
 
-function ReportCard({ report, onChanged }: ReportCardProps) {
+/** All the state and API calls a single report's actions need - reject/un-reject and the two
+ * toggleable panels (Resolve Booklet, Link Invoice). Extracted (2026-08-06) so the desktop table
+ * view (ReportTableRow) and the mobile card view (ReportCard) share one implementation of this
+ * logic instead of two copies that could drift - only how it's laid out on screen differs between
+ * them.
+ *
+ * Revised same day: Confirm, mark-as-paid, and the amount-collected input are gone from here -
+ * per the user's decision, *linking* an invoice (via the Link Invoice dialog, whether matching an
+ * existing one or creating a new one) now confirms the report itself; there's no separate confirm
+ * step left to expose in the row/table. Amount-collected/mark-paid moved into that dialog instead,
+ * since they only ever mattered at the moment of linking. Re-match is gone too - folded into the
+ * same dialog rather than being its own button/picker.
+ */
+function useReportRow(report: DeliveryReport, onChanged: () => void) {
   const navigate = useNavigate();
-  const [showRematch, setShowRematch] = useState(false);
-  const [showCreateInvoice, setShowCreateInvoice] = useState(false);
+  const [showLinkInvoice, setShowLinkInvoice] = useState(false);
   const [showResolveBooklet, setShowResolveBooklet] = useState(false);
-  const [amountCollected, setAmountCollected] = useState(String(report.amount_collected || ""));
-  const [markPaid, setMarkPaid] = useState(report.payment_status !== "Unpaid");
-  const [isConfirming, setIsConfirming] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
+  const [isUnrejecting, setIsUnrejecting] = useState(false);
 
-  const isResolved = report.reconciliation_status === "Confirmed" || report.reconciliation_status === "Rejected";
-  const canConfirm = Boolean(report.matched_invoice) && !isResolved;
-  // Only offer a backfill when there's genuinely nothing to match against yet - a Suggested row
-  // already has a real invoice, so Create Invoice would be redundant (and confusing) there.
-  const canCreateInvoice = !report.matched_invoice && !isResolved;
-
-  const handleConfirm = async () => {
-    if (report.payment_status === "Partial" && markPaid) {
-      const amount = Number(amountCollected);
-      if (!amount || amount <= 0) {
-        toast.error("Enter the amount collected before confirming a partial payment.");
-        return;
-      }
-    }
-
-    setIsConfirming(true);
-    try {
-      const amount = report.payment_status === "Partial" && markPaid ? Number(amountCollected) : undefined;
-      const result = await confirmDeliveryMatch(report.name, undefined, markPaid, amount);
-      if (!result.success) throw new Error(result.message || "Confirm failed");
-      toast.success(
-        result.payment_entry
-          ? `Confirmed and posted payment ${result.payment_entry}`
-          : "Delivery confirmed"
-      );
-      onChanged();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to confirm delivery");
-    } finally {
-      setIsConfirming(false);
-    }
-  };
+  const isRejected = report.reconciliation_status === "Rejected";
+  const isResolved = report.reconciliation_status === "Confirmed" || isRejected;
 
   const handleReject = async () => {
     setIsRejecting(true);
@@ -319,10 +182,60 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
     }
   };
 
+  const handleUnreject = async () => {
+    setIsUnrejecting(true);
+    try {
+      const result = await unrejectDeliveryMatch(report.name);
+      if (!result.success) throw new Error(result.message || "Un-reject failed");
+      toast.success(
+        result.matched_invoice
+          ? `Un-rejected - re-matched to ${result.matched_invoice}`
+          : "Un-rejected - back to Unmatched"
+      );
+      onChanged();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to un-reject delivery report");
+    } finally {
+      setIsUnrejecting(false);
+    }
+  };
+
   const mapsUrl =
     report.gps_latitude && report.gps_longitude
       ? `https://www.google.com/maps?q=${report.gps_latitude},${report.gps_longitude}`
       : null;
+
+  return {
+    navigate,
+    showLinkInvoice,
+    setShowLinkInvoice,
+    showResolveBooklet,
+    setShowResolveBooklet,
+    isRejecting,
+    isUnrejecting,
+    isRejected,
+    isResolved,
+    handleReject,
+    handleUnreject,
+    mapsUrl,
+  };
+}
+
+function ReportCard({ report, onChanged }: ReportCardProps) {
+  const {
+    navigate,
+    showLinkInvoice,
+    setShowLinkInvoice,
+    showResolveBooklet,
+    setShowResolveBooklet,
+    isRejecting,
+    isUnrejecting,
+    isRejected,
+    isResolved,
+    handleReject,
+    handleUnreject,
+    mapsUrl,
+  } = useReportRow(report, onChanged);
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-800">
@@ -380,7 +293,7 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
           </div>
           {(report.photos || report.voice_note) && (
             <div className="mt-2">
-              <DeliveryPhotoStrip photos={report.photos} voiceNote={report.voice_note} />
+              <DeliveryPhotoStrip photos={report.photos} photoThumbnails={report.photo_thumbnails} voiceNote={report.voice_note} />
             </div>
           )}
         </div>
@@ -410,98 +323,51 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
         ) : (
           <div className="text-sm text-gray-500 dark:text-gray-400">No matching invoice found.</div>
         )}
-
-        {showRematch && !isResolved && (
-          <RematchPicker
-            reportName={report.name}
-            onCancel={() => setShowRematch(false)}
-            onMatched={() => {
-              setShowRematch(false);
-              onChanged();
-            }}
-          />
-        )}
       </div>
 
-      {!isResolved && (
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          {report.payment_status === "Partial" && (
-            <div className="flex items-center gap-2">
-              <label className="text-xs text-gray-500 dark:text-gray-400">Amount collected</label>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={amountCollected}
-                onChange={(event) => setAmountCollected(event.target.value)}
-                className="w-28 rounded-md border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-beveren-500 dark:border-gray-600 dark:bg-gray-800 dark:text-white"
-              />
-            </div>
-          )}
-
-          {report.payment_status !== "Unpaid" && (
-            <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-              <input
-                type="checkbox"
-                checked={markPaid}
-                onChange={(event) => setMarkPaid(event.target.checked)}
-                className="h-4 w-4 rounded border-gray-300 text-beveren-600 focus:ring-beveren-500"
-              />
-              Mark as paid
-            </label>
-          )}
-
-          <div className="ml-auto flex items-center gap-2">
-            {Boolean(report.is_booklet_out_of_range) && (
-              <button
-                type="button"
-                onClick={() => setShowResolveBooklet((v) => !v)}
-                className="inline-flex items-center gap-1 rounded-lg border border-amber-300 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/30"
-              >
-                <BookOpen size={14} />
-                Resolve Booklet
-              </button>
-            )}
-            {canCreateInvoice && (
-              <button
-                type="button"
-                onClick={() => setShowCreateInvoice(true)}
-                title="No matching invoice exists yet - create one from what's on the paper slip"
-                className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
-              >
-                <FilePlus2 size={14} />
-                Create Invoice
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setShowRematch((v) => !v)}
-              className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
-            >
-              <RefreshCcw size={14} />
-              Re-match
-            </button>
-            <button
-              type="button"
-              onClick={handleReject}
-              disabled={isRejecting}
-              className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/30"
-            >
-              {isRejecting ? <Loader2 size={14} className="animate-spin" /> : <XCircle size={14} />}
-              Reject
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirm}
-              disabled={!canConfirm || isConfirming}
-              className="inline-flex items-center gap-1 rounded-lg bg-beveren-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-beveren-700 disabled:cursor-not-allowed disabled:bg-gray-300"
-            >
-              {isConfirming ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-              Confirm
-            </button>
-          </div>
+      {isRejected ? (
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={handleUnreject}
+            disabled={isUnrejecting}
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            {isUnrejecting ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />}
+            Un-reject
+          </button>
         </div>
-      )}
+      ) : !isResolved ? (
+        <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+          {Boolean(report.is_booklet_out_of_range) && (
+            <button
+              type="button"
+              onClick={() => setShowResolveBooklet((v) => !v)}
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-amber-300 px-3 py-1.5 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/30"
+            >
+              <BookOpen size={14} />
+              Resolve Booklet
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setShowLinkInvoice(true)}
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+          >
+            <Link2 size={14} />
+            Link Invoice
+          </button>
+          <button
+            type="button"
+            onClick={handleReject}
+            disabled={isRejecting}
+            className="inline-flex items-center gap-1 whitespace-nowrap rounded-lg border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/30"
+          >
+            {isRejecting ? <Loader2 size={14} className="animate-spin" /> : <XCircle size={14} />}
+            Reject
+          </button>
+        </div>
+      ) : null}
 
       {showResolveBooklet && !isResolved && (
         <ResolveBookletPicker
@@ -515,12 +381,12 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
         />
       )}
 
-      {showCreateInvoice && (
+      {showLinkInvoice && (
         <CreateInvoiceFromReportModal
           report={report}
-          onClose={() => setShowCreateInvoice(false)}
+          onClose={() => setShowLinkInvoice(false)}
           onCreated={() => {
-            setShowCreateInvoice(false);
+            setShowLinkInvoice(false);
             onChanged();
           }}
         />
@@ -564,19 +430,16 @@ interface GroupClusterProps {
   onChanged: () => void;
 }
 
-function GroupCluster({ group, onChanged }: GroupClusterProps) {
+/** The "N more (other status) — show" expansion, shared (2026-08-06) between the mobile card
+ * cluster and the desktop table's group rows for the same reason useReportRow is shared - one
+ * implementation of the fetch/filter logic, two different layouts on top of it. */
+function useGroupExpansion(group: ReportGroup) {
   const [extraReports, setExtraReports] = useState<DeliveryReport[] | null>(null);
   const [isLoadingExtra, setIsLoadingExtra] = useState(false);
 
   const visibleNames = new Set(group.reports.map((r) => r.name));
   const hiddenCount = group.totalCount - group.reports.length;
   const others = (extraReports || []).filter((r) => !visibleNames.has(r.name));
-
-  // Plain, unwrapped card for the ordinary case: one report, no siblings anywhere, not itself a
-  // Partial delivery worth flagging.
-  if (group.reports.length === 1 && !group.flagged) {
-    return <ReportCard report={group.reports[0]} onChanged={onChanged} />;
-  }
 
   const handleShowMore = async () => {
     setIsLoadingExtra(true);
@@ -589,6 +452,18 @@ function GroupCluster({ group, onChanged }: GroupClusterProps) {
       setIsLoadingExtra(false);
     }
   };
+
+  return { others, hiddenCount, extraReports, isLoadingExtra, handleShowMore };
+}
+
+function GroupCluster({ group, onChanged }: GroupClusterProps) {
+  const { others, hiddenCount, extraReports, isLoadingExtra, handleShowMore } = useGroupExpansion(group);
+
+  // Plain, unwrapped card for the ordinary case: one report, no siblings anywhere, not itself a
+  // Partial delivery worth flagging.
+  if (group.reports.length === 1 && !group.flagged) {
+    return <ReportCard report={group.reports[0]} onChanged={onChanged} />;
+  }
 
   return (
     <div className="rounded-xl border-2 border-amber-300 bg-amber-50/40 p-3 dark:border-amber-700 dark:bg-amber-950/10">
@@ -617,6 +492,239 @@ function GroupCluster({ group, onChanged }: GroupClusterProps) {
         ))}
       </div>
     </div>
+  );
+}
+
+// ─── Desktop table view (2026-08-06, user request) ──────────────────────────
+//
+// Same data, same actions, same useReportRow/useGroupExpansion logic as the card view above - this
+// is purely a denser layout for wide screens. Rendered instead of (not alongside) the card list at
+// the lg: breakpoint; see DeliveryReconciliationPage's return for the split.
+const TABLE_COLUMNS = ["Driver", "Invoice", "Matched", "Status", "Time", "Photos", "Action"];
+const TABLE_COLUMN_COUNT = TABLE_COLUMNS.length;
+
+function ReportTableRow({ report, onChanged }: ReportCardProps) {
+  const {
+    navigate,
+    showLinkInvoice,
+    setShowLinkInvoice,
+    showResolveBooklet,
+    setShowResolveBooklet,
+    isRejecting,
+    isUnrejecting,
+    isRejected,
+    isResolved,
+    handleReject,
+    handleUnreject,
+    mapsUrl,
+  } = useReportRow(report, onChanged);
+
+  const actionBtnClass =
+    "inline-flex items-center gap-1 whitespace-nowrap rounded-md border px-2 py-1 text-xs font-medium";
+
+  return (
+    <>
+      <tr className="border-b border-gray-100 align-top last:border-b-0 dark:border-gray-700">
+        <td className="px-3 py-3">
+          <div className="flex items-center gap-1.5">
+            <span className="font-medium text-gray-900 dark:text-white">
+              {report.delivery_driver_name || report.reported_driver_name || "Unknown driver"}
+            </span>
+            {report.reported_driver_name && !report.delivery_driver_name && (
+              <span
+                title="Reported by the bot but not linked to a Delivery Driver record yet"
+                className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+              >
+                unlinked
+              </span>
+            )}
+          </div>
+        </td>
+        <td className="px-3 py-3 text-sm">
+          <div className="font-medium text-gray-900 dark:text-white">{report.reported_invoice_no || "—"}</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400">
+            {report.completion_status} · {report.payment_status}
+          </div>
+        </td>
+        <td className="px-3 py-3 text-sm">
+          {report.matched_invoice ? (
+            <div>
+              <button
+                type="button"
+                onClick={() => navigate(`/invoice/${report.matched_invoice}`)}
+                className="font-medium text-beveren-600 hover:underline dark:text-beveren-400"
+              >
+                {report.matched_invoice}
+              </button>
+              {typeof report.match_confidence === "number" && (
+                <div
+                  className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-medium ${confidenceBadgeClass(
+                    report.match_confidence
+                  )}`}
+                >
+                  {Math.round((report.match_confidence || 0) * 100)}% confidence
+                </div>
+              )}
+              {report.match_notes && (
+                <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{report.match_notes}</div>
+              )}
+            </div>
+          ) : (
+            <span className="text-gray-400 dark:text-gray-500">No match</span>
+          )}
+        </td>
+        <td className="px-3 py-3">
+          <div className="flex flex-wrap items-center gap-1">
+            <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusBadgeClass(report.reconciliation_status)}`}>
+              {report.reconciliation_status}
+            </span>
+            {report.booklet_number && (
+              <span
+                title={`Booklet #${report.booklet_number} - ${report.booklet_status}`}
+                className="inline-flex items-center gap-1 rounded-full bg-beveren-100 px-2 py-0.5 text-xs font-medium text-beveren-700 dark:bg-beveren-900/30 dark:text-beveren-300"
+              >
+                <BookOpen size={11} /> #{report.booklet_number}
+              </span>
+            )}
+            {Boolean(report.is_booklet_out_of_range) && (
+              <span
+                title="Reported invoice number matches no registered booklet"
+                className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+              >
+                out of range
+              </span>
+            )}
+          </div>
+        </td>
+        <td className="whitespace-nowrap px-3 py-3 text-sm text-gray-500 dark:text-gray-400">
+          {formatTimestamp(report.delivery_timestamp || report.creation)}
+          {mapsUrl && (
+            <a
+              href={mapsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 flex items-center gap-1 text-beveren-600 hover:underline dark:text-beveren-400"
+            >
+              <MapPin size={12} /> Map
+            </a>
+          )}
+        </td>
+        <td className="px-3 py-3">
+          <DeliveryPhotoStrip photos={report.photos} photoThumbnails={report.photo_thumbnails} voiceNote={report.voice_note} />
+        </td>
+        <td className="px-3 py-3">
+          {isRejected ? (
+            <button
+              type="button"
+              onClick={handleUnreject}
+              disabled={isUnrejecting}
+              className={`${actionBtnClass} border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700`}
+            >
+              {isUnrejecting ? <Loader2 size={12} className="animate-spin" /> : <Undo2 size={12} />}
+              Un-reject
+            </button>
+          ) : isResolved ? (
+            <span className="text-xs text-gray-400 dark:text-gray-500">—</span>
+          ) : (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {Boolean(report.is_booklet_out_of_range) && (
+                <button
+                  type="button"
+                  onClick={() => setShowResolveBooklet((v) => !v)}
+                  className={`${actionBtnClass} border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-300 dark:hover:bg-amber-950/30`}
+                >
+                  <BookOpen size={12} />
+                  Resolve Booklet
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowLinkInvoice(true)}
+                className={`${actionBtnClass} border-gray-300 text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700`}
+              >
+                <Link2 size={12} />
+                Link Invoice
+              </button>
+              <button
+                type="button"
+                onClick={handleReject}
+                disabled={isRejecting}
+                className={`${actionBtnClass} border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/30`}
+              >
+                {isRejecting ? <Loader2 size={12} className="animate-spin" /> : <XCircle size={12} />}
+                Reject
+              </button>
+            </div>
+          )}
+        </td>
+      </tr>
+
+      {!isResolved && showResolveBooklet && (
+        <tr className="border-b border-gray-100 dark:border-gray-700">
+          <td colSpan={TABLE_COLUMN_COUNT} className="bg-gray-50 px-3 py-3 dark:bg-gray-900">
+            <ResolveBookletPicker
+              reportName={report.name}
+              reportedInvoiceNo={report.reported_invoice_no}
+              onCancel={() => setShowResolveBooklet(false)}
+              onResolved={() => {
+                setShowResolveBooklet(false);
+                onChanged();
+              }}
+            />
+          </td>
+        </tr>
+      )}
+
+      {showLinkInvoice && (
+        <CreateInvoiceFromReportModal
+          report={report}
+          onClose={() => setShowLinkInvoice(false)}
+          onCreated={() => {
+            setShowLinkInvoice(false);
+            onChanged();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function GroupClusterRows({ group, onChanged }: GroupClusterProps) {
+  const { others, hiddenCount, extraReports, isLoadingExtra, handleShowMore } = useGroupExpansion(group);
+
+  if (group.reports.length === 1 && !group.flagged) {
+    return <ReportTableRow report={group.reports[0]} onChanged={onChanged} />;
+  }
+
+  return (
+    <>
+      <tr className="bg-amber-50/60 dark:bg-amber-950/20">
+        <td colSpan={TABLE_COLUMN_COUNT} className="px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+              Invoice {group.key} · {group.totalCount} delivery report{group.totalCount === 1 ? "" : "s"}
+            </span>
+            {hiddenCount > 0 && !extraReports && (
+              <button
+                type="button"
+                onClick={handleShowMore}
+                disabled={isLoadingExtra}
+                className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 hover:underline disabled:opacity-50 dark:text-amber-300"
+              >
+                {isLoadingExtra ? <Loader2 size={12} className="animate-spin" /> : <ChevronDown size={12} />}
+                {hiddenCount} more (other status) — show
+              </button>
+            )}
+          </div>
+        </td>
+      </tr>
+      {group.reports.map((report) => (
+        <ReportTableRow key={report.name} report={report} onChanged={onChanged} />
+      ))}
+      {others.map((report) => (
+        <ReportTableRow key={report.name} report={report} onChanged={onChanged} />
+      ))}
+    </>
   );
 }
 
@@ -652,7 +760,11 @@ export default function DeliveryReconciliationPage() {
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20 dark:bg-gray-900 lg:ml-20 lg:pb-12">
-      <div className="sticky top-0 z-40 border-b border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
+      {/* will-change/translateZ (2026-08-06): promotes the sticky header onto its own compositing
+          layer. Without it, the much heavier table below (added this session) apparently gives
+          some desktop browsers a full-page repaint/blank flash on every scroll tick - isolating
+          the header's layer stops its repaint from being tangled up with the table's. */}
+      <div className="sticky top-0 z-40 border-b border-gray-200 bg-white [transform:translateZ(0)] [will-change:transform] dark:border-gray-700 dark:bg-gray-900">
         <div className="px-4 py-4 sm:px-6">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2">
@@ -718,11 +830,42 @@ export default function DeliveryReconciliationPage() {
             {activeTab === "pending" ? "No pending delivery reports." : "No resolved delivery reports yet."}
           </div>
         ) : (
-          <div className="space-y-3">
-            {groupReports(reports).map((group) => (
-              <GroupCluster key={group.key} group={group} onChanged={fetchReports} />
-            ))}
-          </div>
+          <>
+            {/* Mobile: card list (unchanged). Desktop: table - denser, and gives the action
+                buttons their own column per the user's request, instead of wrapping inside each
+                card. */}
+            <div className="space-y-3 lg:hidden">
+              {groupReports(reports).map((group) => (
+                <GroupCluster key={group.key} group={group} onChanged={fetchReports} />
+              ))}
+            </div>
+            {/* [contain:paint] pairs with the sticky header's own layer promotion above - tells
+                the browser this subtree's paint is self-contained, so scrolling this much heavier
+                table doesn't force a repaint of everything else on the page. Paint-only (not
+                `content`, which also contains layout) - rows can still resize as their photos
+                load in without fighting a layout containment boundary. */}
+            <div className="hidden overflow-x-auto rounded-lg border border-gray-200 bg-white [contain:paint] dark:border-gray-700 dark:bg-gray-800 lg:block">
+              <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                <thead className="bg-gray-50 dark:bg-gray-900">
+                  <tr>
+                    {TABLE_COLUMNS.map((column) => (
+                      <th
+                        key={column}
+                        className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                      >
+                        {column}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {groupReports(reports).map((group) => (
+                    <GroupClusterRows key={group.key} group={group} onChanged={fetchReports} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </main>
 

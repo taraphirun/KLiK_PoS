@@ -11,11 +11,13 @@ already has a durable place (the newly-inserted Delivery Report) to attach media
 asynchronously, does the download.
 """
 
+import io
 import time
 
 import frappe
 import requests
 from frappe.utils.file_manager import save_file
+from PIL import Image
 
 from klik_pos.api.delivery import _attach_delivery_media
 from klik_pos.api.telegram_notify import get_bot_token, send_admin_alert
@@ -23,6 +25,14 @@ from klik_pos.api.telegram_notify import get_bot_token, send_admin_alert
 MAX_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = (1, 2, 4)
 DOWNLOAD_TIMEOUT = 30
+
+# The reconciliation table/card view only ever displays photos at a small size (a 64px strip
+# thumbnail, or a bit more in the table) - long enough max edge to still look sharp there, short
+# enough that a table with a dozen visible rows isn't downloading and decoding a dozen full
+# multi-megabyte Telegram originals at once just to paint a thumbnail (2026-08-06, diagnosed as the
+# likely cause of the new desktop table janking/blanking on scroll).
+THUMBNAIL_MAX_EDGE = 200
+THUMBNAIL_JPEG_QUALITY = 75
 
 # Small Text has no hard DB length limit under Frappe/MariaDB, but keeping the stored error
 # readable (rather than an unbounded pile-up of every retried file's message) is worth doing
@@ -94,6 +104,28 @@ def _filename_for(file_id, is_voice):
     return f"{file_id}.{'ogg' if is_voice else 'jpg'}"
 
 
+def _make_thumbnail_bytes(content):
+    """Resizes an already-downloaded photo down to THUMBNAIL_MAX_EDGE for the reconciliation
+    view's thumbnail strip. Deliberately not File.make_thumbnail() - that writes to
+    `public/<original's own path>`, which for a private file (`is_private=1`, as these always are)
+    means a path like `public/private/files/...` that doesn't exist and silently fails (confirmed
+    live before writing this: it returns None rather than raising). Doing it ourselves keeps the
+    thumbnail exactly as private as the original - saved via the same save_file(is_private=1) call
+    the caller already uses for the full photo, not written under the public files directory at
+    all. Never raises - returns None on any failure (corrupt/unsupported image data), same
+    best-effort contract as the rest of this module; the caller falls back to the full photo url.
+    """
+    try:
+        image = Image.open(io.BytesIO(content))
+        image = image.convert("RGB")  # drop any alpha channel - thumbnails are always JPEG
+        image.thumbnail((THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=THUMBNAIL_JPEG_QUALITY)
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
 def sync_delivery_media_job(report_name):
     """Enqueued exactly once, right after a new Delivery Report is inserted
     (`delivery.py`'s `submit_delivery_report`), whenever the bot forwarded any photo/voice
@@ -128,6 +160,7 @@ def sync_delivery_media_job(report_name):
         return
 
     photo_urls = []
+    thumbnail_urls = []
     errors = []
 
     for file_id in photo_ids:
@@ -137,6 +170,17 @@ def sync_delivery_media_job(report_name):
                 _filename_for(file_id, is_voice=False), content, "Delivery Report", report_name, is_private=1
             )
             photo_urls.append(file_doc.file_url)
+
+            # Best-effort - a thumbnail that fails to generate just means this photo falls back to
+            # its full-resolution url in the strip (still correct, just not the point of this).
+            thumb_bytes = _make_thumbnail_bytes(content)
+            if thumb_bytes:
+                thumb_doc = save_file(
+                    f"{file_id}_thumb.jpg", thumb_bytes, "Delivery Report", report_name, is_private=1
+                )
+                thumbnail_urls.append(thumb_doc.file_url)
+            else:
+                thumbnail_urls.append(file_doc.file_url)
         except Exception as err:
             errors.append(f"photo {file_id}: {err}")
 
@@ -152,7 +196,9 @@ def sync_delivery_media_job(report_name):
             errors.append(f"voice {voice_id}: {err}")
 
     error_text = "; ".join(errors)[:MAX_ERROR_TEXT_LENGTH] if errors else None
-    _attach_delivery_media(report, photo_urls=photo_urls, voice_url=voice_url, error=error_text)
+    _attach_delivery_media(
+        report, photo_urls=photo_urls, thumbnail_urls=thumbnail_urls, voice_url=voice_url, error=error_text
+    )
 
     if errors:
         detail = "\n".join(errors)

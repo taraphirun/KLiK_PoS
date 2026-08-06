@@ -1,6 +1,6 @@
 import frappe
 from frappe import _
-from frappe.utils import flt, nowdate
+from frappe.utils import cint, flt, nowdate
 
 from klik_pos.api.sales_invoice import get_current_pos_opening_entry
 from klik_pos.klik_pos.utils import get_current_pos_profile
@@ -188,18 +188,49 @@ def create_customer_payment_entry(
 
 
 @frappe.whitelist()
-def get_outstanding_sales_invoices(limit=100, start=0, search=""):
-	"""Return submitted Sales Invoices with outstanding customer balance."""
+def get_outstanding_sales_invoices(limit=100, start=0, search="", include_paid=0, exclude_delivered=0):
+	"""Return submitted Sales Invoices, by default only ones with outstanding customer balance.
+
+	custom_invoice_ref ("Invoice Reference", 2026-08-06) included in both the SELECT and the
+	search condition - the delivery-reconciliation "Link Invoice" match picker searches/displays
+	by this field, not the ERPNext docname (see match_delivery_report's own docstring for why).
+	Guarded with has_field since this endpoint predates that field and is called from other,
+	unrelated flows too (e.g. PaymentDialog) that shouldn't break if it's ever missing.
+
+	include_paid (2026-08-06): that same Link Invoice picker also needs to find invoices that are
+	already fully paid - a delivery can legitimately match one settled in-store, and confirming it
+	just wouldn't post a further payment. Opt-in and defaulted off rather than dropping the
+	outstanding_amount filter outright, since every other caller (PaymentDialog etc.) genuinely
+	only wants unpaid ones and shouldn't silently start seeing paid invoices too.
+
+	exclude_delivered (2026-08-06, user request): the same picker shouldn't keep offering an
+	invoice that's already been fully delivered - re-matching it would be pointless at best,
+	confusing at worst. Deliberately keyed off custom_delivery_status == "Delivered", not "has any
+	matched Delivery Report at all" - confirm_delivery_match's own design allows one invoice to
+	have more than one Delivery Report (a Partial delivery now, the remainder later), and that
+	invoice's custom_delivery_status only flips to "Delivered" once a Full delivery is actually
+	confirmed against it. An invoice sitting at "Partially Delivered" (or with no delivery status
+	yet) still needs to stay visible for exactly that follow-up. Delivery status and payment status
+	are independent axes throughout this app (see confirm_delivery_match's own docstring) - this
+	filter has nothing to do with include_paid above; an invoice can be excluded here regardless of
+	whether it's been paid, and included regardless of whether it hasn't. Opt-in for the same
+	reason as include_paid - unrelated callers have no concept of "delivered" at all.
+	"""
 	try:
 		limit = min(int(limit or 100), 500)
 		start = int(start or 0)
+		has_invoice_ref = frappe.get_meta("Sales Invoice").has_field("custom_invoice_ref")
+		has_delivery_status = frappe.get_meta("Sales Invoice").has_field("custom_delivery_status")
 
 		pos_profile = get_current_pos_profile()
 		conditions = [
 			"si.docstatus = 1",
 			"si.is_return = 0",
-			"si.outstanding_amount > 0",
 		]
+		if not cint(include_paid):
+			conditions.append("si.outstanding_amount > 0")
+		if cint(exclude_delivered) and has_delivery_status:
+			conditions.append("(si.custom_delivery_status IS NULL OR si.custom_delivery_status != 'Delivered')")
 		params = []
 
 		if pos_profile:
@@ -208,8 +239,12 @@ def get_outstanding_sales_invoices(limit=100, start=0, search=""):
 
 		if search and search.strip():
 			search_term = f"%{search.strip()}%"
-			conditions.append("(si.name LIKE %s OR si.customer LIKE %s OR si.customer_name LIKE %s)")
+			search_conditions = ["si.name LIKE %s", "si.customer LIKE %s", "si.customer_name LIKE %s"]
 			params.extend([search_term, search_term, search_term])
+			if has_invoice_ref:
+				search_conditions.append("si.custom_invoice_ref LIKE %s")
+				params.append(search_term)
+			conditions.append(f"({' OR '.join(search_conditions)})")
 
 		where_clause = " AND ".join(conditions)
 
@@ -221,9 +256,11 @@ def get_outstanding_sales_invoices(limit=100, start=0, search=""):
 		total_rows = frappe.db.sql(count_sql, tuple(params), as_dict=True)
 		total_count = total_rows[0].total if total_rows else 0
 
+		invoice_ref_column = "si.custom_invoice_ref," if has_invoice_ref else ""
 		data_sql = apply_sql_permissions(f"""
 			SELECT
 				si.name,
+				{invoice_ref_column}
 				si.posting_date,
 				si.due_date,
 				si.customer,

@@ -23,6 +23,7 @@
   "gps_longitude",
   "column_break_location_1",
   "photos",
+  "photo_thumbnails",
   "voice_note",
   "telegram_file_ids",
   "media_sync_error",
@@ -147,6 +148,12 @@
    "fieldname": "photos",
    "fieldtype": "JSON",
    "label": "Photos"
+  },
+  {
+   "description": "Small resized copies of each entry in photos, same order/length, generated at media-sync time - used for the reconciliation table/card thumbnail strip so it does not download full-resolution originals just to show a 64px preview. Falls back to photos itself in the frontend for older records synced before this field existed.",
+   "fieldname": "photo_thumbnails",
+   "fieldtype": "JSON",
+   "label": "Photo Thumbnails"
   },
   {
    "fieldname": "voice_note",
