@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, type FocusEvent } from "react";
 import type { CartItem } from "../../../types";
 
 interface QuantityInputProps {
@@ -45,8 +45,9 @@ export const QuantityInput = ({
     }
   };
 
-  const handleFocus = () => {
+  const handleFocus = (e: FocusEvent<HTMLInputElement>) => {
     setIsEditing(true);
+    e.target.select();
   };
 
   return (
@@ -59,9 +60,10 @@ export const QuantityInput = ({
       onFocus={handleFocus}
       onBlur={handleBlur}
       disabled={disabled}
-      className={`w-full ${
-        isMobile ? "text-sm" : "text-sm"
-      } px-3 py-4 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent ${
+      autoComplete="off"
+      // zoom-on-focus (index.css) replaces the OS's own auto-zoom, which needs text-base (16px) -
+      // see RoofingSpecTable/CartItemRow's stepper for the same pairing.
+      className={`zoom-on-focus w-full text-base px-3 py-4 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-2 focus:ring-beveren-500 focus:border-transparent ${
         disabled
           ? "bg-gray-100 dark:bg-gray-700 cursor-not-allowed text-gray-500 dark:text-gray-400"
           : "bg-white dark:bg-gray-800 text-gray-900 dark:text-white"

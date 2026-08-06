@@ -118,9 +118,19 @@ export default function MobilePOSLayout({
 
   const totalItems = cartItems.reduce((sum: number, item: CartItem) => sum + item.quantity, 0)
   const totalAmount = cartItems.reduce((sum: number, item: CartItem) => sum + item.price * item.quantity, 0)
+  // A coil/AZ-type item (cartStore's isAZCoilItem) is added with quantity 0 on purpose - it isn't
+  // "really" in the cart until its dimensions are entered on the Cart page itself (CartItemRow's
+  // own isAZCoilItem branch). totalItems alone can't see it, so gating the cart's only two mobile
+  // entry points (below) on totalItems > 0 made them never appear for a cart holding nothing but
+  // an unconfigured coil item - there was no way back into the cart to configure it. Desktop never
+  // hit this because RetailPOSLayout shows its cart panel unconditionally, not gated on any count.
+  const hasCartItems = cartItems.length > 0
+  // For the badge/label text: showing a bare "0" for a cart that genuinely has a pending coil item
+  // reads as more broken than showing the line count it actually has.
+  const cartItemCount = totalItems > 0 ? totalItems : cartItems.length
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className="flex flex-col h-screen bg-gray-50 dark:bg-gray-900">
       {/* Mobile Header */}
       <div className="sticky top-0 z-20 bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
         <div className="flex items-center justify-between px-4 py-3">
@@ -336,7 +346,7 @@ export default function MobilePOSLayout({
       </div>
 
       {/* Floating Cart Button */}
-      {totalItems > 0 && (
+      {hasCartItems && (
         <button
           onClick={() => navigate('/cart')}
           className="fixed bottom-20 right-6 bg-beveren-600 text-white rounded-full p-4 shadow-lg hover:bg-beveren-700 transition-colors z-30"
@@ -344,7 +354,7 @@ export default function MobilePOSLayout({
           <div className="relative">
             <ShoppingCart className="w-6 h-6" />
             <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-              {totalItems}
+              {cartItemCount}
             </span>
 
           </div>
@@ -352,10 +362,10 @@ export default function MobilePOSLayout({
       )}
 
       {/* Bottom Cart Summary - Above Bottom Navigation */}
-      {totalItems > 0 && (
+      {hasCartItems && (
         <div className="fixed bottom-16 left-0 right-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 px-4 py-3 z-40">
           <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-600 dark:text-gray-400">{totalItems} items</div>
+            <div className="text-sm text-gray-600 dark:text-gray-400">{cartItemCount} items</div>
             <div className="text-lg font-bold text-beveren-600 dark:text-beveren-400">{formatCurrencyWithSymbol(totalAmount, posDetails?.currency || 'USD')}</div>
             <button
               onClick={() => navigate('/cart')}

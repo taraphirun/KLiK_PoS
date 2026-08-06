@@ -42,7 +42,7 @@ export default function BottomNavigation() {
 
   return (
     <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 z-50 safe-area-pb">
-      <div className="flex items-center justify-around py-2 px-4">
+      <div className="flex items-center justify-around py-1.5 px-1 sm:py-2 sm:px-4">
         {menuItems.map((item, index) => {
           if (item.requiresEditCreatePermission && posDetails?.custom_allow_to_create_and_edit_customers !== 1) {
             return null
@@ -62,7 +62,7 @@ export default function BottomNavigation() {
                   : `${item.label} (Sales Manager, System Manager or Administrator only)`
                 : item.label
             }
-            className={`flex flex-col items-center justify-center min-w-0 flex-1 py-2 px-1 transition-colors ${
+            className={`flex flex-col items-center justify-center min-w-0 flex-1 py-1.5 px-0.5 sm:py-2 sm:px-1 transition-colors ${
               disabled
                 ? "opacity-50 cursor-not-allowed text-gray-400 dark:text-gray-500"
                 : (isActive(item.path)
@@ -72,7 +72,7 @@ export default function BottomNavigation() {
           >
             <item.icon
               size={20}
-              className={`mb-1 ${
+              className={`mb-0.5 sm:mb-1 ${
                 disabled
                   ? "text-gray-400 dark:text-gray-500"
                   : (isActive(item.path)
@@ -81,7 +81,7 @@ export default function BottomNavigation() {
               }`}
             />
             <span
-              className={`text-xs font-medium truncate ${
+              className={`hidden text-xs font-medium truncate sm:block ${
                 disabled
                   ? "text-gray-400 dark:text-gray-500"
                   : (isActive(item.path)

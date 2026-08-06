@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import { Minus, Plus, X, Copy, Package, ChevronDown, ChevronUp, AlertTriangle, Eye } from "lucide-react";
 import { toast } from "react-toastify";
 import type { BundleEntry, CartItem } from "../../../types";
@@ -508,7 +508,15 @@ export const CartItemRow = ({
                 }}
                 onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); } }}
                 onClick={(e) => (e.target as HTMLInputElement).select()}
-                className={`${isMobile ? "w-9" : "w-8"} text-center font-semibold text-gray-900 dark:text-white disabled:opacity-100 disabled:text-gray-900 dark:disabled:text-white text-sm border-x border-gray-200 dark:border-gray-600 py-0.5 bg-transparent focus:outline-none focus:bg-gray-50 dark:focus:bg-gray-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
+                onFocus={(e) => e.target.select()}
+                autoComplete="off"
+                // Widened (2026-08-06, user request) - a coil item's computed total (e.g. "16.05")
+                // didn't fit the old w-9/w-8, clipping under zoom-on-focus. text-base + zoom-on-focus
+                // replace the OS's own auto-zoom (see index.css) with a controlled one; --zoom-scale
+                // is dialed down from the default 1.4 since this field is still narrow relative to
+                // the roomier table cells zoom-on-focus was first built for.
+                style={{ '--zoom-scale': 1.25 } as CSSProperties}
+                className={`zoom-on-focus ${isMobile ? "w-14" : "w-12"} text-center font-semibold text-gray-900 dark:text-white disabled:opacity-100 disabled:text-gray-900 dark:disabled:text-white text-base border-x border-gray-200 dark:border-gray-600 py-0.5 bg-transparent focus:outline-none focus:bg-gray-50 dark:focus:bg-gray-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none`}
               />
               <button
                 onClick={() => {

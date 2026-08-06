@@ -258,6 +258,39 @@
 /* Compact Rows in Invoice History page */
 @layer utilities {
   .py-4 {
-    padding-block: 0.2rem; 
+    padding-block: 0.2rem;
+  }
+}
+
+/* Zoom-on-focus for small mobile inputs (2026-08-06, user request - first tried on
+ * RoofingSpecTable's numpad-entry table). Our own CSS transform rather than relying on the OS's
+ * automatic input-zoom: that zoom centers using live viewport/scroll geometry, which went visibly
+ * off-center for a row inserted and focused programmatically (its column wasn't necessarily
+ * scrolled into view yet). This is deterministic regardless of scroll state, and it reverts to
+ * scale(1) for free the instant focus leaves, via :focus simply no longer matching - no JS needed
+ * for the "zoom back out" half of this.
+ *
+ * Reusable anywhere on mobile: add the `zoom-on-focus` class to any input, and give it a resting
+ * font-size of at least 16px (see RoofingSpecTable's `text-base`) - anything smaller and the OS's
+ * own zoom still fires *in addition* to this one, and the two fight each other. Pair with an
+ * onFocus that calls `e.target.scrollIntoView({ block: 'nearest', inline: 'center' })` if the
+ * input can ever sit inside a horizontally-scrolling container, for the same reason.
+ *
+ * Scale amount is a CSS variable (default 1.4) so a cramped input can dial it down without a
+ * separate rule - set `style={{ '--zoom-scale': 1.25 } as React.CSSProperties}` on that element.
+ */
+@media (max-width: 1023.98px) {
+  .zoom-on-focus:focus {
+    position: relative;
+    z-index: 30;
+    transform: scale(var(--zoom-scale, 1.4));
+    transition: transform 0.15s ease-out;
+    /* The browser's own default focus ring is drawn as part of the element's box, so it gets
+     * visually magnified by the transform above right along with everything else - a ~2px default
+     * outline renders looking like a ~3px one. Replace it outright with a thin ring sized small
+     * enough pre-scale that it still reads as thin after scaling, instead of fighting the browser
+     * default's own (unknown, OS-dependent) width. */
+    outline: none;
+    box-shadow: 0 0 0 1px #3b82f6;
   }
 }

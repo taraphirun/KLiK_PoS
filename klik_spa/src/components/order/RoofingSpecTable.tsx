@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import type { CartItem } from '../../../types';
 import { useCartStore } from '../../stores/cartStore';
@@ -9,9 +9,55 @@ interface RoofingSpecTableProps {
   isMobile?: boolean;
 }
 
+// Column order for "." keypad navigation (below) - must match the field names used in each spec
+// row's onChange handlers.
+const COLUMNS = ['straight', 'curve', 'end', 'quantity'] as const;
+
 export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpdateQuantity, isMobile }) => {
   const { updateCartItemField } = useCartStore();
   const specs = item.custom_ds_roofing_spec || [];
+
+  // User request (2026-08-06): the numpad's "." key doesn't type a decimal point here - these
+  // fields are whole-cm measurements, so a literal decimal was never useful - it instead hops to
+  // the next column, and from the last column (Quantity) it adds a new row and hops there, so a
+  // row can be entered start-to-finish without ever touching anything but the numpad. Keyed by
+  // "row-column" since rows can be added/removed and refs need to track whichever input currently
+  // occupies each cell, not a fixed identity.
+  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  // Set right before an insert that should move focus once the new row exists in the DOM -
+  // consumed by the effect below on the next render (inserting is async: it goes through
+  // saveSpecs -> updateCartItemField -> a prop update from the cart store).
+  const pendingFocusRowRef = useRef<number | null>(null);
+
+  const focusCell = (row: number, col: number) => {
+    const el = inputRefs.current[`${row}-${COLUMNS[col]}`];
+    el?.focus();
+    el?.select();
+  };
+
+  // User request (2026-08-06): landing on any field - by tap, Tab, or the "." navigation above -
+  // should select its whole value so typing overwrites it outright, rather than inserting into or
+  // appending onto whatever was already there.
+  //
+  // Also scrolls the field into view (2026-08-06 follow-up) - this table scrolls horizontally
+  // (overflow-x-auto) and a row inserted via "." navigation is focused programmatically, so
+  // there's no guarantee its column is actually in view yet. That's what made the .zoom-on-focus
+  // effect below look "off-center": the OS's own automatic input-zoom centers on wherever the
+  // input currently sits, and an out-of-view column sits somewhere the zoom math doesn't expect.
+  // scrollIntoView here brings it fully into view *before* anything zooms.
+  const handleInputFocus = (e: React.FocusEvent<HTMLInputElement>) => {
+    e.target.select();
+    e.target.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  };
+
+  useEffect(() => {
+    if (pendingFocusRowRef.current !== null) {
+      const row = pendingFocusRowRef.current;
+      pendingFocusRowRef.current = null;
+      // The new row's input isn't in the DOM yet on this same tick - wait one frame.
+      requestAnimationFrame(() => focusCell(row, 0));
+    }
+  }, [specs.length]);
 
   const handleSpecChange = (index: number, field: string, value: number) => {
     const newSpecs = [...specs];
@@ -23,7 +69,32 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
     saveSpecs([...specs, { straight: 0, curve: 0, end: 0, quantity: 1 }]);
   };
 
+  // Inserts directly below rowIndex (not necessarily at the end of the table) and arranges for
+  // its Straight cell to get focus once it exists.
+  const insertRowAfter = (rowIndex: number) => {
+    const newSpecs = [...specs];
+    newSpecs.splice(rowIndex + 1, 0, { straight: 0, curve: 0, end: 0, quantity: 1 });
+    pendingFocusRowRef.current = rowIndex + 1;
+    saveSpecs(newSpecs);
+  };
+
+  const handleDecimalKey = (e: React.KeyboardEvent<HTMLInputElement>, rowIndex: number, colIndex: number) => {
+    if (e.key !== '.') return;
+    e.preventDefault();
+    if (colIndex < COLUMNS.length - 1) {
+      focusCell(rowIndex, colIndex + 1);
+    } else if (rowIndex + 1 < specs.length) {
+      // A next row already exists (e.g. you went back to an earlier row to fix something) - go
+      // to it instead of inserting a new blank one in between.
+      focusCell(rowIndex + 1, 0);
+    } else {
+      insertRowAfter(rowIndex);
+    }
+  };
+
   const removeSpec = (index: number) => {
+    // Never go back to zero rows - see the useEffect above for why.
+    if (specs.length <= 1) return;
     const newSpecs = specs.filter((_, i) => i !== index);
     saveSpecs(newSpecs);
   };
@@ -64,12 +135,23 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
 
     updateCartItemField(item.id, 'custom_ds_roofing_spec', newSpecs);
     updateCartItemField(item.id, 'custom_description', descriptionLines.join('\n'));
-    
+
     // Only update quantity to 0 if all specs are removed, otherwise keep current quantity to prevent item deletion when adding new empty row
     if (newSpecs.length === 0 || totalMeters > 0) {
       onUpdateQuantity(item.id, Number(totalMeters.toFixed(2)));
     }
   }, [item.id, updateCartItemField, onUpdateQuantity]);
+
+  // User request: always land on at least one row - a freshly-added coil item starts with zero
+  // rows and no other affordance to open the cart (see MobilePOSLayout's hasCartItems fix), so an
+  // empty table here was a second dead end right behind it. removeSpec below refuses to go back
+  // to zero for the same reason, so this only ever fires for a genuinely fresh item.
+  useEffect(() => {
+    if (specs.length === 0) {
+      addSpec();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specs.length]);
 
   return (
     <div className="mt-2 w-full">
@@ -85,9 +167,9 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
             <thead className="bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
               <tr>
                 <th className="px-2 py-2 font-medium w-8 text-center">No</th>
-                <th className="px-2 py-2 font-medium">Straight<br/>(cm)</th>
-                <th className="px-2 py-2 font-medium">Curve<br/>(cm)</th>
-                <th className="px-2 py-2 font-medium">End<br/>(cm)</th>
+                <th className="px-2 py-2 font-medium">Straight</th>
+                <th className="px-2 py-2 font-medium">Curve</th>
+                <th className="px-2 py-2 font-medium">End</th>
                 <th className="px-2 py-2 font-medium">Quantity</th>
                 <th className="px-2 py-2 font-medium w-8"></th>
               </tr>
@@ -100,48 +182,70 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
                   </td>
                   <td className="px-2 py-1">
                     <input
+                      ref={(el) => { inputRefs.current[`${index}-straight`] = el; }}
                       type="number"
+                      inputMode="decimal"
                       min="0"
                       value={spec.straight || ''}
                       onChange={(e) => handleSpecChange(index, 'straight', Number(e.target.value))}
-                      className="w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-gray-900 dark:text-white"
+                      onKeyDown={(e) => handleDecimalKey(e, index, 0)}
+                      onFocus={handleInputFocus}
+                      autoComplete="off"
+                      className="zoom-on-focus w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-base text-gray-900 dark:text-white"
                       placeholder="0"
                     />
                   </td>
                   <td className="px-2 py-1">
                     <input
+                      ref={(el) => { inputRefs.current[`${index}-curve`] = el; }}
                       type="number"
+                      inputMode="decimal"
                       min="0"
                       value={spec.curve || ''}
                       onChange={(e) => handleSpecChange(index, 'curve', Number(e.target.value))}
-                      className="w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-gray-900 dark:text-white"
+                      onKeyDown={(e) => handleDecimalKey(e, index, 1)}
+                      onFocus={handleInputFocus}
+                      autoComplete="off"
+                      className="zoom-on-focus w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-base text-gray-900 dark:text-white"
                       placeholder="0"
                     />
                   </td>
                   <td className="px-2 py-1">
                     <input
+                      ref={(el) => { inputRefs.current[`${index}-end`] = el; }}
                       type="number"
+                      inputMode="decimal"
                       min="0"
                       value={spec.end || ''}
                       onChange={(e) => handleSpecChange(index, 'end', Number(e.target.value))}
-                      className="w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-gray-900 dark:text-white"
+                      onKeyDown={(e) => handleDecimalKey(e, index, 2)}
+                      onFocus={handleInputFocus}
+                      autoComplete="off"
+                      className="zoom-on-focus w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-base text-gray-900 dark:text-white"
                       placeholder="0"
                     />
                   </td>
                   <td className="px-2 py-1">
                     <input
+                      ref={(el) => { inputRefs.current[`${index}-quantity`] = el; }}
                       type="number"
+                      inputMode="decimal"
                       min="1"
                       value={spec.quantity || ''}
                       onChange={(e) => handleSpecChange(index, 'quantity', Number(e.target.value))}
-                      className="w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-gray-900 dark:text-white"
+                      onKeyDown={(e) => handleDecimalKey(e, index, 3)}
+                      onFocus={handleInputFocus}
+                      autoComplete="off"
+                      className="zoom-on-focus w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-base text-gray-900 dark:text-white"
                       placeholder="1"
                     />
                   </td>
                   <td className="px-2 py-1 text-center">
                     <button
                       onClick={() => removeSpec(index)}
-                      className="text-red-500 hover:text-red-700"
+                      disabled={specs.length <= 1}
+                      title={specs.length <= 1 ? "At least one row is required" : "Remove row"}
+                      className="text-red-500 hover:text-red-700 disabled:text-gray-300 disabled:hover:text-gray-300 disabled:cursor-not-allowed dark:disabled:text-gray-600 dark:disabled:hover:text-gray-600"
                     >
                       <Trash2 size={14} />
                     </button>
