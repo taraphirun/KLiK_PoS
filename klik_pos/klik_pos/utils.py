@@ -119,32 +119,118 @@ def get_invoice_qr_png(invoice_name):
 	return f"data:image/png;base64,{b64encode(png).decode()}"
 
 
-def paginate_invoice_items(items, page_size=14):
+def get_plain_item_description(description_html):
+	"""Convert a Sales Invoice Item's rich-text `description` field to plain text for the A5
+	print format's per-item spec line (e.g. a roofing sheet's custom cutting order - the whole
+	point of showing it is so the workshop can prepare from it, so it must never be silently
+	dropped or garbled). Block-level tags become newlines so multi-line specs ("Size: ...",
+	"Color: ...") keep their line structure; everything else is stripped - rich formatting
+	(bold/bullets) isn't preserved by design, see the print format's own notes on why. Returns
+	"" for an empty/whitespace-only description.
+	"""
+	import html as html_module
+	import re
+
+	if not description_html:
+		return ""
+
+	text = re.sub(r"(?i)<br\s*/?>", "\n", description_html)
+	text = re.sub(r"(?i)</(p|div|li|h[1-6])>", "\n", text)
+	text = re.sub(r"(?i)<[^>]+>", "", text)
+	text = html_module.unescape(text)
+
+	lines = [ln.strip() for ln in text.split("\n")]
+	lines = [ln for ln in lines if ln]
+	return "\n".join(lines)
+
+
+def estimate_description_slots(plain_text, chars_per_line=55, lines_per_slot=2):
+	"""Rough, deliberately conservative estimate of how many item-row "slots" (see
+	paginate_invoice_items) a plain-text description will need once wrapped in the print format.
+
+	Used ONLY to decide how many items fit on a page - never to truncate the actual text. Business
+	requirement: a description (e.g. a custom roofing-sheet cutting spec the workshop prepares
+	from) must never be cut off, so undercounting characters-per-line here is the safe direction -
+	worst case it wastes a little blank space on the page, it never causes real content to not fit
+	where the layout expected it.
+	"""
+	import math
+
+	if not plain_text:
+		return 0
+
+	total_lines = 0
+	for line in plain_text.split("\n"):
+		total_lines += max(1, math.ceil(len(line) / chars_per_line))
+	return math.ceil(total_lines / lines_per_slot)
+
+
+def paginate_invoice_items(items, slots_per_page=14):
 	"""Exposed to print-format Jinja templates (see hooks.py `jinja.methods`).
 
-	Splits Sales Invoice items into fixed-size pages for the A5 print format ("Invoice Khmer A5"),
-	whose table box is a fixed physical size on the paper form it mirrors - 14 rows, always. Real
-	items come first, then None padding, so the table is the same size on every page whether it
-	holds 1 item or 14. Row numbers continue across pages instead of restarting at 1. Always
-	returns at least one page (of all-blank rows) even for an empty item list, so the template
-	never has to special-case zero items.
+	Splits Sales Invoice items into pages for the A5 print format ("Invoice Khmer A5"), whose
+	table box is a fixed physical size on the paper form it mirrors - 14 row-slots per page.
+
+	Most items cost exactly 1 slot (their own row) and this behaves exactly like the old fixed
+	14-items-per-page chunking. An item with a populated `description` (used for a handful of
+	customized-order products, e.g. a roofing sheet's cutting spec - NOT the common case, most
+	items have no description at all) costs 1 slot for its own row plus more for however many
+	wrapped lines the description is estimated to need, and is rendered as a second, full-width
+	row directly beneath it. Items are packed greedily - if the next item wouldn't fit in the
+	slots remaining on the current page, it starts a new page instead, so a described item's row
+	is never split across a page break. Blank rows pad every page out to exactly 14 slots with
+	continuously-numbered rows, matching the old behaviour. Always returns at least one page (of
+	all-blank rows) even for an empty item list.
+
+	A description is deliberately never truncated (see estimate_description_slots) - the estimate
+	just decides pagination, so the print format's own CSS must not clip it either (no
+	overflow:hidden on anything a description can land in).
 	"""
+	import html as html_module
+
 	items = list(items or [])
-	total_pages = max(1, -(-len(items) // page_size))  # ceil division
+	prepared = []
+	for it in items:
+		plain_desc = get_plain_item_description(getattr(it, "description", None))
+		# ERPNext often defaults an item's description to its item_name verbatim - only show it
+		# when it actually adds information beyond the name already printed in this row.
+		if plain_desc and plain_desc.strip() == (it.item_name or "").strip():
+			plain_desc = ""
+		display_desc = (
+			"<br>".join(html_module.escape(ln) for ln in plain_desc.split("\n")) if plain_desc else ""
+		)
+		prepared.append(
+			{"item": it, "description": display_desc, "slots": 1 + estimate_description_slots(plain_desc)}
+		)
 
 	pages = []
-	for p in range(total_pages):
-		chunk = items[p * page_size : (p + 1) * page_size]
-		rows = [
-			{"no": p * page_size + i + 1, "item": chunk[i] if i < len(chunk) else None}
-			for i in range(page_size)
-		]
-		pages.append(
-			{
-				"page_no": p + 1,
-				"total_pages": total_pages,
-				"rows": rows,
-				"is_last": p == total_pages - 1,
-			}
-		)
-	return pages
+	page_rows = []
+	page_slots_used = 0
+	running_no = 0
+
+	def flush_page():
+		nonlocal page_rows, page_slots_used, running_no
+		remaining = slots_per_page - page_slots_used
+		while remaining > 0:
+			running_no += 1
+			page_rows.append({"no": running_no, "item": None, "description": ""})
+			remaining -= 1
+		pages.append(page_rows)
+		page_rows = []
+		page_slots_used = 0
+
+	for entry in prepared:
+		if page_rows and page_slots_used + entry["slots"] > slots_per_page:
+			flush_page()
+		running_no += 1
+		page_rows.append({"no": running_no, "item": entry["item"], "description": entry["description"]})
+		page_slots_used += entry["slots"]
+
+	if page_rows or not pages:
+		flush_page()
+
+	total_pages = len(pages)
+	return [
+		{"page_no": i + 1, "total_pages": total_pages, "rows": rows, "is_last": i == total_pages - 1}
+		for i, rows in enumerate(pages)
+	]
