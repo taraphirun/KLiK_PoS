@@ -87,3 +87,64 @@ def get_customer_credit_summary(customer, company=None):
 		return {}
 
 	return _get_customer_credit_info([customer], company).get(customer, {})
+
+
+def get_invoice_qr_png(invoice_name):
+	"""Exposed to print-format Jinja templates (see hooks.py `jinja.methods`).
+
+	Encodes just the Sales Invoice name as plain text - deliberately not a URL or JSON blob, so
+	the delivery bot can scan the printed invoice and look the record up directly by name.
+	Reuses frappe's own pyqrcode dependency (already used for 2FA, see frappe/twofactor.py) so no
+	new package is needed. Generated fresh at print time - not stored on the doc.
+
+	PNG rather than SVG-in-<img>: the invoice print format is rendered by three different
+	engines (cashier's browser, server-side PDF, and Telegram's PDF->PNG conversion) and SVG
+	rasterization inside <img> is unreliable under wkhtmltopdf - PNG is safe everywhere.
+	"""
+	if not invoice_name:
+		return ""
+
+	from base64 import b64encode
+	from io import BytesIO
+
+	from pyqrcode import create as qrcreate
+
+	stream = BytesIO()
+	try:
+		qrcreate(invoice_name, error="M").png(stream, scale=6, module_color="#000", background="#fff")
+		png = stream.getvalue()
+	finally:
+		stream.close()
+
+	return f"data:image/png;base64,{b64encode(png).decode()}"
+
+
+def paginate_invoice_items(items, page_size=14):
+	"""Exposed to print-format Jinja templates (see hooks.py `jinja.methods`).
+
+	Splits Sales Invoice items into fixed-size pages for the A5 print format ("Invoice Khmer A5"),
+	whose table box is a fixed physical size on the paper form it mirrors - 14 rows, always. Real
+	items come first, then None padding, so the table is the same size on every page whether it
+	holds 1 item or 14. Row numbers continue across pages instead of restarting at 1. Always
+	returns at least one page (of all-blank rows) even for an empty item list, so the template
+	never has to special-case zero items.
+	"""
+	items = list(items or [])
+	total_pages = max(1, -(-len(items) // page_size))  # ceil division
+
+	pages = []
+	for p in range(total_pages):
+		chunk = items[p * page_size : (p + 1) * page_size]
+		rows = [
+			{"no": p * page_size + i + 1, "item": chunk[i] if i < len(chunk) else None}
+			for i in range(page_size)
+		]
+		pages.append(
+			{
+				"page_no": p + 1,
+				"total_pages": total_pages,
+				"rows": rows,
+				"is_last": p == total_pages - 1,
+			}
+		)
+	return pages

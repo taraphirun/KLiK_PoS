@@ -27,6 +27,15 @@ No action needed - confirmed via the fresh install test:
   Report, Delivery Booklet, Delivery Booklet Settings)
 - Scheduler event (`check_booklet_lifecycle`, hourly)
 - Workspace sidebar/desktop icons, print format JS includes
+- **Not yet confirmed by an actual fresh-install test** (added 2026-08-09, after this audit's own
+  test run): the **Invoice Khmer A5** print format itself, and its vendored images/fonts under
+  `klik_pos/public/images/invoice_khmer/` and `klik_pos/public/fonts/`. It's a standard module
+  record shipped the same way as the two pre-existing formats this section already covers
+  (`DS POS Invoice KLiK`, `Thermal Printer PF`), so it should come back automatically the same
+  way - just hasn't been through the from-scratch install test those two already passed. Verify
+  this at the next real fresh install, alongside step 0 above (the print format alone renders
+  wrong without the patched wkhtmltopdf, independent of whether the format record itself synced
+  correctly).
 
 **Note on Invoice Ref**: `custom_invoice_ref` (the booklet page-number field almost everything in
 Modules 15-17 depends on) and the `Delivery Bot` role/permissions were BOTH found missing from the
@@ -34,6 +43,31 @@ app's own code during this audit - they'd been created directly on `hd.phirun.me
 point, invisible to any fixture. Both are now fixed in `klik_pos/setup/install.py`
 (`ensure_sales_invoice_invoice_ref_field`, `ensure_delivery_bot_role`) and verified idempotent
 against the live site (no data disruption) and correct on a fresh install.
+
+**2026-08-09 addendum**: added the "Invoice Khmer A5" print format section below (the physical-form
+POS invoice, used for the POS print button, the POS preview panel, and the Telegram invoice image)
+and, critically, a **server-level prerequisite** it depends on that a fresh machine will not have -
+see step 0.
+
+## Server prerequisite - do this BEFORE anything else on a new machine
+0. **Patched-Qt wkhtmltopdf.** Ubuntu/Debian's `apt install wkhtmltopdf` ships an **unpatched-Qt**
+   build that silently ignores `--disable-smart-shrinking` (and several other flags) - Frappe
+   requests that flag on every PDF render, and without it WebKit's legacy print "shrink to fit"
+   behaviour stays on and uniformly compresses any print format built with absolute/physical CSS
+   units (mm-based positioning, fixed row heights - exactly what "Invoice Khmer A5" is). The
+   symptom is a PDF that is the correct physical page size but whose content is squeezed into a
+   fraction of it. Standard fix, confirmed working:
+   ```
+   curl -LO https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+   sudo dpkg -i wkhtmltox_0.12.6.1-3.jammy_amd64.deb
+   sudo apt-get install -f -y   # pulls in missing deps, dpkg -i alone will report an error first
+   wkhtmltopdf --version        # must print "(with patched qt)"
+   ```
+   Installs to `/usr/local/bin/`, ahead of `/usr/bin/` on `$PATH`, so it takes over without
+   removing the apt package - revert with `sudo rm /usr/local/bin/wkhtmltopdf
+   /usr/local/bin/wkhtmltoimage`. No print format other than "Invoice Khmer A5" happens to need
+   this today, but every future print format built with physical mm/in units will hit the same bug
+   without it.
 
 ## Manual steps required after a fresh install (data entry / external config, not code)
 1. **ERPNext Setup Wizard** - Company, default Warehouse, Fiscal Year, Chart of Accounts, Cost
@@ -47,6 +81,12 @@ against the live site (no data disruption) and correct on a fresh install.
    - Google Maps Map ID (`custom_google_maps_map_id`) - optional, enables smooth vector-rendered
      zoom on the Live Delivery Map; leave blank to keep classic raster tiles (still fully
      functional, just without smooth zoom transitions)
+   - **Print Format** and **Telegram Print Format** (`print_format` and `custom_pos_printformat`)
+     - both to **`Invoice Khmer A5`** for the physical-form POS invoice (requires step 0 above)
+   - Set a **short Sales Invoice naming series** (e.g. `HD-.#####.`) on this fresh site rather than
+     keeping the long default (`ACC-SINV-.YYYY.-`) - "Invoice Khmer A5" prints the full docname as
+     the invoice's `N°` and encodes it in the QR code, and a short series keeps that number
+     speakable/writable on the physical form the way the old paper booklet number was
 3. **Warehouse shop location** - set Shop Latitude/Shop Longitude (Stock → Warehouse) on whichever
    warehouse(s) your POS Profiles use, if you want shop pin(s) on the Live Delivery Map
 4. **Booklet Settings** - confirm/set `pages_per_booklet` (defaults to 50 if left blank),
