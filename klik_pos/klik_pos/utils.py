@@ -144,15 +144,18 @@ def get_plain_item_description(description_html):
 	return "\n".join(lines)
 
 
-def estimate_description_slots(plain_text, chars_per_line=55, lines_per_slot=2):
+def estimate_description_slots(plain_text, chars_per_line=40, lines_per_slot=2):
 	"""Rough, deliberately conservative estimate of how many item-row "slots" (see
 	paginate_invoice_items) a plain-text description will need once wrapped in the print format.
 
-	Used ONLY to decide how many items fit on a page - never to truncate the actual text. Business
-	requirement: a description (e.g. a custom roofing-sheet cutting spec the workshop prepares
-	from) must never be cut off, so undercounting characters-per-line here is the safe direction -
-	worst case it wastes a little blank space on the page, it never causes real content to not fit
-	where the layout expected it.
+	chars_per_line=40 matches the description cell's 11px font and 12mm left indent (132mm width
+	minus 12mm left / 4mm right padding). Used ONLY to decide how many items fit on a page - never
+	to truncate the actual text. Business requirement: a description (e.g. a custom roofing-sheet
+	cutting spec the workshop prepares from) must never be cut off, so undercounting
+	characters-per-line here is the safe direction - worst case it wastes a little blank space on
+	the page (an explicitly accepted tradeoff - a very long description occasionally using up a
+	whole page's worth of slots is fine), it never causes real content to not fit where the layout
+	expected it.
 	"""
 	import math
 
