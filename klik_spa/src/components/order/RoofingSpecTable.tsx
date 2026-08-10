@@ -1,7 +1,12 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import type { CartItem } from '../../../types';
 import { useCartStore } from '../../stores/cartStore';
+import { ConfirmDialog } from '../ui/ConfirmDialog';
+
+// A curved sheet (curve or end > 0) can never physically be fabricated with less than this much
+// straight length - see the "unformed" toggle and handleSpecChange below.
+const MIN_STRAIGHT_FOR_CURVED = 35;
 
 interface RoofingSpecTableProps {
   item: CartItem;
@@ -59,21 +64,56 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
     }
   }, [specs.length]);
 
-  const handleSpecChange = (index: number, field: string, value: number) => {
+  const handleSpecChange = (index: number, field: string, value: number | boolean) => {
     const newSpecs = [...specs];
-    newSpecs[index] = { ...newSpecs[index], [field]: value };
+    const updated: any = { ...newSpecs[index], [field]: value };
+
+    // A row is curved once curve or end is set. A curved row can never be unformed (unformed/laat
+    // is a straight-sheet-only concept) and physically needs at least MIN_STRAIGHT_FOR_CURVED cm
+    // of straight length to fabricate - auto-correct both rather than let an invalid combination
+    // sit in the data. This fires whichever field was just edited (straight, curve, or end), so
+    // both edit directions are covered in one place.
+    const isCurved = (Number(updated.curve) || 0) > 0 || (Number(updated.end) || 0) > 0;
+    if (isCurved) {
+      updated.unformed = false;
+      if ((Number(updated.straight) || 0) < MIN_STRAIGHT_FOR_CURVED) {
+        updated.straight = MIN_STRAIGHT_FOR_CURVED;
+      }
+    }
+
+    newSpecs[index] = updated;
     saveSpecs(newSpecs);
   };
 
+  // "Unformed" (លាត - raw sheet, not yet roll-formed) only ever applies to a straight row, and
+  // turning it ON is a deliberate business decision the cashier should confirm rather than a
+  // one-tap accident - see confirmUnformedRow below, which is what actually flips the flag.
+  const [unformedConfirmRow, setUnformedConfirmRow] = useState<number | null>(null);
+
+  const requestUnformedToggle = (index: number, next: boolean) => {
+    if (next) {
+      setUnformedConfirmRow(index);
+    } else {
+      handleSpecChange(index, 'unformed', false);
+    }
+  };
+
+  const confirmUnformedRow = () => {
+    if (unformedConfirmRow !== null) {
+      handleSpecChange(unformedConfirmRow, 'unformed', true);
+    }
+    setUnformedConfirmRow(null);
+  };
+
   const addSpec = () => {
-    saveSpecs([...specs, { straight: 0, curve: 0, end: 0, quantity: 1 }]);
+    saveSpecs([...specs, { straight: 0, curve: 0, end: 0, quantity: 1, unformed: false }]);
   };
 
   // Inserts directly below rowIndex (not necessarily at the end of the table) and arranges for
   // its Straight cell to get focus once it exists.
   const insertRowAfter = (rowIndex: number) => {
     const newSpecs = [...specs];
-    newSpecs.splice(rowIndex + 1, 0, { straight: 0, curve: 0, end: 0, quantity: 1 });
+    newSpecs.splice(rowIndex + 1, 0, { straight: 0, curve: 0, end: 0, quantity: 1, unformed: false });
     pendingFocusRowRef.current = rowIndex + 1;
     saveSpecs(newSpecs);
   };
@@ -137,8 +177,11 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
           }
           descriptionLines.push(`កោង (${parts.join('+')}): ${totalLength} x ${qty} = ${lineMeters}m`);
         } else {
-          // Straight Sheet: ត្រង់ 350 x 10 = 35m
-          descriptionLines.push(`ត្រង់ ${straight} x ${qty} = ${lineMeters}m`);
+          // Straight Sheet: ត្រង់ 350 x 10 = 35m - or លាត (unformed/raw, not yet roll-formed)
+          // instead of ត្រង់ when the cashier has flagged this row as such. Label only - same
+          // formula either way.
+          const label = spec.unformed ? 'លាត' : 'ត្រង់';
+          descriptionLines.push(`${label} ${straight} x ${qty} = ${lineMeters}m`);
         }
       }
     });
@@ -176,6 +219,7 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
           <table className="min-w-full text-left text-xs">
             <thead className="bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
               <tr>
+                <th className="px-2 py-2 font-medium w-8 text-center" title="Unformed (លាត) - raw sheet, not yet roll-formed">លាត</th>
                 <th className="px-2 py-2 font-medium w-8 text-center">No</th>
                 <th className="px-2 py-2 font-medium">Straight</th>
                 <th className="px-2 py-2 font-medium">Curve</th>
@@ -185,8 +229,20 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-600">
-              {specs.map((spec, index) => (
+              {specs.map((spec, index) => {
+                const isCurvedRow = (Number(spec.curve) || 0) > 0 || (Number(spec.end) || 0) > 0;
+                return (
                 <tr key={index} className="bg-white dark:bg-gray-700">
+                  <td className="px-2 py-1 text-center">
+                    <input
+                      type="checkbox"
+                      checked={!!spec.unformed}
+                      disabled={isCurvedRow}
+                      onChange={(e) => requestUnformedToggle(index, e.target.checked)}
+                      title={isCurvedRow ? "Not available for curved rows" : "Mark this row as unformed (លាត)"}
+                      className="w-4 h-4 disabled:opacity-30 disabled:cursor-not-allowed"
+                    />
+                  </td>
                   <td className="px-2 py-1 text-center font-medium text-gray-500 dark:text-gray-400">
                     {index + 1}
                   </td>
@@ -261,7 +317,8 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -279,7 +336,16 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
           <Plus size={16} /> Add Row
         </button>
       </div>
-      
+
+      <ConfirmDialog
+        isOpen={unformedConfirmRow !== null}
+        onClose={() => setUnformedConfirmRow(null)}
+        onConfirm={confirmUnformedRow}
+        title="Mark row as លាត (unformed)?"
+        message="This row will print as លាត instead of ត្រង់ - use this for a raw sheet sold before it's been roll-formed."
+        confirmText="Mark as លាត"
+        confirmButtonClass="bg-beveren-600 hover:bg-beveren-700 text-white"
+      />
     </div>
   );
 };

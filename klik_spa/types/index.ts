@@ -34,7 +34,7 @@ export interface CartItem {
   item_tax_rate?: Record<string, number>
   total_tax_rate?: number
   tax_templates?: TaxTemplate[]
-  custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number }>
+  custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number; unformed?: boolean }>
   custom_description?: string
 }
 
@@ -124,7 +124,7 @@ export interface MenuItem {
   variant_based_on?: string
   variant_count?: number
   variant_attributes?: Record<string, string>
-  custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number }>
+  custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number; unformed?: boolean }>
 }
 
 export interface Category {
