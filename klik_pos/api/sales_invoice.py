@@ -1762,6 +1762,15 @@ def parse_invoice_data(data):
 			"item_tax_rate": item_tax_rate,
 			"discountPercentage": discount_percentage,
 			"discountAmount": discount_amount,
+			# Roofing/AZ-coil spec table (RoofingSpecTable.tsx) - carried through to
+			# _add_roofing_spec_to_item/_add_description_to_item in _prepare_item_data. Without
+			# these two, every item built from this normalized dict silently lost its spec and
+			# generated description regardless of what the cart actually held - confirmed via
+			# production data: zero Sales Invoice Item rows ever had either field populated,
+			# across every invoice on the site, despite the frontend and _prepare_item_data both
+			# having full, correct support for them independently.
+			"custom_ds_roofing_spec": item.get("custom_ds_roofing_spec"),
+			"custom_description": item.get("custom_description"),
 		})
 
 		price = flt(item.get("price") or 0)
