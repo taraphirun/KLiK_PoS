@@ -122,13 +122,23 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
         if (curve > 0 || end > 0) {
           // Curved Sheet: កោង (3.50m + 0.50m + 0.20m) x 10 = 42.00m
           const parts = [];
-          if (straight > 0) parts.push(`${(straight / 100).toFixed(2)}m`);
-          if (curve > 0) parts.push(`${(curve / 100).toFixed(2)}m`);
-          if (end > 0) parts.push(`${(end / 100).toFixed(2)}m`);
-          descriptionLines.push(`កោង (${parts.join(' + ')}) x ${qty} = ${lineMeters.toFixed(2)}m`);
+          let totalLength = 0;
+          if (straight > 0) {
+            parts.push(`${straight}`);
+            totalLength += straight;
+          }
+          if (curve > 0) {
+            parts.push(`${curve}`);
+            totalLength += curve;
+          }
+          if (end > 0) {
+            parts.push(`${end}`);
+            totalLength += end;
+          }
+          descriptionLines.push(`កោង (${parts.join('+')}): ${totalLength} x ${qty} = ${lineMeters}m`);
         } else {
-          // Straight Sheet: ត្រង់ 3.50m x 10 = 35.00m
-          descriptionLines.push(`ត្រង់ ${(straight / 100).toFixed(2)}m x ${qty} = ${lineMeters.toFixed(2)}m`);
+          // Straight Sheet: ត្រង់ 350 x 10 = 35m
+          descriptionLines.push(`ត្រង់ ${straight} x ${qty} = ${lineMeters}m`);
         }
       }
     });
