@@ -33,9 +33,9 @@ No action needed - confirmed via the fresh install test:
   record shipped the same way as the two pre-existing formats this section already covers
   (`DS POS Invoice KLiK`, `Thermal Printer PF`), so it should come back automatically the same
   way - just hasn't been through the from-scratch install test those two already passed. Verify
-  this at the next real fresh install, alongside step 0 above (the print format alone renders
-  wrong without the patched wkhtmltopdf, independent of whether the format record itself synced
-  correctly).
+  this at the next real fresh install, alongside step 0 above (chromium auto-downloads on first
+  use, independent of whether the format record itself synced correctly - see step 0's note on
+  first-render delay).
 
 **Note on Invoice Ref**: `custom_invoice_ref` (the booklet page-number field almost everything in
 Modules 15-17 depends on) and the `Delivery Bot` role/permissions were BOTH found missing from the
@@ -50,13 +50,28 @@ and, critically, a **server-level prerequisite** it depends on that a fresh mach
 see step 0.
 
 ## Server prerequisite - do this BEFORE anything else on a new machine
-0. **Patched-Qt wkhtmltopdf.** Ubuntu/Debian's `apt install wkhtmltopdf` ships an **unpatched-Qt**
-   build that silently ignores `--disable-smart-shrinking` (and several other flags) - Frappe
-   requests that flag on every PDF render, and without it WebKit's legacy print "shrink to fit"
-   behaviour stays on and uniformly compresses any print format built with absolute/physical CSS
-   units (mm-based positioning, fixed row heights - exactly what "Invoice Khmer A5" is). The
-   symptom is a PDF that is the correct physical page size but whose content is squeezed into a
-   fraction of it. Standard fix, confirmed working:
+0. **"Invoice Khmer A5" uses `pdf_generator: chrome`** (Print Format field), not wkhtmltopdf -
+   chosen over wkhtmltopdf specifically because wkhtmltopdf's WebKit has poor complex-script text
+   shaping for Khmer (stacked vowel signs/subscript consonants render malformed - visible as a
+   stray floating mark on affected syllables), which chrome's modern text engine handles
+   correctly. Two things this needs on a fresh machine:
+   - **Chromium auto-downloads** the first time anything renders with `pdf_generator: chrome`
+     (`frappe.utils.print_utils.find_or_download_chromium_executable`, into `<bench>/chromium/`) -
+     needs outbound internet access from the server and takes a few extra seconds on that first
+     render only. Nothing to run manually; just don't be surprised by the first request being slow.
+   - `chromium_start_timeout` in `common_site_config.json` may need raising from Frappe's default
+     (3s) - this bench needed 20s for Chromium to be ready in time, timing out otherwise on
+     `frappe.utils.pdf_generator.chrome_pdf_generator`'s `TimeoutError: Chromium took too long to
+     start.` If PDFs intermittently fail with that error on a fresh machine, raise this value.
+
+   **Also install patched-Qt wkhtmltopdf anyway**, even though "Invoice Khmer A5" no longer uses
+   it: Ubuntu/Debian's `apt install wkhtmltopdf` ships an **unpatched-Qt** build that silently
+   ignores `--disable-smart-shrinking` (and several other flags) - Frappe requests that flag on
+   every wkhtmltopdf render, and without it WebKit's legacy print "shrink to fit" behaviour stays
+   on and uniformly compresses any print format built with absolute/physical CSS units. This bit
+   this print format hard before it was switched to chrome, and will bite any *other* future print
+   format built the same way if it's left on the distro-packaged binary. Standard fix, confirmed
+   working:
    ```
    curl -LO https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.jammy_amd64.deb
    sudo dpkg -i wkhtmltox_0.12.6.1-3.jammy_amd64.deb
@@ -65,9 +80,7 @@ see step 0.
    ```
    Installs to `/usr/local/bin/`, ahead of `/usr/bin/` on `$PATH`, so it takes over without
    removing the apt package - revert with `sudo rm /usr/local/bin/wkhtmltopdf
-   /usr/local/bin/wkhtmltoimage`. No print format other than "Invoice Khmer A5" happens to need
-   this today, but every future print format built with physical mm/in units will hit the same bug
-   without it.
+   /usr/local/bin/wkhtmltoimage`.
 
 ## Manual steps required after a fresh install (data entry / external config, not code)
 1. **ERPNext Setup Wizard** - Company, default Warehouse, Fiscal Year, Chart of Accounts, Cost
