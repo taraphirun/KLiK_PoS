@@ -124,6 +124,31 @@ def ensure_pos_print_format_field():
     )
 
 
+def ensure_network_printer_field():
+    """Create the POS Profile field that lets a register print silently to a network/USB
+    printer registered in Frappe core's own "Network Printer Settings" (CUPS-backed,
+    frappe.utils.print_format.print_by_server) instead of the browser's print dialog. Left
+    blank, the POS print button keeps its existing hidden-iframe + window.print() behaviour
+    unchanged - this is opt-in per profile, not a replacement.
+    """
+    if frappe.db.exists("Custom Field", "POS Profile-custom_network_printer"):
+        return
+
+    create_custom_field(
+        "POS Profile",
+        {
+            "fieldname": "custom_network_printer",
+            "label": "Network Printer",
+            "fieldtype": "Link",
+            "options": "Network Printer Settings",
+            "insert_after": "custom_pos_printformat",
+            "module": "KLiK PoS",
+            "description": "If set, the POS print button sends the invoice straight to this printer server-side (no browser print dialog). Requires a Network Printer Settings record (Frappe core) and pycups installed on the server. Leave blank to keep the browser's own print dialog.",
+        },
+        ignore_validate=True,
+    )
+
+
 def ensure_sales_invoice_invoice_ref_field():
     """Sales Invoice field holding the physical paper invoice/booklet page number - the single
     most load-bearing field across the whole delivery/booklet feature set (Modules 15-17:
@@ -409,6 +434,7 @@ def after_install():
     ensure_stock_reservation_is_enabled()
     ensure_az_coil_custom_fields()
     ensure_pos_print_format_field()
+    ensure_network_printer_field()
     ensure_sales_invoice_invoice_ref_field()
     ensure_delivery_reconciliation_fields()
     ensure_google_maps_api_key_field()

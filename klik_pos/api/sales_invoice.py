@@ -935,6 +935,59 @@ def mark_invoice_as_printed(invoice_name):
 
 
 @frappe.whitelist()
+def print_invoice_via_network_printer(invoice_name):
+	"""Print a Sales Invoice straight to the current POS Profile's configured Network Printer -
+	no browser print dialog. Thin wrapper around Frappe core's own
+	frappe.utils.print_format.print_by_server (CUPS via pycups), which is exactly what Desk's own
+	print page uses for its "print without preview" feature - this just triggers it from the POS
+	SPA using the printer configured on POS Profile.custom_network_printer instead of a
+	per-browser localStorage choice, and reads the same print format the POS already prints with
+	(POS Profile.print_format) rather than requiring the caller to know it.
+
+	Network Printer Settings is normally restricted to System Manager/Desk User (see its own
+	doctype permissions), which a low-privilege cashier account may not have - a plain
+	frappe.get_doc() read (as done here and inside print_by_server itself) does not enforce that
+	ACL the way the REST API/Desk list view would, so this works for any logged-in POS user
+	without needing that doctype's permissions widened for a value an admin already chose on POS
+	Profile. Returns a clean {"success": False, "error": ...} on any failure (printer offline,
+	pycups missing, etc.) rather than a raw traceback, so the frontend can fall back to the
+	browser print dialog instead of leaving the cashier with nothing printed.
+	"""
+	from klik_pos.klik_pos.utils import get_current_pos_profile
+
+	try:
+		pos_profile = get_current_pos_profile()
+	except Exception as e:
+		return {"success": False, "error": str(e)}
+
+	printer_setting = pos_profile.get("custom_network_printer")
+	if not printer_setting:
+		return {"success": False, "error": "No Network Printer configured on this POS Profile"}
+
+	if not frappe.db.exists("Network Printer Settings", printer_setting):
+		return {"success": False, "error": f"Network Printer '{printer_setting}' no longer exists"}
+
+	print_format = pos_profile.get("print_format") or None
+
+	try:
+		from frappe.utils.print_format import print_by_server
+
+		print_by_server(
+			doctype="Sales Invoice",
+			name=invoice_name,
+			printer_setting=printer_setting,
+			print_format=print_format,
+			no_letterhead=1,
+		)
+		return {"success": True}
+	except Exception as e:
+		frappe.log_error(
+			frappe.get_traceback(), f"Error printing invoice {invoice_name} via network printer"
+		)
+		return {"success": False, "error": str(e)}
+
+
+@frappe.whitelist()
 def validate_checkout_invoice(data):
 	"""
 	Pre-validate invoice payload at checkout time without creating any document.

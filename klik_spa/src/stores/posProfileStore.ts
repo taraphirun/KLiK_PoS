@@ -47,6 +47,10 @@ export interface POSProfile {
   /** Default-on (Check field defaults to "1") - Live Delivery Map flies the camera to a brand new
    * delivery automatically unless explicitly unchecked on this POS Profile (2026-08-06). */
   custom_live_map_auto_focus?: boolean | number;
+  /** Network Printer Settings name (Frappe core doctype). If set, the POS print button sends the
+   * invoice straight to this printer server-side (frappe.utils.print_format.print_by_server via
+   * CUPS) instead of opening the browser's print dialog. Blank keeps the existing behaviour. */
+  custom_network_printer?: string;
   is_tax_included_in_basic_rate?: boolean | number | string;
   warehouse?: string;
   restrict_cost_visibility_in_tooltip?: boolean;
