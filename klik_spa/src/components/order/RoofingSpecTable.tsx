@@ -69,20 +69,37 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
     const updated: any = { ...newSpecs[index], [field]: value };
 
     // A row is curved once curve or end is set. A curved row can never be unformed (unformed/laat
-    // is a straight-sheet-only concept) and physically needs at least MIN_STRAIGHT_FOR_CURVED cm
-    // of straight length to fabricate - auto-correct both rather than let an invalid combination
-    // sit in the data. This fires whichever field was just edited (straight, curve, or end), so
-    // both edit directions are covered in one place.
+    // is a straight-sheet-only concept) - clear that unconditionally, on every edit, since it's a
+    // single keystroke-free flip either way.
     const isCurved = (Number(updated.curve) || 0) > 0 || (Number(updated.end) || 0) > 0;
     if (isCurved) {
       updated.unformed = false;
-      if ((Number(updated.straight) || 0) < MIN_STRAIGHT_FOR_CURVED) {
-        updated.straight = MIN_STRAIGHT_FOR_CURVED;
-      }
+    }
+    // The MIN_STRAIGHT_FOR_CURVED floor is enforced on blur (handleStraightBlur below), not here -
+    // clamping mid-typing broke entering any value under 100: typing "150" digit-by-digit hits "1"
+    // first, which is below the minimum, so it got silently rewritten to 35 before "5" and "0"
+    // could ever be typed. Only re-clamp here when curve/end (not straight itself) is the field
+    // that just changed, so a row that *becomes* curved while straight is still at its old blank/
+    // low value gets corrected immediately rather than sitting invalid until the cashier happens
+    // to touch the straight field again.
+    if (isCurved && field !== 'straight' && (Number(updated.straight) || 0) < MIN_STRAIGHT_FOR_CURVED) {
+      updated.straight = MIN_STRAIGHT_FOR_CURVED;
     }
 
     newSpecs[index] = updated;
     saveSpecs(newSpecs);
+  };
+
+  // Companion to the note above: catches the case handleSpecChange deliberately skips - the
+  // cashier editing `straight` itself on an already-curved row. Runs once when they leave the
+  // field, so mid-typing values are never fought.
+  const handleStraightBlur = (index: number) => {
+    const spec = specs[index];
+    if (!spec) return;
+    const isCurved = (Number(spec.curve) || 0) > 0 || (Number(spec.end) || 0) > 0;
+    if (isCurved && (Number(spec.straight) || 0) < MIN_STRAIGHT_FOR_CURVED) {
+      handleSpecChange(index, 'straight', MIN_STRAIGHT_FOR_CURVED);
+    }
   };
 
   // "Unformed" (លាត - raw sheet, not yet roll-formed) only ever applies to a straight row, and
@@ -256,6 +273,7 @@ export const RoofingSpecTable: React.FC<RoofingSpecTableProps> = ({ item, onUpda
                       onChange={(e) => handleSpecChange(index, 'straight', Number(e.target.value))}
                       onKeyDown={(e) => handleDecimalKey(e, index, 0)}
                       onFocus={handleInputFocus}
+                      onBlur={() => handleStraightBlur(index)}
                       autoComplete="off"
                       className="zoom-on-focus w-full px-1 py-1 border border-gray-300 dark:border-gray-500 rounded text-center bg-transparent text-base text-gray-900 dark:text-white"
                       placeholder="0"
