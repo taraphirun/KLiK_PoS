@@ -200,8 +200,15 @@ def paginate_invoice_items(items, slots_per_page=14):
 		# when it actually adds information beyond the name already printed in this row.
 		if plain_desc and plain_desc.strip() == (it.item_name or "").strip():
 			plain_desc = ""
+		# Numbered "1. 2. 3. ..." per line, e.g. a roofing spec's rows - each line is one
+		# distinct measurement/instruction, so a number ties the printed line back to the row
+		# the cashier entered it as.
 		display_desc = (
-			"<br>".join(html_module.escape(ln) for ln in plain_desc.split("\n")) if plain_desc else ""
+			"<br>".join(
+				f"{i}. {html_module.escape(ln)}" for i, ln in enumerate(plain_desc.split("\n"), start=1)
+			)
+			if plain_desc
+			else ""
 		)
 		prepared.append(
 			{"item": it, "description": display_desc, "slots": 1 + estimate_description_slots(plain_desc)}
