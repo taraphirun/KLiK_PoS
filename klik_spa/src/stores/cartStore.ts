@@ -43,6 +43,15 @@ const hasFiniteAvailableStock = (item: { available?: number; is_stock_item?: boo
   if (item.is_stock_item === false) {
     return false;
   }
+  // Stock Settings > Allow Negative Stock is a backend-wide setting - once it's on, the backend
+  // itself will happily let a Sales Invoice push a bin below zero, so this cart-side guard (out-
+  // of-stock blocking, "only N available" capping) has nothing left to enforce and must get out
+  // of the way. Without this, turning the setting on server-side did nothing here: the cart kept
+  // refusing to add items sitting at 0 or negative `available`, since this check never looked at
+  // the setting at all.
+  if (usePOSProfileStore.getState().allowNegativeStock) {
+    return false;
+  }
   return typeof item.available === 'number' && Number.isFinite(item.available);
 };
 

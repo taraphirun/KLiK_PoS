@@ -238,7 +238,20 @@ def _cancel_sales_invoice_reservations(invoice_name):
 
 
 def _should_reserve_stock(doc):
-	return bool(getattr(doc, "reserve_stock", 0))
+	if not bool(getattr(doc, "reserve_stock", 0)):
+		return False
+	# Stock Reservation Entry is core ERPNext, and it always refuses to reserve more than actual
+	# on-hand qty (see validate_with_allowed_qty in erpnext's stock_reservation_entry.py) - that
+	# guard is NOT controlled by Stock Settings > Allow Negative Stock, so with reservation left on,
+	# turning that setting on to let the shop sell an item sitting at 0/negative stock would still
+	# hit "Insufficient stock to reserve" / "Cannot reserve more than Allowed Qty" here even though
+	# the sale itself is meant to be allowed now. Reservation exists to stop concurrent POS
+	# terminals overselling *finite* stock; once negative stock is explicitly allowed, that
+	# guarantee is moot for this invoice, so skip reservation entirely instead of letting it
+	# silently override the setting the shop just turned on.
+	if frappe.db.get_single_value("Stock Settings", "allow_negative_stock"):
+		return False
+	return True
 
 
 def _reserve_stock_for_queued_invoice(doc):

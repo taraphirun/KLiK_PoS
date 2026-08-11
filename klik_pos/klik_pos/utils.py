@@ -144,12 +144,15 @@ def get_plain_item_description(description_html):
 	return "\n".join(lines)
 
 
-def estimate_description_slots(plain_text, chars_per_line=36, lines_per_slot=2):
+def estimate_description_slots(plain_text, chars_per_line=30, lines_per_slot=2):
 	"""Rough, deliberately conservative estimate of how many item-row "slots" (see
 	paginate_invoice_items) a plain-text description will need once wrapped in the print format.
 
-	chars_per_line=36 matches the description cell's 12px font (same size as the item name) and
-	12mm left indent (132mm width minus 12mm left / 4mm right padding). Used ONLY to decide how
+	chars_per_line=30 matches the description cell's 14px font (same size as the item name) and
+	12mm left indent (132mm width minus 12mm left / 4mm right padding). Keep this in step with
+	that font-size: it was 36 while the cell was 12px, and scales inversely (36 * 12/14 ~= 30),
+	so bumping the font without dropping this number silently makes the estimate optimistic - the
+	one direction this must never err in, per the note below. Used ONLY to decide how
 	many items fit on a page - never
 	to truncate the actual text. Business requirement: a description (e.g. a custom roofing-sheet
 	cutting spec the workshop prepares from) must never be cut off, so undercounting
@@ -169,7 +172,23 @@ def estimate_description_slots(plain_text, chars_per_line=36, lines_per_slot=2):
 	return math.ceil(total_lines / lines_per_slot)
 
 
-def paginate_invoice_items(items, slots_per_page=14):
+def _get_az_coil_item_groups(pos_profile):
+	"""AZ Coil item groups configured on POS Profile.custom_az_coil_item_groups - the same table
+	cartStore.ts reads client-side (as `isAZCoilItem`) to decide which items get the roofing-spec
+	cart flow. Reused here so the print format's "only AZ Coil items get a description line" rule
+	agrees with what actually produced that description in the first place. Falls back to {"zn"}
+	when nothing is configured, matching cartStore.ts's own fallback.
+	"""
+	groups = set()
+	if pos_profile:
+		rows = frappe.get_all(
+			"KLiK AZ Coil Item Group", filters={"parent": pos_profile}, fields=["item_group"]
+		)
+		groups = {row.item_group.strip().lower() for row in rows if row.item_group}
+	return groups or {"zn"}
+
+
+def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 	"""Exposed to print-format Jinja templates (see hooks.py `jinja.methods`).
 
 	Splits Sales Invoice items into pages for the A5 print format ("Invoice Khmer A5"), whose
@@ -189,13 +208,23 @@ def paginate_invoice_items(items, slots_per_page=14):
 	A description is deliberately never truncated (see estimate_description_slots) - the estimate
 	just decides pagination, so the print format's own CSS must not clip it either (no
 	overflow:hidden on anything a description can land in).
+
+	`pos_profile` (the invoice's own `doc.pos_profile`, passed by the print format) gates the
+	description line to AZ Coil items only - business requirement: every other item just shows its
+	name, even if some other flow ever populates its `description` field. Pass None (e.g. from a
+	caller with no POS Profile in scope) to fall back to the {"zn"} default in
+	_get_az_coil_item_groups rather than showing no descriptions at all.
 	"""
 	import html as html_module
+
+	az_coil_groups = _get_az_coil_item_groups(pos_profile)
 
 	items = list(items or [])
 	prepared = []
 	for it in items:
-		plain_desc = get_plain_item_description(getattr(it, "description", None))
+		plain_desc = ""
+		if (it.item_group or "").strip().lower() in az_coil_groups:
+			plain_desc = get_plain_item_description(getattr(it, "description", None))
 		# ERPNext often defaults an item's description to its item_name verbatim - only show it
 		# when it actually adds information beyond the name already printed in this row.
 		if plain_desc and plain_desc.strip() == (it.item_name or "").strip():

@@ -23,6 +23,10 @@ export interface POSProfile {
   allow_zero_rate_sales?: boolean | number;
   allow_price_list_switching?: boolean | number;
   hide_unavailable_items?: boolean;
+  /** Stock Settings > Allow Negative Stock, forwarded onto pos_details by get_pos_details - it's
+   * a global single, not really a POS Profile field, but the cart's stock guard needs it client-
+   * side (see cartStore.ts's hasFiniteAvailableStock checks). */
+  allow_negative_stock?: boolean;
   custom_use_scanner_fully?: boolean;
   custom_hide_expected_amount?: boolean;
   write_off_limit?: number;
@@ -78,6 +82,7 @@ interface POSDetailsState {
   posProfiles: POSProfile[];
   useScannerOnly: boolean;
   hideUnavailableItems: boolean;
+  allowNegativeStock: boolean;
   scalePrefix: string;
   defaultView: 'grid' | 'list';
   currencySymbol: string;
@@ -124,6 +129,7 @@ export const usePOSProfileStore = create<POSDetailsState>()(
       posProfiles: [],
       useScannerOnly: false,
       hideUnavailableItems: false,
+      allowNegativeStock: false,
       scalePrefix: "",
       defaultView: "grid",
       currencySymbol: "$",
@@ -237,6 +243,7 @@ export const usePOSProfileStore = create<POSDetailsState>()(
             posDetails,
             useScannerOnly: posDetails?.custom_use_scanner_fully || false,
             hideUnavailableItems: posDetails?.hide_unavailable_items || false,
+            allowNegativeStock: posDetails?.allow_negative_stock || false,
             scalePrefix: posDetails?.custom_scale_barcodes_start_with || "",
             defaultView: posDetails?.custom_default_view === "List View" ? "list" : "grid",
             currencySymbol: posDetails?.currency_symbol || "$",
@@ -379,6 +386,7 @@ export const usePOSProfileStore = create<POSDetailsState>()(
           isInitialized: false,
           useScannerOnly: false,
           hideUnavailableItems: false,
+          allowNegativeStock: false,
           scalePrefix: "",
           defaultView: "grid",
           warehouse: null,
@@ -404,6 +412,7 @@ export const usePOSProfileStore = create<POSDetailsState>()(
             posDetails: updatedDetails,
             useScannerOnly: updatedDetails?.custom_use_scanner_fully || false,
             hideUnavailableItems: updatedDetails?.hide_unavailable_items || false,
+            allowNegativeStock: updatedDetails?.allow_negative_stock || false,
             scalePrefix: updatedDetails?.custom_scale_barcodes_start_with || "",
             defaultView: updatedDetails?.custom_default_view === "List View" ? "list" : "grid",
             currencySymbol: updatedDetails?.currency_symbol || "$",
@@ -431,6 +440,7 @@ export const usePOSProfileStore = create<POSDetailsState>()(
         posProfiles: state.posProfiles,
         useScannerOnly: state.useScannerOnly,
         hideUnavailableItems: state.hideUnavailableItems,
+        allowNegativeStock: state.allowNegativeStock,
         scalePrefix: state.scalePrefix,
         defaultView: state.defaultView,
         currencySymbol: state.currencySymbol,

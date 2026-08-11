@@ -10,6 +10,7 @@ import LoadingSpinner from "./LoadingSpinner";
 import type { MenuItem, CartItem, GiftCoupon } from "../../types";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { toast } from "react-toastify";
+import { isItemOutOfStock } from "../utils/stock";
 
 export default function RetailPOSLayout() {
   const [selectedCategory, setSelectedCategory] = useState("all");
@@ -67,7 +68,7 @@ export default function RetailPOSLayout() {
   };
 
   const handleAddToCart = (item: MenuItem) => {
-    if (item.is_stock_item !== false && item.available <= 0) return;
+    if (isItemOutOfStock(item)) return;
     if (useScannerOnly) {
       toast.info("Scanner-only mode: Use barcode scanner to add items");
       return;

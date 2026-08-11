@@ -1,6 +1,7 @@
 "use client"
 
 import type { MenuItem } from "../../types"
+import { isItemOutOfStock } from "../utils/stock"
 
 interface MenuItemCardProps {
   item: MenuItem
@@ -9,7 +10,7 @@ interface MenuItemCardProps {
 
 export default function MenuItemCard({ item, onAddToCart }: MenuItemCardProps) {
   const isServiceItem = item.is_stock_item === false
-  const isOutOfStock = item.is_stock_item !== false && item.available <= 0
+  const isOutOfStock = isItemOutOfStock(item)
 
   return (
     <div

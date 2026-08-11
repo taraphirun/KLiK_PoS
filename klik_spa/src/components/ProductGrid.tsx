@@ -11,6 +11,7 @@ import QuantityDialog from "./QuantityDialog";
 import { useCartStore } from "../stores/cartStore";
 import { usePOSProfileStore } from "../stores/posProfileStore";
 import { useSalespersonStore } from "../stores/salespersonStore";
+import { isItemOutOfStock } from "../utils/stock";
 
 
 interface ProductGridProps {
@@ -95,7 +96,7 @@ export default function ProductGrid({
   }, [addConcreteItemToCart]);
 
   const handleAddToCart = useCallback(async (item: MenuItem) => {
-    if (item.is_stock_item !== false && item.available <= 0) return;
+    if (isItemOutOfStock(item)) return;
     if (scannerOnly) return;
 
     if (requiresSalespersonPin) {
@@ -143,7 +144,7 @@ export default function ProductGrid({
   }, [inStockItems]);
 
   const openQuantityDialogForItem = useCallback((item: MenuItem) => {
-    if (item.is_stock_item !== false && item.available <= 0) return;
+    if (isItemOutOfStock(item)) return;
     if (scannerOnly) return;
 
     if (item.is_variant_template || item.has_variants) {

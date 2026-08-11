@@ -205,7 +205,11 @@ def get_pos_details():
         "currency_symbol": frappe.db.get_value("Currency", pos.currency, "symbol") or pos.currency,
         "is_zatca_enabled": is_zatca_enabled(),
         "default_customer": default_customer,
-        "current_opening_entry": current_opening_entry
+        "current_opening_entry": current_opening_entry,
+        # Stock Settings is a global single, not per-POS-Profile, but the cart's stock guard
+        # (cartStore.ts hasFiniteAvailableStock checks) needs it client-side to know whether
+        # zero/negative on-hand `available` should still block adding an item to the cart.
+        "allow_negative_stock": bool(frappe.db.get_single_value("Stock Settings", "allow_negative_stock")),
     })
 
     return details
