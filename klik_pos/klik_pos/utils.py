@@ -1,3 +1,5 @@
+import functools
+
 import frappe
 from frappe import _
 
@@ -172,6 +174,81 @@ def estimate_description_slots(plain_text, chars_per_line=30, lines_per_slot=2):
 	return math.ceil(total_lines / lines_per_slot)
 
 
+# --- Item-name shrink-to-fit -------------------------------------------------------------------
+# Geometry of the A5 print format's item-name cell, mirrored from its CSS. Keep in step with
+# .table-container (width: 132mm), .col-name (width: 38%) and the "table.items th, table.items td"
+# padding rule (0 4px) in the "Invoice Khmer A5" print format.
+_A5_TABLE_WIDTH_MM = 132
+_A5_COL_NAME_FRACTION = 0.38
+_A5_CELL_PADDING_PX = 4
+_PX_PER_MM = 96 / 25.4
+
+ITEM_NAME_MAX_FONT_PX = 14
+ITEM_NAME_MIN_FONT_PX = 8
+# PIL measures raw glyph advances; a browser adds its own hinting/subpixel rounding, so shave a
+# couple of px off the real cell width. Erring small means we shrink one step early (harmless),
+# rather than declaring a fit that the renderer then ellipsizes (the failure this exists to stop).
+_ITEM_NAME_SAFETY_PX = 2
+
+_ITEM_NAME_FONT = "KhmerOSbattambang.ttf"
+
+
+def _item_name_cell_width_px():
+	width_mm = _A5_TABLE_WIDTH_MM * _A5_COL_NAME_FRACTION
+	return width_mm * _PX_PER_MM - (2 * _A5_CELL_PADDING_PX) - _ITEM_NAME_SAFETY_PX
+
+
+@functools.lru_cache(maxsize=32)
+def _load_name_font(size_px):
+	"""Cached PIL font handle at one pixel size, or None if measurement isn't possible here.
+
+	Pillow ships with Frappe and this bench's build has raqm, so Khmer clusters (stacked vowel
+	signs/subscript consonants) shape and measure correctly rather than being counted as separate
+	advances. Returns None - never raises - if Pillow or the vendored font is unavailable, so a
+	print silently falls back to the plain 14px CSS rather than failing outright.
+	"""
+	try:
+		from PIL import ImageFont
+
+		return ImageFont.truetype(
+			frappe.get_app_path("klik_pos", "public", "fonts", _ITEM_NAME_FONT), size_px
+		)
+	except Exception:
+		return None
+
+
+@functools.lru_cache(maxsize=512)
+def fit_item_name_font_size(item_name):
+	"""Largest font size (px) at which `item_name` fits the A5 invoice's name cell on one line.
+
+	Steps down 14px -> 8px in 1px increments and returns the first size that fits, or None when the
+	name already fits at the default (the common case - the template then emits no inline style at
+	all and the plain .td-box CSS applies).
+
+	Measured against the real vendored font the print format loads, NOT estimated from character
+	count: these names mix Khmer with Latin/digits ("3.0c ... ISI Palm 50"), whose per-character
+	widths differ by more than 2x, so a character count is not a usable proxy for width here.
+
+	Returns ITEM_NAME_MIN_FONT_PX when even the floor doesn't fit - the name then still ellipsizes
+	via .td-box's existing overflow/text-overflow, which stays as the last-resort behaviour. This is
+	deliberately the only place that truncation can still happen, and only below 8px, where Khmer
+	subscript consonants stop being legible in print anyway.
+	"""
+	name = (item_name or "").strip()
+	if not name:
+		return None
+
+	limit = _item_name_cell_width_px()
+	for size in range(ITEM_NAME_MAX_FONT_PX, ITEM_NAME_MIN_FONT_PX - 1, -1):
+		font = _load_name_font(size)
+		if font is None:
+			return None  # no measurement available - leave the CSS default alone
+		box = font.getbbox(name)
+		if (box[2] - box[0]) <= limit:
+			return None if size == ITEM_NAME_MAX_FONT_PX else size
+	return ITEM_NAME_MIN_FONT_PX
+
+
 def _get_az_coil_item_groups(pos_profile):
 	"""AZ Coil item groups configured on POS Profile.custom_az_coil_item_groups - the same table
 	cartStore.ts reads client-side (as `isAZCoilItem`) to decide which items get the roofing-spec
@@ -214,6 +291,11 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 	name, even if some other flow ever populates its `description` field. Pass None (e.g. from a
 	caller with no POS Profile in scope) to fall back to the {"zn"} default in
 	_get_az_coil_item_groups rather than showing no descriptions at all.
+
+	Each row also carries `name_font_size` - a px size for that row's item name when it is too wide
+	for the name cell at the default 14px, else None. See fit_item_name_font_size. Shrinking is
+	per-row by design (a single long name does not pull the rest of the table down with it) and
+	never changes row height, so it has no effect on the slot math above.
 	"""
 	import html as html_module
 
@@ -240,7 +322,14 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 			else ""
 		)
 		prepared.append(
-			{"item": it, "description": display_desc, "slots": 1 + estimate_description_slots(plain_desc)}
+			{
+				"item": it,
+				"description": display_desc,
+				"slots": 1 + estimate_description_slots(plain_desc),
+				# None for the overwhelming majority of names (they fit at the default) - the
+				# template then emits no inline style and .td-box's own font-size applies.
+				"name_font_size": fit_item_name_font_size(getattr(it, "item_name", "")),
+			}
 		)
 
 	pages = []
@@ -253,7 +342,7 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 		remaining = slots_per_page - page_slots_used
 		while remaining > 0:
 			running_no += 1
-			page_rows.append({"no": running_no, "item": None, "description": ""})
+			page_rows.append({"no": running_no, "item": None, "description": "", "name_font_size": None})
 			remaining -= 1
 		pages.append(page_rows)
 		page_rows = []
@@ -263,7 +352,14 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 		if page_rows and page_slots_used + entry["slots"] > slots_per_page:
 			flush_page()
 		running_no += 1
-		page_rows.append({"no": running_no, "item": entry["item"], "description": entry["description"]})
+		page_rows.append(
+			{
+				"no": running_no,
+				"item": entry["item"],
+				"description": entry["description"],
+				"name_font_size": entry["name_font_size"],
+			}
+		)
 		page_slots_used += entry["slots"]
 
 	if page_rows or not pages:
