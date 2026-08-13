@@ -24,6 +24,11 @@ export interface CartItem {
   available?: number
   uom?: string
   item_code?: string
+  // Present at runtime on every cart row (spread in from MenuItem when added - see
+  // ProductGrid.tsx's addConcreteItemToCart) but was missing from this type, which made every
+  // `item.item_group` read (e.g. CartItemRow.tsx's isAZCoilItem check) an unsound `any`-typed
+  // access. Declared here to match reality and to type the AZ-Coil swap-product picker.
+  item_group?: string
   base_uom?: string
   conversion_factor?: number
   bundle_entries?: BundleEntry[]

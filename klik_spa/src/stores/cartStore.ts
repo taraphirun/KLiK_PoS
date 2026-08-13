@@ -1,12 +1,13 @@
 // stores/cartStore.ts
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { CartItem, GiftCoupon } from '../../types'
+import type { CartItem, GiftCoupon, MenuItem } from '../../types'
 import type { Customer } from '../types/customer'
 import { toast } from 'react-toastify'
 import { clearDraftInvoiceCache } from '../utils/draftInvoiceCache'
 import { usePOSProfileStore } from './posProfileStore'
 import { roundCurrency } from '../utils/currencyMath'
+import { isAZCoilItem } from '../utils/azCoil'
 
 interface SerialBatchEntry {
   serial_no?: string;
@@ -39,7 +40,7 @@ const roundToCurrencyPrecision = (value: number): number => {
   return roundCurrency(value);
 };
 
-const hasFiniteAvailableStock = (item: { available?: number; is_stock_item?: boolean }) => {
+export const hasFiniteAvailableStock = (item: { available?: number; is_stock_item?: boolean }) => {
   if (item.is_stock_item === false) {
     return false;
   }
@@ -141,6 +142,7 @@ interface CartState {
   refreshCartPricing: () => Promise<void>
   updateItemBundleEntries: (id: string, entries: SerialBatchEntry[]) => void
   updateCartItemField: <K extends keyof CartItem>(id: string, field: K, value: CartItem[K]) => void
+  changeCartItemProduct: (cartItemId: string, newItem: MenuItem) => Promise<void>
   setAdditionalDiscountAmount: (amount: number) => void
   setAdditionalDiscountPercentage: (percentage: number) => void
   setApplyDiscountOn: (value: string) => void
@@ -248,15 +250,7 @@ export const useCartStore = create<CartState>()(
           .reduce((sum, cartItem) => sum + cartItem.quantity, 0);
 
         const posDetails = usePOSProfileStore.getState().posDetails;
-        const azGroups = posDetails?.custom_az_coil_item_groups || [];
-        let groups: string[] = [];
-        if (typeof azGroups === 'string') {
-            groups = (azGroups as string).split(',').map((g: string) => g.trim().toLowerCase());
-        } else if (Array.isArray(azGroups)) {
-            groups = azGroups.map((g: any) => g.item_group?.toLowerCase()).filter(Boolean);
-        }
-        if (groups.length === 0) groups = ["zn"];
-        const isAZCoilItem = groups.includes((item as any).item_group?.toLowerCase() || "") || groups.includes(item.category?.toLowerCase() || "");
+        const isAZItem = isAZCoilItem(item as any, posDetails);
 
         if (hasFiniteAvailableStock(item) && item.available <= 0) {
           toast.error(`${item.name} is out of stock`);
@@ -264,7 +258,7 @@ export const useCartStore = create<CartState>()(
         }
 
         if (existingItem) {
-          if (isAZCoilItem) {
+          if (isAZItem) {
             toast.info(`Item already in cart. Expand it to adjust specifications.`);
             return;
           }
@@ -297,7 +291,7 @@ export const useCartStore = create<CartState>()(
             )
           }));
         } else {
-          const initialQty = isAZCoilItem ? 0 : 1;
+          const initialQty = isAZItem ? 0 : 1;
           const taxDetails = await fetchItemTaxDetails(
             incomingCode,
             customerId,
@@ -335,15 +329,7 @@ export const useCartStore = create<CartState>()(
           .reduce((sum, cartItem) => sum + cartItem.quantity, 0);
 
         const posDetails = usePOSProfileStore.getState().posDetails;
-        const azGroups = posDetails?.custom_az_coil_item_groups || [];
-        let groups: string[] = [];
-        if (typeof azGroups === 'string') {
-            groups = (azGroups as string).split(',').map((g: string) => g.trim().toLowerCase());
-        } else if (Array.isArray(azGroups)) {
-            groups = azGroups.map((g: any) => g.item_group?.toLowerCase()).filter(Boolean);
-        }
-        if (groups.length === 0) groups = ["zn"];
-        const isAZCoilItem = groups.includes((item as any).item_group?.toLowerCase() || "") || groups.includes(item.category?.toLowerCase() || "");
+        const isAZItem = isAZCoilItem(item as any, posDetails);
 
         if (hasFiniteAvailableStock(item) && item.available < quantity) {
           toast.error(`Only ${item.available} ${item.uom || 'units'} of ${item.name} available`);
@@ -351,7 +337,7 @@ export const useCartStore = create<CartState>()(
         }
 
         if (existingItem) {
-          if (isAZCoilItem) {
+          if (isAZItem) {
             toast.info(`Item already in cart. Expand it to adjust specifications.`);
             return;
           }
@@ -384,7 +370,7 @@ export const useCartStore = create<CartState>()(
             )
           }));
         } else {
-          const initialQty = isAZCoilItem ? 0 : quantity;
+          const initialQty = isAZItem ? 0 : quantity;
           const taxDetails = await fetchItemTaxDetails(
             incomingCode,
             customerId,
@@ -512,6 +498,77 @@ export const useCartStore = create<CartState>()(
             item.id === id ? { ...item, [field]: value } : item
           ),
         }))
+      },
+
+      // Swap the product on an existing cart row while keeping its row-specific work: quantity,
+      // and - the reason this exists - custom_ds_roofing_spec/custom_description (an AZ Coil
+      // item's roofing spec table). Without this, changing a cashier's mind about the product
+      // meant deleting the row and re-entering the whole spec table from scratch.
+      changeCartItemProduct: async (cartItemId, newItem) => {
+        const state = get();
+        const existingRow = state.cartItems.find((ci) => ci.id === cartItemId);
+        if (!existingRow) return;
+
+        const newId = newItem.item_code || newItem.id;
+        const collision = state.cartItems.find(
+          (ci) => ci.id !== cartItemId && (ci.item_code || ci.id) === newId
+        );
+        if (collision) {
+          toast.info(`${newItem.name} is already in the cart. Remove it first or edit that row instead.`);
+          return;
+        }
+
+        // Same stock guard addToCart/addToCartWithQuantity apply, respecting Stock Settings >
+        // Allow Negative Stock (hasFiniteAvailableStock returns false and both checks are skipped
+        // once that's on). Compared against the row's existing quantity, not 1/incoming qty - a
+        // swap keeps whatever meters/units the roofing spec already committed the row to.
+        if (hasFiniteAvailableStock(newItem) && (newItem.available ?? 0) <= 0) {
+          toast.error(`${newItem.name} is out of stock`);
+          return;
+        }
+        if (hasFiniteAvailableStock(newItem) && existingRow.quantity > (newItem.available ?? 0)) {
+          toast.error(`Only ${newItem.available} ${newItem.uom || 'units'} of ${newItem.name} available`);
+          return;
+        }
+
+        const customerId = state.selectedCustomer?.id;
+        const taxDetails = await fetchItemTaxDetails(
+          newId,
+          customerId,
+          existingRow.quantity || 1,
+          newItem.uom,
+        );
+
+        set((state) => ({
+          cartItems: state.cartItems.map((ci) =>
+            ci.id === cartItemId
+              ? {
+                  ...ci,
+                  ...newItem,
+                  item_code: newItem.item_code || newItem.id,
+                  id: newId,
+                  // Row-specific state that must survive the swap - everything else above comes
+                  // fresh from the newly picked product.
+                  quantity: ci.quantity,
+                  bundle_entries: ci.bundle_entries,
+                  custom_ds_roofing_spec: ci.custom_ds_roofing_spec,
+                  custom_description: ci.custom_description,
+                  item_tax_template: taxDetails.item_tax_template,
+                  item_tax_rate: taxDetails.item_tax_rate,
+                  tax_templates: taxDetails.tax_templates,
+                  total_tax_rate: taxDetails.total_tax_rate,
+                  // Any manual rate/discount override was against the old product's price -
+                  // refreshCartPricing below re-derives these against the new item_code.
+                  original_price: undefined,
+                  discount_amount: undefined,
+                  discount_percentage: undefined,
+                  custom_rate: undefined,
+                }
+              : ci
+          )
+        }));
+
+        await get().refreshCartPricing();
       },
 
       setAdditionalDiscountAmount: (amount) => set({ additionalDiscountAmount: amount }),

@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
-import { Minus, Plus, X, Copy, Package, ChevronDown, ChevronUp, AlertTriangle, Eye } from "lucide-react";
+import { Minus, Plus, X, Copy, Package, ChevronDown, ChevronUp, AlertTriangle, Eye, Repeat } from "lucide-react";
 import { toast } from "react-toastify";
-import type { BundleEntry, CartItem } from "../../../types";
+import type { BundleEntry, CartItem, MenuItem } from "../../../types";
 import { QuantityInput } from "./QuantityInput";
 import { formatCurrencyWithSymbol } from "../../utils/currency";
 import { UOMSelectField } from "./UOMSelectField";
@@ -13,6 +13,8 @@ import ProductDetailsModal from "../ProductDetailsModal";
 import { getEffectiveDisplayRate, getEffectiveItemRate, getExclusiveTaxRateForItem } from "../../utils/cartPricing";
 import { roundCurrency } from "../../utils/currencyMath";
 import { RoofingSpecTable } from "./RoofingSpecTable";
+import { SwapAZProductModal } from "./SwapAZProductModal";
+import { isAZCoilItem as checkIsAZCoilItem } from "../../utils/azCoil";
 
 interface CartItemRowProps {
   item: CartItem;
@@ -105,10 +107,11 @@ export const CartItemRow = ({
   isMobile,
   autoFetchBatch = false,
 }: CartItemRowProps) => {
-  const { updateItemBundleEntries } = useCartStore();
+  const { updateItemBundleEntries, changeCartItemProduct } = useCartStore();
   const [showBundleModal, setShowBundleModal] = useState(false);
   const [isBundleDetailsOpen, setIsBundleDetailsOpen] = useState(false);
   const [showProductModal, setShowProductModal] = useState(false);
+  const [showSwapModal, setShowSwapModal] = useState(false);
   const [bundleEntries, setBundleEntries] = useState<BundleEntry[]>(() => {
     if (item.bundle_entries && Array.isArray(item.bundle_entries)) {
       return item.bundle_entries;
@@ -398,19 +401,12 @@ export const CartItemRow = ({
   const showStockWarning = item.quantity > availableStock && availableStock > 0;
   const showNoStockWarning = availableStock === 0;
 
-  const isAZCoilItem = (() => {
-    const azGroups = posDetails?.custom_az_coil_item_groups || [];
-    let groups: string[] = [];
-    if (typeof azGroups === 'string') {
-        groups = (azGroups as string).split(',').map((g: string) => g.trim().toLowerCase());
-    } else if (Array.isArray(azGroups)) {
-        groups = azGroups.map((g: any) => g.item_group?.toLowerCase()).filter(Boolean);
-    }
-    
-    if (groups.length === 0) groups = ["zn"];
+  const isAZCoilItem = checkIsAZCoilItem(item, posDetails);
 
-    return groups.includes(item.item_group?.toLowerCase() || "") || groups.includes(item.category?.toLowerCase() || "");
-  })();
+  const handleSwapProduct = useCallback(async (newItem: MenuItem) => {
+    await changeCartItemProduct(item.id, newItem);
+    setShowSwapModal(false);
+  }, [item.id, changeCartItemProduct]);
 
   return (
     <>
@@ -461,6 +457,17 @@ export const CartItemRow = ({
                 </>
               )}
             </div>
+            {isAZCoilItem && (
+              <button
+                onClick={() => setShowSwapModal(true)}
+                className={`flex-shrink-0 ${
+                  isMobile ? "w-8 h-8" : "w-6 h-6"
+                } rounded-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-400 dark:text-gray-500 flex items-center justify-center hover:bg-beveren-50 dark:hover:bg-beveren-900/20 hover:border-beveren-200 dark:hover:border-beveren-800 hover:text-beveren-600 dark:hover:text-beveren-400 transition-colors`}
+                title="Change product (keeps roofing spec)"
+              >
+                <Repeat size={isMobile ? 16 : 12} />
+              </button>
+            )}
             <button
               onClick={() => onRemoveItem?.(item.id)}
               className={`flex-shrink-0 ${
@@ -937,6 +944,15 @@ export const CartItemRow = ({
           }}
           warehouse={warehouse}
           onClose={() => setShowProductModal(false)}
+        />
+      )}
+
+      {showSwapModal && (
+        <SwapAZProductModal
+          currentItem={item}
+          posDetails={posDetails}
+          onClose={() => setShowSwapModal(false)}
+          onSelect={handleSwapProduct}
         />
       )}
     </>
