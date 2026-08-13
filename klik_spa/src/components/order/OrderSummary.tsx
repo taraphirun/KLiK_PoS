@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useCartStore } from "../../stores/cartStore";
 import { useProductStore } from "../../stores/productStore";
 import { toast } from "react-toastify";
@@ -15,11 +15,13 @@ import {
   createDraftSalesInvoice,
   validateCheckoutInvoice,
 } from "../../services/salesInvoice";
-import { getOriginalDraftInvoiceId } from "../../utils/draftInvoiceCache";
+import { getOriginalDraftInvoiceId, loadCachedItemsToCart } from "../../utils/draftInvoiceCache";
+import { addDraftInvoiceToCart } from "../../utils/draftInvoiceToCart";
 import { CustomerSearchSection } from "./CustomerSearchSection";
 import CustomerLoyaltySummary from "./CustomerLoyaltySummary";
 import { CartItemRow } from "./CartItemRow";
 import { OrderSummaryFooter } from "./OrderSummaryFooter";
+import { HeldOrdersPopover } from "./HeldOrdersPopover";
 import { usePOSProfileStore } from "../../stores/posProfileStore";
 import { useSalespersonStore } from "../../stores/salespersonStore";
 import { getEffectiveDisplayRate, getEffectiveItemRate } from "../../utils/cartPricing";
@@ -59,6 +61,14 @@ export default function OrderSummary({
     "checkout" | "hold" | null
   >(null);
   const [customInvoiceRef, setCustomInvoiceRef] = useState("");
+  // Set when the cashier picked "hold current cart first" from the Held Orders panel while the
+  // cart already had items - holdCurrentOrder() picks this up once the hold actually succeeds
+  // (which may be immediate, or after the salesperson-pin modal) and resumes this invoice next.
+  // A ref, not state: requireSalespersonAndRun("hold") can call holdCurrentOrder() synchronously
+  // in the very same click handler that sets this, before a state update would have re-rendered -
+  // holdCurrentOrder's closure would then still see the old (null) state value. A ref has no such
+  // staleness; .current is always the latest write.
+  const pendingResumeAfterHoldRef = useRef<string | null>(null);
 
   const { posDetails } = usePOSProfileStore();
   const { refreshStockOnly } = useProductStore();
@@ -345,12 +355,42 @@ export default function OrderSummary({
       if (result?.success) {
         handleClearCart();
         toast.success(originalDraftInvoiceId ? "Draft invoice updated and order held successfully!" : "Draft invoice created and order held successfully!");
+        if (pendingResumeAfterHoldRef.current) {
+          const resumeId = pendingResumeAfterHoldRef.current;
+          pendingResumeAfterHoldRef.current = null;
+          await resumeHeldOrder(resumeId);
+        }
+      } else {
+        // Hold didn't actually succeed - don't leave a stale resume armed for some later,
+        // unrelated successful hold to pick up.
+        pendingResumeAfterHoldRef.current = null;
       }
     } catch (error) {
+      pendingResumeAfterHoldRef.current = null;
       toast.error(extractErrorFromException(error, "Failed to create draft invoice"));
     } finally {
       setIsHoldingOrder(false);
     }
+  };
+
+  // Loads a held (Draft) invoice straight into the current cart, replacing whatever is there.
+  // Caller (HeldOrdersPopover) is responsible for making sure that's actually the desired outcome
+  // - either the cart was already empty, or the cashier explicitly chose to discard/hold it first.
+  const resumeHeldOrder = async (invoiceId: string) => {
+    const cached = await addDraftInvoiceToCart(invoiceId);
+    if (!cached) return;
+    await loadCachedItemsToCart();
+    toast.success("Held order resumed");
+  };
+
+  const handleHoldThenResume = (invoiceId: string) => {
+    if (!validateCustomer()) {
+      // holdCurrentOrder itself would also refuse without a customer - bail out before arming
+      // the ref for a hold that's never actually going to fire.
+      return;
+    }
+    pendingResumeAfterHoldRef.current = invoiceId;
+    void requireSalespersonAndRun("hold");
   };
 
   const requireSalespersonAndRun = async (action: "checkout" | "hold") => {
@@ -532,6 +572,21 @@ export default function OrderSummary({
         </div>
       </div>
 
+      {/* Always visible (not gated on cart having items) - resuming a held order is exactly
+          what a cashier needs when the cart is currently empty. */}
+      <div
+        className={`${
+          isMobile ? "flex-shrink-0 px-3 pt-2" : "px-4 pt-3"
+        } bg-white dark:bg-gray-800 border-t border-gray-100 dark:border-gray-700`}
+      >
+        <HeldOrdersPopover
+          cartHasItems={cartItems.length > 0}
+          onResume={resumeHeldOrder}
+          onHoldThenResume={handleHoldThenResume}
+          currency_symbol={currency_symbol}
+        />
+      </div>
+
       {cartItems.length > 0 && (
         <OrderSummaryFooter
           subtotal={subtotal}
@@ -573,6 +628,9 @@ export default function OrderSummary({
         onClose={() => {
           setShowSalespersonAuthModal(false);
           setPendingSalespersonAction(null);
+          // Cashier dismissed without authenticating - the armed hold never runs, so don't
+          // let a stale resume fire on some later, unrelated successful hold.
+          pendingResumeAfterHoldRef.current = null;
         }}
         onAuthenticated={handleSalespersonAuthenticated}
         allowDismiss
