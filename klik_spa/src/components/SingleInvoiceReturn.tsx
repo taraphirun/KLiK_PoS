@@ -12,7 +12,13 @@ import { toast } from "react-toastify";
 import { formatCurrencyWithSymbol, getCurrencySymbol } from "../utils/currency";
 import { usePOSProfileStore } from "../stores/posProfileStore";
 import { usePaymentModes } from "../hooks/usePaymentModes";
-import { createPartialReturn, getReturnedQty, type ReturnItem } from "../services/returnService";
+import {
+  createPartialReturn,
+  getReturnContext,
+  getReturnedQty,
+  type ReturnItem,
+  type ReturnOutcome,
+} from "../services/returnService";
 import { getInvoiceDetails } from "../services/salesInvoice";
 
 interface SingleInvoiceReturnProps {
@@ -48,52 +54,32 @@ export default function SingleInvoiceReturn({
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>("");
   const [returnAmount, setReturnAmount] = useState<number>(0);
 
+  // How the return is settled (phase-17 §2c). refundable = money actually received
+  // against the original (server-computed - includes Payment Entries, excludes bill
+  // reductions), which caps cash/bank refunds; outstanding decides whether "reduce
+  // bill" is meaningful.
+  const [outcome, setOutcome] = useState<ReturnOutcome>("refund");
+  const [refundable, setRefundable] = useState<number>(0);
+  const [outstanding, setOutstanding] = useState<number>(0);
+
   useEffect(() => {
     if (isOpen && invoice) {
       initializeReturnItems();
     }
   }, [isOpen, invoice]);
 
-  // Update return amount when items change
+  // The refund is not freely choosable: it always equals the value of the returned
+  // items, capped at what was actually received (backend enforces the same rule). To
+  // refund less, the cashier reduces the return quantities. This replaces the old
+  // editable amount + write-off proration, which let refund and returned value silently
+  // disagree - the difference became store credit nobody chose (invoice 00179 case).
   useEffect(() => {
-    if (originalInvoicePaidAmount > 0) {
-      // Check if we should ignore writeoff on partial returns
-      const ignoreWriteoffOnPartialReturns = posDetails?.custom_ignore_write_off_on_partial_returns || false;
-
-      // Calculate return amount based on percentage of items being returned
-      const totalItemsAmount = returnItems.reduce((sum, item) => {
-        return sum + (item.qty * item.rate);
-      }, 0);
-
-      const returnedItemsAmount = returnItems.reduce((sum, item) => {
-        return sum + ((item.return_qty || 0) * item.rate);
-      }, 0);
-
-      // Check if this is a partial return (not all items are being returned)
-      const isPartialReturn = returnedItemsAmount < totalItemsAmount;
-
-      let calculatedReturnAmount;
-
-      if (ignoreWriteoffOnPartialReturns && isPartialReturn) {
-        // For partial returns when checkbox is ticked: ignore writeoff, use original item rates
-        calculatedReturnAmount = returnedItemsAmount;
-      } else {
-        // Original logic: Calculate percentage of items being returned
-        const returnPercentage = totalItemsAmount > 0 ? returnedItemsAmount / totalItemsAmount : 0;
-        // Apply the same percentage to the original paid amount (what customer actually paid)
-        calculatedReturnAmount = originalInvoicePaidAmount * returnPercentage;
-      }
-
-      // Round to 2 decimal places to avoid floating point precision issues
-      setReturnAmount(Math.round(calculatedReturnAmount * 100) / 100);
-    } else {
-      // Fallback to item-based calculation if paid amount is not available
-      const total = returnItems.reduce((sum, item) => {
-        return sum + ((item.return_qty || 0) * item.rate);
-      }, 0);
-      setReturnAmount(Math.round(total * 100) / 100);
-    }
-  }, [returnItems, originalInvoicePaidAmount, posDetails?.custom_ignore_write_off_on_partial_returns]);
+    const returnedItemsAmount = returnItems.reduce((sum, item) => {
+      return sum + ((item.return_qty || 0) * item.rate);
+    }, 0);
+    const rounded = Math.round(returnedItemsAmount * 100) / 100;
+    setReturnAmount(refundable > 0 ? Math.min(rounded, refundable) : rounded);
+  }, [returnItems, refundable]);
 
   // Set default payment method when payment modes are loaded
 
@@ -111,6 +97,13 @@ export default function SingleInvoiceReturn({
   const initializeReturnItems = async () => {
     setLoadingReturnData(true);
     try {
+
+      // Refund cap + outstanding from the server - drives which outcomes are offered.
+      const context = await getReturnContext(invoice.name || invoice.id);
+      const contextRefundable = context?.refundable ?? 0;
+      setRefundable(contextRefundable);
+      setOutstanding(context?.outstanding ?? 0);
+      setOutcome(contextRefundable > 0 ? "refund" : "reduce_bill");
 
       // Always fetch complete invoice details from backend to get accurate grand_total
       let invoiceWithItems = invoice;
@@ -221,10 +214,22 @@ export default function SingleInvoiceReturn({
       };
 
 
-      const result = await createPartialReturn(invoiceName, itemsToReturn, selectedPaymentMethod, returnAmount);
+      const result = await createPartialReturn(
+        invoiceName,
+        itemsToReturn,
+        selectedPaymentMethod,
+        returnAmount,
+        outcome
+      );
 
       if (result.success) {
-        toast.success(`Return created successfully (${selectedPaymentMethod})`);
+        const outcomeLabel =
+          outcome === "refund"
+            ? `refunded via ${selectedPaymentMethod || "original payment method"}`
+            : outcome === "reduce_bill"
+            ? "bill reduced"
+            : "kept as store credit";
+        toast.success(`Return created successfully (${outcomeLabel})`);
         onSuccess(result.returnInvoice!);
         onClose();
       } else {
@@ -303,18 +308,24 @@ export default function SingleInvoiceReturn({
                   </button>
                 </div>
                 <div className="text-right">
-                  {originalInvoicePaidAmount > 0 && totalReturnAmount !== returnAmount ? (
+                  {/* The refund-vs-return-value breakdown only means something for the
+                      refund outcome - for reduce_bill / store_credit the full returned
+                      value is credited and no "not refunded" remainder exists. */}
+                  {outcome === "refund" && originalInvoicePaidAmount > 0 && totalReturnAmount !== returnAmount ? (
                     <div className="text-xs font-medium text-gray-700 dark:text-gray-300">
                       <div className="flex justify-between items-center">
                         <span>Total Return Amount:</span>
                         <span>{formatCurrencyWithSymbol(totalReturnAmount, currency)}</span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span>Paid Amount:</span>
+                        <span>Refund Amount:</span>
                         <span>{formatCurrencyWithSymbol(returnAmount, currency)}</span>
                       </div>
                       <div className="flex justify-between items-center">
-                        <span className="text-orange-600 dark:text-red-400 font-semibold">Write-off:</span>
+                        {/* Only reachable when the return's value exceeds what was paid
+                            (partly-paid original) - that unpaid slice can't be refunded
+                            as cash; it clears the original bill's balance instead. */}
+                        <span className="text-orange-600 dark:text-red-400 font-semibold">Unpaid portion (clears this bill):</span>
                         <span className="text-orange-600 dark:text-red-400 font-semibold">
                           {formatCurrencyWithSymbol(totalReturnAmount - returnAmount, currency)}
                         </span>
@@ -325,7 +336,7 @@ export default function SingleInvoiceReturn({
                       {formatCurrencyWithSymbol(totalReturnAmount, currency)}
                     </div>
                   )}
-                  {originalInvoicePaidAmount > 0 && totalReturnAmount === returnAmount && (
+                  {outcome === "refund" && originalInvoicePaidAmount > 0 && totalReturnAmount === returnAmount && (
                     <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       Customer Paid: {formatCurrencyWithSymbol(originalInvoicePaidAmount, currency)}
                     </div>
@@ -470,60 +481,124 @@ export default function SingleInvoiceReturn({
         {/* Fixed Footer with Payment Methods and Return Button */}
         {hasItemsToReturn && (
           <div className="px-6 py-4 bg-gray-50 dark:bg-gray-700 border-t border-gray-200 dark:border-gray-600 flex-shrink-0">
-            {/* Payment Method Selection */}
+            {/* Return outcome (phase-17 §2c): where does the returned value go? */}
             <div className="mb-4">
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-                Payment Method for Return
+                Settle Return As
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Payment Method Selection */}
-                <div>
-                  <select
-                    value={selectedPaymentMethod}
-                    onChange={(e) => setSelectedPaymentMethod(e.target.value)}
-                    className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-beveren-500 focus:border-beveren-500 transition-colors"
-                    disabled={paymentModesLoading}
-                  >
-                    {paymentModesLoading ? (
-                      <option>Loading payment methods...</option>
-                    ) : (
-                      <>
-                        <option value="">{""}</option>
-                        {paymentModes.map((mode) => {
-                          const val = mode.mode_of_payment;
-                          return (
-                            <option key={val} value={val}>
-                              {val}
-                            </option>
-                          );
-                        })}
-                      </>
-                    )}
-                  </select>
-                </div>
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <button
+                  type="button"
+                  onClick={() => setOutcome("refund")}
+                  disabled={refundable <= 0}
+                  title={
+                    refundable <= 0
+                      ? "Nothing was paid on this invoice - no money to refund"
+                      : `Up to ${formatCurrencyWithSymbol(refundable, currency)} was received and can be refunded`
+                  }
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    outcome === "refund"
+                      ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
+                      : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
+                  } disabled:opacity-40 disabled:cursor-not-allowed`}
+                >
+                  Refund
+                  <span className="block text-xs font-normal">cash / bank back</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOutcome("reduce_bill")}
+                  disabled={outstanding <= 0}
+                  title={
+                    outstanding <= 0
+                      ? "This invoice has nothing outstanding to reduce"
+                      : `Reduces this invoice's unpaid ${formatCurrencyWithSymbol(outstanding, currency)}`
+                  }
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    outcome === "reduce_bill"
+                      ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
+                      : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
+                  } disabled:opacity-40 disabled:cursor-not-allowed`}
+                >
+                  Reduce Bill
+                  <span className="block text-xs font-normal">lower what's owed</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOutcome("store_credit")}
+                  disabled={refundable <= 0}
+                  title={
+                    refundable <= 0
+                      ? "Nothing was paid on this invoice - no money to convert into store credit"
+                      : `Up to ${formatCurrencyWithSymbol(refundable, currency)} of paid value can become store credit`
+                  }
+                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                    outcome === "store_credit"
+                      ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
+                      : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
+                  } disabled:opacity-40 disabled:cursor-not-allowed`}
+                >
+                  Store Credit
+                  <span className="block text-xs font-normal">use on other invoices</span>
+                </button>
+              </div>
 
-                {/* Return Amount Input with currency symbol */}
-                <div>
-                  <div className="relative">
-                    <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-500 dark:text-gray-400 text-sm">
-                      {currencySymbol}
-                    </span>
-                    <input
-                      type="number"
-                      value={returnAmount}
-                      onChange={(e) => {
-                        const value = parseFloat(e.target.value) || 0;
-                        // Round to 2 decimal places to avoid floating point precision issues
-                        setReturnAmount(Math.round(value * 100) / 100);
-                      }}
-                      step="0.01"
-                      min="0"
-                      className="w-full pl-8 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-beveren-500 focus:border-beveren-500 transition-colors text-right text-lg font-semibold"
-                      placeholder="0.00"
-                    />
+              {outcome === "refund" ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Payment Method Selection */}
+                  <div>
+                    <select
+                      value={selectedPaymentMethod}
+                      onChange={(e) => setSelectedPaymentMethod(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-beveren-500 focus:border-beveren-500 transition-colors"
+                      disabled={paymentModesLoading}
+                    >
+                      {paymentModesLoading ? (
+                        <option>Loading payment methods...</option>
+                      ) : (
+                        <>
+                          <option value="">{""}</option>
+                          {paymentModes.map((mode) => {
+                            const val = mode.mode_of_payment;
+                            return (
+                              <option key={val} value={val}>
+                                {val}
+                              </option>
+                            );
+                          })}
+                        </>
+                      )}
+                    </select>
+                  </div>
+
+                  {/* Refund amount - read-only: always the value of the returned items,
+                      capped at what was received. Change quantities to change it. */}
+                  <div>
+                    <div className="relative">
+                      <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-500 dark:text-gray-400 text-sm">
+                        {currencySymbol}
+                      </span>
+                      <input
+                        type="number"
+                        value={returnAmount}
+                        readOnly
+                        className="w-full pl-8 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white text-right text-lg font-semibold cursor-default"
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 text-right">
+                      Refund equals the returned items' value (max {formatCurrencyWithSymbol(refundable, currency)}).
+                      Reduce return quantities to refund less.
+                    </p>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  {outcome === "reduce_bill"
+                    ? "No money moves. The returned value is credited against this invoice, lowering what the customer still owes."
+                    : "No money moves. The returned value stays as the customer's store credit and can be applied to their other invoices."}
+                </p>
+              )}
             </div>
 
             {/* Action Buttons */}

@@ -37,6 +37,30 @@ def ensure_sales_invoice_reserve_stock_field():
         ignore_validate=True,
     )
 
+def ensure_sales_invoice_return_outcome_field():
+    """Marker for which return outcome (phase-17 §2c) produced a credit note. Display-only:
+    the money itself lives in AR (payments rows / update_outstanding_for_self), this field
+    just lets the UI and statement label store credits without inferring from GL."""
+    if frappe.db.exists("Custom Field", "Sales Invoice-custom_return_outcome"):
+        return
+
+    create_custom_field(
+        "Sales Invoice",
+        {
+            "fieldname": "custom_return_outcome",
+            "label": "Return Outcome",
+            "fieldtype": "Select",
+            "options": "\nRefund\nReduce Bill\nStore Credit",
+            "insert_after": "is_return",
+            "read_only": 1,
+            "depends_on": "eval:doc.is_return",
+            "module": "KLiK PoS",
+            "description": "How this return was settled: money refunded, original bill reduced, or kept as store credit.",
+        },
+        ignore_validate=True,
+    )
+
+
 def ensure_stock_reservation_is_enabled():
     if not frappe.db.get_single_value("Stock Settings", "enable_stock_reservation"):
         frappe.db.set_value("Stock Settings", None, "enable_stock_reservation", 1)

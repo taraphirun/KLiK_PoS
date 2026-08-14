@@ -25,6 +25,10 @@ export interface ReturnData {
   invoice_returns: {
     invoice_name: string;
     return_items: ReturnItem[];
+    payment_method?: string;
+    return_amount?: number;
+    // 'refund' | 'reduce_bill' | 'store_credit' - see klik_pos/hd/returns.py
+    outcome?: string;
   }[];
 }
 
@@ -100,11 +104,32 @@ export async function getCustomerInvoicesForReturn(
   }
 }
 
+// How a return is settled - see klik_pos/hd/returns.py (phase-17 §2c).
+export type ReturnOutcome = 'refund' | 'reduce_bill' | 'store_credit';
+
+// Refund cap / outstanding context the return UI needs to offer the right outcomes.
+export async function getReturnContext(
+  invoiceName: string
+): Promise<{refundable: number; outstanding: number; grand_total: number} | null> {
+  try {
+    const response = await fetch(
+      `/api/method/klik_pos.hd.returns.get_return_context?invoice=${encodeURIComponent(invoiceName)}`,
+      { credentials: 'include' }
+    );
+    const data = await response.json();
+    return data.message || null;
+  } catch (error) {
+    console.error('Error fetching return context:', error);
+    return null;
+  }
+}
+
 export async function createPartialReturn(
   invoiceName: string,
   returnItems: ReturnItem[],
   paymentMethod?: string,
-  returnAmount?: number
+  returnAmount?: number,
+  outcome?: ReturnOutcome
 ): Promise<{success: boolean; returnInvoice?: string; message?: string; error?: string}> {
 
   const csrfToken = window.csrf_token;
@@ -118,8 +143,11 @@ export async function createPartialReturn(
       body: JSON.stringify({
         invoice_name: invoiceName,
         return_items: returnItems,
-        payment_method: paymentMethod || 'Cash',
-        return_amount: returnAmount || 0
+        // Payment method / amount only make sense for a refund; for reduce_bill and
+        // store_credit the backend rejects payout rows outright.
+        payment_method: outcome === 'refund' ? paymentMethod || undefined : undefined,
+        return_amount: outcome === 'refund' ? returnAmount || 0 : undefined,
+        outcome: outcome
       }),
        credentials: 'include'
     });

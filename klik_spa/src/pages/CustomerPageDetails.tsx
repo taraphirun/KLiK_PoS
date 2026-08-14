@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { formatCurrencyWithSymbol } from "../utils/currency";
 import { usePOSProfileStore } from "../stores/posProfileStore";
@@ -40,6 +40,7 @@ import AddCustomerModal from "../components/customer/AddCustomerModal";
 import CustomerPaymentEntryModal from "../components/customer/CustomerPaymentEntryModal";
 import BottomNavigation from "../components/BottomNavigation";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { getStoreCredit } from "../services/storeCredit";
 
 export default function CustomerDetailsPage() {
   const navigate = useNavigate();
@@ -267,6 +268,15 @@ export default function CustomerDetailsPage() {
     setSelectedCustomer(null);
   };
 
+  // Store credit balance (unallocated "store credit" credit notes - see storeCredit.ts).
+  const [storeCredit, setStoreCredit] = useState(0);
+  useEffect(() => {
+    if (!customerId) return;
+    getStoreCredit(customerId).then((balance) => {
+      if (balance) setStoreCredit(balance.total);
+    });
+  }, [customerId]);
+
   // Calculate customer metrics
   const customerMetrics = useMemo(() => {
     const totalInvoices = customerInvoices.length;
@@ -467,6 +477,11 @@ export default function CustomerDetailsPage() {
                   <p className="text-lg font-bold text-gray-900 dark:text-white">
                     {formatCurrencyWithSymbol(customerMetrics.outstandingAmount, posDetails?.currency || 'USD')}
                   </p>
+                  {storeCredit > 0 && (
+                    <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                      Store credit: {formatCurrencyWithSymbol(storeCredit, posDetails?.currency || 'USD')}
+                    </p>
+                  )}
                 </div>
                 <AlertCircle className={`w-6 h-6 ${customerMetrics.outstandingAmount > 0 ? 'text-red-600' : 'text-gray-400'}`} />
               </div>

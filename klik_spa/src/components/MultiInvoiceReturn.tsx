@@ -51,6 +51,10 @@ export default function MultiInvoiceReturn({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedInvoices, setSelectedInvoices] = useState<Set<string>>(new Set());
   const [invoicePayments, setInvoicePayments] = useState<Record<string, { method: string; amount: number }>>({});
+  // Per-invoice return outcome (phase-17 §2c): refund / reduce_bill / store_credit.
+  // Defaults per invoice: refund when something was paid, reduce_bill otherwise - the
+  // backend enforces the real caps either way.
+  const [invoiceOutcomes, setInvoiceOutcomes] = useState<Record<string, string>>({});
 
   // New workflow states
   const [workflowStep, setWorkflowStep] = useState<'select-customer' | 'select-items' | 'filter-invoices' | 'select-invoices'>('select-customer');
@@ -448,15 +452,29 @@ export default function MultiInvoiceReturn({
   const handleSubmitReturn = async () => {
     const invoiceReturns = invoices
       .filter(invoice => selectedInvoices.has(invoice.name))
-      .map(invoice => ({
-        invoice_name: invoice.name,
-        return_items: invoice.items.filter(item => (item.return_qty || 0) > 0),
-        // Attach payment info for this invoice
-        // These fields are expected by backend to process per-invoice return payments
-        // If backend ignores them, it's backward-compatible
-        payment_method: invoicePayments[invoice.name]?.method,
-        return_amount: invoicePayments[invoice.name]?.amount ?? invoice.items.reduce((sum, it) => sum + (it.return_qty || 0) * it.rate, 0),
-      }))
+      .map(invoice => {
+        const outcome = invoiceOutcomes[invoice.name]
+          || (((invoice as InvoiceWithPaidAmount).paid_amount || 0) > 0 ? 'refund' : 'reduce_bill');
+        const isRefund = outcome === 'refund';
+        return {
+          invoice_name: invoice.name,
+          return_items: invoice.items.filter(item => (item.return_qty || 0) > 0),
+          // Payment info only applies to refunds - the backend rejects payout rows on
+          // reduce_bill / store_credit returns. Resolve the same default the select
+          // displays, so what the cashier sees is what actually gets sent (the old code
+          // sent undefined unless the select was touched).
+          payment_method: isRefund
+            ? invoicePayments[invoice.name]?.method
+              || paymentModes.find(m => m.default === 1)?.mode_of_payment
+              || paymentModes[0]?.mode_of_payment
+              || 'Cash'
+            : undefined,
+          // return_amount deliberately omitted: the backend fixes the refund at the
+          // returned items' value (capped at what was received) - sending a number that
+          // disagrees would be rejected.
+          outcome,
+        };
+      })
       .filter(invoiceReturn => invoiceReturn.return_items.length > 0);
 
     if (invoiceReturns.length === 0) {
@@ -1153,11 +1171,33 @@ export default function MultiInvoiceReturn({
                       </tbody>
                     </table>
                   </div>
-                  {/* Per-invoice Payment Controls - only when invoice is selected */}
+                  {/* Per-invoice settlement controls - only when invoice is selected */}
                   {selectedInvoices.has(invoice.name) && (
                     <div className="px-4 py-3 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-600">
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="md:col-span-2">
+                        <div>
+                          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Settle Return As</label>
+                          <select
+                            value={invoiceOutcomes[invoice.name]
+                              || (((invoice as InvoiceWithPaidAmount).paid_amount || 0) > 0 ? 'refund' : 'reduce_bill')}
+                            onChange={(e) => setInvoiceOutcomes(prev => ({ ...prev, [invoice.name]: e.target.value }))}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-beveren-500"
+                          >
+                            <option value="refund" disabled={((invoice as InvoiceWithPaidAmount).paid_amount || 0) <= 0}>
+                              Refund (money back)
+                            </option>
+                            <option value="reduce_bill">Reduce bill (lower what's owed)</option>
+                            {/* Store credit must be funded by money actually received - unpaid
+                                originals can't grant it (backend enforces the same). */}
+                            <option value="store_credit" disabled={((invoice as InvoiceWithPaidAmount).paid_amount || 0) <= 0}>
+                              Store credit (use on other invoices)
+                            </option>
+                          </select>
+                        </div>
+                        {(invoiceOutcomes[invoice.name]
+                          || (((invoice as InvoiceWithPaidAmount).paid_amount || 0) > 0 ? 'refund' : 'reduce_bill')) === 'refund' ? (
+                        <>
+                        <div>
                           <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Mode of Payment</label>
                           <select
                             value={invoicePayments[invoice.name]?.method || (paymentModes.find(m=>m.default===1)?.mode_of_payment || paymentModes[0]?.mode_of_payment || 'Cash')}
@@ -1192,40 +1232,38 @@ export default function MultiInvoiceReturn({
                           </select>
                         </div>
                         <div>
-                          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Amount</label>
+                          <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Refund Amount</label>
                           <div className="relative">
                             <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-500 dark:text-gray-400 text-sm">
                               {currencySymbol}
                             </span>
+                            {/* Read-only: the refund always equals the returned items' value,
+                                capped at what was paid - change quantities to change it
+                                (backend enforces the same rule). */}
                             <input
                               type="number"
-                              step="0.01"
-                              min="0"
-                              value={invoicePayments[invoice.name]?.amount ?? (() => {
-                                // For partial returns, calculate return amount based on items being returned
-                                // This ensures the amount matches what can actually be returned
+                              readOnly
+                              value={(() => {
                                 const returnedItemsAmount = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
-
-                                // Round to 2 decimal places to avoid floating point precision issues
-                                return Math.round(returnedItemsAmount * 100) / 100;
+                                const rounded = Math.round(returnedItemsAmount * 100) / 100;
+                                const paid = (invoice as InvoiceWithPaidAmount).paid_amount || 0;
+                                return paid > 0 ? Math.min(rounded, paid) : rounded;
                               })()}
-                              onChange={(e) => {
-                                const value = parseFloat(e.target.value) || 0;
-                                // Round to 2 decimal places to avoid floating point precision issues
-                                const roundedValue = Math.round(value * 100) / 100;
-                                setInvoicePayments(prev => ({
-                                  ...prev,
-                                  [invoice.name]: {
-                                    method: prev[invoice.name]?.method || (paymentModes.find(m=>m.default===1)?.mode_of_payment || paymentModes[0]?.mode_of_payment || 'Cash'),
-                                    amount: roundedValue
-                                  }
-                                }));
-                              }}
-                              className="w-full pl-8 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-beveren-500 text-right"
+                              className="w-full pl-8 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white text-right cursor-default"
                               placeholder="0.00"
                             />
                           </div>
                         </div>
+                        </>
+                        ) : (
+                        <div className="md:col-span-2 flex items-end pb-2">
+                          <p className="text-xs text-gray-600 dark:text-gray-400">
+                            {(invoiceOutcomes[invoice.name] || 'reduce_bill') === 'store_credit'
+                              ? "No money moves - value stays as the customer's store credit."
+                              : "No money moves - the credit lowers what the customer owes on this invoice."}
+                          </p>
+                        </div>
+                        )}
                       </div>
                     </div>
                   )}

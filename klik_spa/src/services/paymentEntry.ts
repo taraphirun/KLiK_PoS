@@ -64,6 +64,28 @@ export interface UnallocatedCustomerPaymentEntry {
   currency: string;
   reference_no?: string;
   remarks?: string;
+  // "credit_note" rows are store-credit notes (klik_pos/hd/store_credit.py) listed
+  // alongside payment entries in the reconciliation panel; absent for real PEs.
+  entry_type?: "credit_note";
+  return_against?: string;
+}
+
+// Store-credit notes shaped like unallocated payment entries, for the same panel.
+export async function getStoreCreditNotes(
+  search = "",
+  limit = 50
+): Promise<UnallocatedCustomerPaymentEntry[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (search.trim()) params.set("search", search.trim());
+  const response = await fetch(
+    `/api/method/klik_pos.hd.store_credit.list_store_credit_notes?${params.toString()}`,
+    { credentials: "include" }
+  );
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(extractErrorMessage(result, "Failed to fetch store credit notes"));
+  }
+  return result.message?.data || [];
 }
 
 export interface UnallocatedCustomerPaymentEntriesResponse {

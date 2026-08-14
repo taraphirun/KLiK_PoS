@@ -361,6 +361,32 @@ def get_currency_exchange_rate(
         return {"success": False, "error": str(e)}
 
 
+@contextmanager
+def patch_get_default_contact():
+    """Temporarily guard erpnext's get_default_contact against sites whose Contact table
+    lacks the is_billing_contact column. (The 2026-07-28 'globalize contact patch'
+    refactor moved this into sales_invoice.py's module-level patch but left the call
+    site below behind - restored here scoped-and-restored, since sales_invoice may not
+    be imported yet when this endpoint runs.)"""
+    import erpnext.accounts.party
+
+    original = erpnext.accounts.party.get_default_contact
+
+    def safe_get_default_contact(party_type, party):
+        try:
+            return original(party_type, party)
+        except Exception as e:
+            if "is_billing_contact" in str(e):
+                return None
+            raise
+
+    erpnext.accounts.party.get_default_contact = safe_get_default_contact
+    try:
+        yield
+    finally:
+        erpnext.accounts.party.get_default_contact = original
+
+
 @frappe.whitelist(allow_guest=True)
 def get_customer_info(customer_name: str):
     """Fetch comprehensive customer document by customer name or ID."""

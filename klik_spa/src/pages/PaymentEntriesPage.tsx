@@ -7,11 +7,13 @@ import { useCustomers } from "../hooks/useCustomers";
 import type { Customer } from "../types/customer";
 import {
   getOutstandingSalesInvoices,
+  getStoreCreditNotes,
   getUnallocatedCustomerPaymentEntries,
   reconcilePaymentEntryWithInvoice,
   type OutstandingSalesInvoice,
   type UnallocatedCustomerPaymentEntry,
 } from "../services/paymentEntry";
+import { applyStoreCredit } from "../services/storeCredit";
 import { formatCurrencyWithSymbol } from "../utils/currency";
 
 type PaymentTab = "invoice" | "customer" | "reconciliation";
@@ -81,13 +83,16 @@ export default function PaymentEntriesPage() {
       setIsLoadingReconciliation(true);
       setReconciliationError(null);
       try {
-        const [invoiceResponse, creditResponse] = await Promise.all([
+        const [invoiceResponse, creditResponse, creditNotes] = await Promise.all([
           getOutstandingSalesInvoices(reconcileSearch),
           getUnallocatedCustomerPaymentEntries(reconcileSearch),
+          getStoreCreditNotes(reconcileSearch),
         ]);
         if (!isCurrent) return;
         setReconcileInvoices(invoiceResponse.data || []);
-        setCredits(creditResponse.data || []);
+        // Store-credit notes sit in the same column as payment entries - both are
+        // "money the customer has with us that isn't allocated to a bill yet".
+        setCredits([...creditNotes, ...(creditResponse.data || [])]);
       } catch (err) {
         if (!isCurrent) return;
         setReconciliationError(err instanceof Error ? err.message : "Failed to fetch reconciliation data");
@@ -158,12 +163,13 @@ export default function PaymentEntriesPage() {
   }, [selectedCredit, selectedReconcileInvoice]);
 
   const refreshReconciliation = async () => {
-    const [invoiceResponse, creditResponse] = await Promise.all([
+    const [invoiceResponse, creditResponse, creditNotes] = await Promise.all([
       getOutstandingSalesInvoices(reconcileSearch),
       getUnallocatedCustomerPaymentEntries(reconcileSearch),
+      getStoreCreditNotes(reconcileSearch),
     ]);
     setReconcileInvoices(invoiceResponse.data || []);
-    setCredits(creditResponse.data || []);
+    setCredits([...creditNotes, ...(creditResponse.data || [])]);
   };
 
   const handleReconcile = async () => {
@@ -180,7 +186,21 @@ export default function PaymentEntriesPage() {
 
     setIsReconciling(true);
     try {
-      await reconcilePaymentEntryWithInvoice(selectedCredit.name, selectedReconcileInvoice.name, amount);
+      if (selectedCredit.entry_type === "credit_note") {
+        // Store-credit note: allocated through ERPNext's Payment Reconciliation
+        // (hd/store_credit.py), not the payment-entry reference flow.
+        const result = await applyStoreCredit(
+          selectedCredit.customer,
+          selectedReconcileInvoice.name,
+          amount,
+          selectedCredit.name
+        );
+        if (!result.success) {
+          throw new Error(result.error || "Failed to apply store credit");
+        }
+      } else {
+        await reconcilePaymentEntryWithInvoice(selectedCredit.name, selectedReconcileInvoice.name, amount);
+      }
       toast.success("Payment reconciled successfully.");
       setSelectedCredit(null);
       setSelectedReconcileInvoice(null);
@@ -461,7 +481,14 @@ export default function PaymentEntriesPage() {
                             <div className="min-w-0">
                               <div className="truncate font-medium text-gray-900 dark:text-white">{credit.name}</div>
                               <div className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                                {credit.customer_name || credit.customer} • {credit.mode_of_payment || "Payment Entry"}
+                                {credit.customer_name || credit.customer} •{" "}
+                                {credit.entry_type === "credit_note" ? (
+                                  <span className="inline-flex items-center rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">
+                                    Store credit
+                                  </span>
+                                ) : (
+                                  credit.mode_of_payment || "Payment Entry"
+                                )}
                               </div>
                               <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">{credit.posting_date}</div>
                             </div>

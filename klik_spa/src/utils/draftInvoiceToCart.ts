@@ -2,6 +2,7 @@ import { getDraftInvoiceItems } from '../services/salesInvoice';
 import { toast } from 'react-toastify';
 import { extractErrorFromException } from './errorExtraction';
 import { cacheDraftInvoiceItems } from './draftInvoiceCache';
+import { useProductStore } from '../stores/productStore';
 import type { CartItem as RootCartItem } from '../../types';
 import type { Customer } from '../types/customer';
 
@@ -17,6 +18,10 @@ export interface InvoiceItem {
   amount: number;
   uom?: string;
   description?: string;
+  // AZ Coil roofing spec + generated custom description - persisted on the draft's
+  // Sales Invoice Items at hold time and returned by get_invoice_details.
+  custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number; unformed?: boolean }>;
+  custom_description?: string;
 }
 
 export interface CartItem {
@@ -24,6 +29,7 @@ export interface CartItem {
   item_code?: string;
   name: string;
   category: string;
+  item_group?: string;
   price: number;
   original_price?: number;
   discount_amount?: number;
@@ -32,6 +38,8 @@ export interface CartItem {
   image: string;
   quantity: number;
   uom?: string;
+  custom_ds_roofing_spec?: Array<{ straight: number; curve: number; end: number; quantity: number; unformed?: boolean }>;
+  custom_description?: string;
 }
 
 function transformCustomerInfo(customer: any, invoiceData: any): Customer {
@@ -195,26 +203,40 @@ export async function addDraftInvoiceToCart(invoiceId: string): Promise<boolean>
       throw new Error('No items found in draft invoice');
     }
 
-    // Convert invoice items to cart items
+    // Convert invoice items to cart items. Re-enrich each row from the loaded product
+    // catalog: the invoice row doesn't carry item_group/category/image, and hardcoding
+    // category 'General' broke AZ Coil rows on resume - isAZCoilItem() matches on
+    // item_group/category, so the spec table UI disappeared after a hold/resume cycle.
+    const products = useProductStore.getState().products;
     const cartItems: CartItem[] = [];
     for (const [index, item] of invoiceData.items.entries()) {
       const discountAmount = Number(item.discount_amount) || 0;
       const discountPercentage = Number(item.discount_percentage) || 0;
       const priceListRate = Number(item.price_list_rate) || 0;
       const originalRate = priceListRate > 0 ? priceListRate : Number(item.rate || 0) + discountAmount;
+      const product = products.find((p) => (p.item_code || p.id) === item.item_code);
       const cartItem: CartItem = {
         // Keep each draft line unique so duplicate item codes don't collapse into one cart row.
         id: item.name || `${item.item_code}-${index}`,
         item_code: item.item_code,
         name: item.item_name,
-        category: 'General',
+        category: product?.category || product?.item_group || 'General',
+        item_group: product?.item_group,
         price: originalRate,
         original_price: originalRate,
         discount_amount: discountAmount,
         discount_percentage: discountPercentage,
-        image: '',
+        image: product?.image || '',
         quantity: item.qty,
         uom: item.uom,
+        // AZ Coil spec + custom description survive the hold/resume round-trip - they
+        // were saved onto the draft's items and must land back on the cart row, or the
+        // spec becomes uneditable and checkout prints the stock item description.
+        custom_ds_roofing_spec:
+          Array.isArray(item.custom_ds_roofing_spec) && item.custom_ds_roofing_spec.length > 0
+            ? item.custom_ds_roofing_spec
+            : undefined,
+        custom_description: item.custom_description || undefined,
       };
       cartItems.push(cartItem);
     }

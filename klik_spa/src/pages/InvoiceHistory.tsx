@@ -581,6 +581,20 @@ const getStatusBadge = (status: string) => {
                     <div className="text-sm font-medium text-gray-900 dark:text-white">
                       {formatCurrencyWithSymbol(invoice.totalAmount, invoice.currency)}
                     </div>
+                    {/* What's still owed matters more than the total. Red when money is
+                        owed; explicit green "Due: 0" once settled (paid, returned, or
+                        credited), so a fully-returned invoice visibly reads as cleared
+                        rather than just losing its red line. Drafts and return rows skip
+                        it - "due" means nothing there. */}
+                    {(invoice.outstandingAmount || 0) > 0 ? (
+                      <div className="text-xs font-semibold text-red-600 dark:text-red-400">
+                        Due: {formatCurrencyWithSymbol(invoice.outstandingAmount || 0, invoice.currency)}
+                      </div>
+                    ) : invoice.status !== "Draft" && invoice.status !== "Return" ? (
+                      <div className="text-xs font-semibold text-emerald-600 dark:text-emerald-400">
+                        Due: {formatCurrencyWithSymbol(0, invoice.currency)}
+                      </div>
+                    ) : null}
                     {invoice.giftCardDiscount > 0 && (
                       <div className="text-xs text-orange-600 dark:text-green-400">
                         -{formatCurrencyWithSymbol(invoice.giftCardDiscount, invoice.currency)} gift card
@@ -672,6 +686,21 @@ const getStatusBadge = (status: string) => {
                   <span className="text-gray-600 dark:text-gray-400">Amount:</span>
                   <span className="font-medium text-gray-900 dark:text-white">{formatCurrencyWithSymbol(invoice.totalAmount, invoice.currency)}</span>
                 </div>
+                {(invoice.outstandingAmount || 0) > 0 ? (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600 dark:text-gray-400">Due:</span>
+                    <span className="font-semibold text-red-600 dark:text-red-400">
+                      {formatCurrencyWithSymbol(invoice.outstandingAmount || 0, invoice.currency)}
+                    </span>
+                  </div>
+                ) : invoice.status !== "Draft" && invoice.status !== "Return" ? (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-gray-600 dark:text-gray-400">Due:</span>
+                    <span className="font-semibold text-emerald-600 dark:text-emerald-400">
+                      {formatCurrencyWithSymbol(0, invoice.currency)}
+                    </span>
+                  </div>
+                ) : null}
                 <div className="flex justify-between text-sm">
                   <span className="text-gray-600 dark:text-gray-400">Date:</span>
                   <span className="text-gray-900 dark:text-white">{invoice.date}</span>

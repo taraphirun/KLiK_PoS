@@ -23,6 +23,7 @@ def _safe_get_default_contact(party_type, party):
 		raise
 erpnext.accounts.party.get_default_contact = _safe_get_default_contact
 
+from klik_pos.hd.returns import apply_return_outcome, settle_refund_residual
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
 from .item.item_price import get_price_list_with_customer_priority
@@ -3292,7 +3293,7 @@ from frappe.model.mapper import get_mapped_doc
 
 
 @frappe.whitelist()
-def return_sales_invoice(invoice_name):
+def return_sales_invoice(invoice_name, outcome=None, payment_method=None):
 	try:
 		_ensure_return_allowed()
 
@@ -3316,7 +3317,11 @@ def return_sales_invoice(invoice_name):
 				},
 				"Sales Invoice Item": {
 					"doctype": "Sales Invoice Item",
-					"field_map": {"name": "prevdoc_detail_docname"},
+					# Link each return row to the original row - this is the key ERPNext's
+					# over-return guard and already-returned tracking match on. (Was mapped
+					# to prevdoc_detail_docname, which isn't a Sales Invoice Item column, so
+					# the link silently vanished and the guard never fired - phase-17 §2d.)
+					"field_map": {"name": "sales_invoice_item"},
 				},
 			},
 		)
@@ -3328,19 +3333,19 @@ def return_sales_invoice(invoice_name):
 		for item in return_doc.items:
 			item.qty = -abs(item.qty)
 
-		return_doc.payments = []
-		for p in original_invoice.payments:
-			return_doc.append(
-				"payments",
-				{
-					"mode_of_payment": p.mode_of_payment,
-					"amount": -abs(p.amount),
-					"account": p.account,
-				},
-			)
+		# Payments, update_outstanding_for_self and is_pos are decided by the chosen
+		# outcome (refund / reduce_bill / store_credit) - phase-17 §2c.
+		applied_outcome = apply_return_outcome(
+			return_doc, original_invoice, outcome=outcome, payment_method=payment_method
+		)
 
 		return_doc.save(ignore_permissions=True)
 		return_doc.submit()
+
+		if applied_outcome == "refund":
+			# Partly-paid original: the refund was capped at what was paid, so the unpaid
+			# remainder of the credit clears the original bill instead of floating.
+			settle_refund_residual(return_doc.name, original_invoice.name)
 
 		return {"success": True, "return_invoice": return_doc.name}
 
@@ -3841,7 +3846,12 @@ def get_customer_invoices_for_return(customer, start_date=None, end_date=None, s
 
 @frappe.whitelist()
 def create_partial_return(
-	invoice_name, return_items, payment_method=None, return_amount=None, expected_return_amount=None
+	invoice_name,
+	return_items,
+	payment_method=None,
+	return_amount=None,
+	expected_return_amount=None,
+	outcome=None,
 ):
 	"""Create a partial return for selected items from an invoice with custom payment method"""
 
@@ -3871,7 +3881,9 @@ def create_partial_return(
 				},
 				"Sales Invoice Item": {
 					"doctype": "Sales Invoice Item",
-					"field_map": {"name": "prevdoc_detail_docname"},
+					# Same fix as return_sales_invoice above: sales_invoice_item is the link
+					# ERPNext's over-return guard matches on (phase-17 §2d).
+					"field_map": {"name": "sales_invoice_item"},
 				},
 			},
 		)
@@ -3897,9 +3909,6 @@ def create_partial_return(
 
 		return_doc.items = filtered_items
 
-		# Clear existing payments
-		return_doc.payments = []
-
 		# Calculate total returned amount (baseline expected refund)
 		# Prefer client-provided expected amount; fallback to backend computation
 		if expected_return_amount is not None:
@@ -3909,10 +3918,6 @@ def create_partial_return(
 				total_returned_amount = sum(abs(item.qty * item.rate) for item in return_doc.items)
 		else:
 			total_returned_amount = sum(abs(item.qty * item.rate) for item in return_doc.items)
-
-		final_return_amount = return_amount if return_amount is not None else total_returned_amount
-
-		final_payment_method = payment_method if payment_method else "Cash"
 
 		# Optionally persist the auto-calculated expected refund if a custom field exists
 		try:
@@ -3924,28 +3929,31 @@ def create_partial_return(
 		except Exception:
 			pass
 
-		if final_return_amount > 0:
-			return_doc.append(
-				"payments",
-				{
-					"mode_of_payment": final_payment_method,
-					"amount": -abs(final_return_amount),
-				},
-			)
-		print("Mko 3", -abs(final_return_amount))
-		# Recalculate totals (payment amount stays as user entered)
-		try:
-			return_doc.calculate_taxes_and_totals()
-		except Exception:
-			pass
+		# Payments, update_outstanding_for_self and is_pos are decided by the chosen
+		# outcome (refund / reduce_bill / store_credit) - phase-17 §2c. The old behavior
+		# of always appending a "Cash" payout - even for returns of unpaid credit sales
+		# where no money ever changed hands - is exactly what this replaces.
+		applied_outcome = apply_return_outcome(
+			return_doc,
+			original_invoice,
+			outcome=outcome,
+			payment_method=payment_method,
+			refund_amount=return_amount,
+		)
 
 		return_doc.save(ignore_permissions=True)
 		return_doc.submit()
 
+		if applied_outcome == "refund":
+			# Partly-paid original: the refund was capped at what was paid, so the unpaid
+			# remainder of the credit clears the original bill instead of floating.
+			settle_refund_residual(return_doc.name, original_invoice.name)
+
 		return {
 			"success": True,
 			"return_invoice": return_doc.name,
-			"message": f"Return created successfully: {return_doc.name} (Payment: {final_payment_method})",
+			"outcome": applied_outcome,
+			"message": f"Return created successfully: {return_doc.name} ({applied_outcome})",
 		}
 
 	except Exception as e:
@@ -3971,11 +3979,16 @@ def create_multi_invoice_return(return_data):
 			return_items = invoice_return.get("return_items", [])
 			payment_method = invoice_return.get("payment_method")
 			return_amount = invoice_return.get("return_amount")
+			outcome = invoice_return.get("outcome")
 
 			if return_items:
 				# Call create_partial_return with payment method and return amount
 				result = create_partial_return(
-					invoice_name, return_items, payment_method=payment_method, return_amount=return_amount
+					invoice_name,
+					return_items,
+					payment_method=payment_method,
+					return_amount=return_amount,
+					outcome=outcome,
 				)
 				if result.get("success"):
 					created_returns.append(result.get("return_invoice"))
@@ -4095,6 +4108,7 @@ def submit_draft_invoice(invoice_id, data=None):
 				additional_discount_amount,
 				additional_discount_percentage,
 				apply_discount_on,
+				self_pickup,
 			) = parse_invoice_data(data)
 
 			rebuilt_doc = build_sales_invoice_doc(

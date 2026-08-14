@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Banknote, Loader2, X } from "lucide-react";
+import { Banknote, Loader2, Wallet, X } from "lucide-react";
 import { toast } from "react-toastify";
 import type { Customer } from "../../types/customer";
 import { usePaymentModes } from "../../hooks/usePaymentModes";
 import { usePOSProfileStore } from "../../stores/posProfileStore";
 import { createCustomerPaymentEntry } from "../../services/paymentEntry";
+import { applyStoreCredit, getStoreCredit } from "../../services/storeCredit";
 import { formatCurrencyWithSymbol } from "../../utils/currency";
 import { extractErrorFromException } from "../../utils/errorExtraction";
 
@@ -42,11 +43,45 @@ export default function CustomerPaymentEntryModal({
   const [remarks, setRemarks] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Store credit (unallocated credit notes from "return as store credit") that can settle
+  // this invoice instead of new money - see services/storeCredit.ts.
+  const [storeCredit, setStoreCredit] = useState<number>(0);
+  const [isApplyingCredit, setIsApplyingCredit] = useState(false);
+
+  useEffect(() => {
+    if (!customer?.id) return;
+    getStoreCredit(customer.id).then((balance) => {
+      if (balance) setStoreCredit(balance.total);
+    });
+  }, [customer?.id]);
+
   useEffect(() => {
     if (!modeOfPayment && defaultMode) {
       setModeOfPayment(defaultMode);
     }
   }, [defaultMode, modeOfPayment]);
+
+  const handleApplyStoreCredit = async () => {
+    if (!salesInvoiceName || isApplyingCredit) return;
+    setIsApplyingCredit(true);
+    try {
+      const result = await applyStoreCredit(customer.id, salesInvoiceName);
+      if (result.success) {
+        toast.success(
+          `Store credit applied: ${formatCurrencyWithSymbol(result.applied || 0, invoiceCurrency || currencySymbol)}` +
+            (result.invoice_outstanding
+              ? ` - remaining outstanding ${formatCurrencyWithSymbol(result.invoice_outstanding, invoiceCurrency || currencySymbol)}`
+              : " - invoice settled")
+        );
+        onCreated?.(salesInvoiceName);
+        onClose();
+      } else {
+        toast.error(result.error || "Failed to apply store credit");
+      }
+    } finally {
+      setIsApplyingCredit(false);
+    }
+  };
 
   const numericAmount = Number(amount);
   const exceedsOutstanding = Boolean(
@@ -120,6 +155,27 @@ export default function CustomerPaymentEntryModal({
           {salesInvoiceName && outstandingAmount !== undefined && (
             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
               Outstanding: {formatCurrencyWithSymbol(outstandingAmount, invoiceCurrency || currencySymbol)}
+            </div>
+          )}
+
+          {salesInvoiceName && storeCredit > 0 && (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 dark:border-emerald-900 dark:bg-emerald-950/30">
+              <div className="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-200">
+                <Wallet size={16} />
+                <span>
+                  Store credit available:{" "}
+                  <strong>{formatCurrencyWithSymbol(storeCredit, invoiceCurrency || currencySymbol)}</strong>
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleApplyStoreCredit}
+                disabled={isApplyingCredit}
+                className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isApplyingCredit && <Loader2 size={12} className="animate-spin" />}
+                Apply store credit
+              </button>
             </div>
           )}
 
