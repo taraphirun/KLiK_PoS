@@ -596,6 +596,17 @@ export default function SingleInvoiceReturn({
                 <p className="text-sm text-gray-600 dark:text-gray-400">
                   {outcome === "reduce_bill"
                     ? "No money moves. The returned value is credited against this invoice, lowering what the customer still owes."
+                    : refundable > 0 && totalReturnAmount > refundable
+                    ? // Partly-paid original: only the paid slice becomes spendable
+                      // credit; the unpaid slice settles this invoice's own balance
+                      // instead of floating (server does this automatically after submit).
+                      `No money moves. Only the paid portion, ${formatCurrencyWithSymbol(
+                        refundable,
+                        currency
+                      )}, becomes spendable store credit - the remaining ${formatCurrencyWithSymbol(
+                        totalReturnAmount - refundable,
+                        currency
+                      )} was never paid, so it settles this invoice's own balance instead.`
                     : "No money moves. The returned value stays as the customer's store credit and can be applied to their other invoices."}
                 </p>
               )}

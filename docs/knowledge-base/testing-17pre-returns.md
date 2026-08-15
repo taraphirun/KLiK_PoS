@@ -92,7 +92,7 @@ checks — this list verifies the same flows through the real UI.
    is 0 too — no floating credit, nothing still due. Desk: a system Journal Entry of
    type "Credit Note" links the two.
 
-- [x] pass (2026-08-14)
+- [ ] pass
 
 ## 7. Desk-side hook (optional)
 

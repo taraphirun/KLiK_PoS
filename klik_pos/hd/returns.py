@@ -197,22 +197,19 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 	else:  # store_credit
 		# Store credit is money-equivalent: the customer can spend it on any invoice. So
 		# it must be funded by money actually received - an unpaid original grants no
-		# credit (the customer never gave the store anything; that case is reduce_bill),
-		# and a partly-paid one grants at most what was paid (user rule, 2026-08-13).
+		# credit at all (the customer never gave the store anything; that case is
+		# reduce_bill). A partly-paid original grants store credit only up to what was
+		# paid; the unpaid slice of the return isn't spendable credit, it's still owed on
+		# the original bill, so it settles that bill instead of floating (same mechanism
+		# as the refund outcome's residual - see settle_unfunded_residual, called by the
+		# caller after submit whenever return_total > refundable).
 		if refundable <= 0:
 			frappe.throw(
 				_("Original invoice {0} is unpaid - store credit is not allowed because no "
 				  "money was ever received. Use 'reduce bill' instead.").format(original_invoice.name)
 			)
-		if return_total > refundable + 0.005:
-			frappe.throw(
-				_("Return value {0} exceeds the {1} actually received against {2} - only paid "
-				  "value can become store credit. Reduce the return, or use 'reduce bill' for "
-				  "the unpaid part.").format(
-					flt(return_total, 2), flt(refundable, 2), original_invoice.name
-				)
-			)
-		# Keeps its own negative outstanding = the store credit balance.
+		# Keeps its own negative outstanding = the store credit balance (trimmed down to
+		# the paid amount post-submit if return_total exceeds refundable).
 		return_doc.update_outstanding_for_self = 1
 		_make_non_pos(return_doc)
 
@@ -280,16 +277,20 @@ def _set_return_discount_and_write_off(return_doc, original_invoice):
 		)
 
 
-def settle_refund_residual(return_name, original_name):
-	"""After a refund return submits: if the return kept a negative outstanding (the
-	original was only partly paid, so the refund was capped below the returned value),
-	knock that residual off against the original invoice's own outstanding.
+def settle_unfunded_residual(return_name, original_name):
+	"""After a refund OR store_credit return submits: if the return kept a negative
+	outstanding beyond what was actually paid (the original was only partly paid, so
+	the refund/credit was capped below the returned value), knock that unfunded residual
+	off against the original invoice's own outstanding instead of leaving it floating.
 
 	Without this, a full return of a partly-paid credit sale left the unpaid slice
 	floating as store credit while the original still showed the same amount owed
-	(user-reported, 00186/00187: paid 29.5 of 79.5, full return -> refund 29.5 but
-	50 floated as credit AND 50 stayed due). Net zero, wrong shape - the residual is
-	the unpaid part of the very bill being returned, so it clears that bill.
+	(user-reported, 00186/00187: paid 29.5 of 79.5, full refund return -> refund 29.5
+	but 50 floated as credit AND 50 stayed due; and again for store_credit outcome,
+	00198: paid 9.5 of 79.5, full store-credit return -> customer expected exactly 9.5
+	of spendable credit, not a blocked return). Net zero, wrong shape - the unfunded
+	part is the unpaid part of the very bill being returned, so it clears that bill,
+	leaving only the truly-paid amount as the customer's spendable balance.
 
 	Uses the same Payment Reconciliation machinery as store-credit redemption. Best
 	effort: a failure here leaves the (accounting-consistent) floating-credit state,
@@ -313,7 +314,7 @@ def settle_refund_residual(return_name, original_name):
 		)
 	except Exception:
 		frappe.log_error(
-			frappe.get_traceback(), f"Refund residual reconcile failed: {return_name} vs {original_name}"
+			frappe.get_traceback(), f"Return residual reconcile failed: {return_name} vs {original_name}"
 		)
 
 

@@ -23,7 +23,7 @@ def _safe_get_default_contact(party_type, party):
 		raise
 erpnext.accounts.party.get_default_contact = _safe_get_default_contact
 
-from klik_pos.hd.returns import apply_return_outcome, settle_refund_residual
+from klik_pos.hd.returns import apply_return_outcome, settle_unfunded_residual
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
 from .item.item_price import get_price_list_with_customer_priority
@@ -3342,10 +3342,10 @@ def return_sales_invoice(invoice_name, outcome=None, payment_method=None):
 		return_doc.save(ignore_permissions=True)
 		return_doc.submit()
 
-		if applied_outcome == "refund":
-			# Partly-paid original: the refund was capped at what was paid, so the unpaid
-			# remainder of the credit clears the original bill instead of floating.
-			settle_refund_residual(return_doc.name, original_invoice.name)
+		if applied_outcome in ("refund", "store_credit"):
+			# Partly-paid original: the refund/credit was funded only up to what was paid,
+			# so the unpaid remainder clears the original bill instead of floating.
+			settle_unfunded_residual(return_doc.name, original_invoice.name)
 
 		return {"success": True, "return_invoice": return_doc.name}
 
@@ -3944,10 +3944,10 @@ def create_partial_return(
 		return_doc.save(ignore_permissions=True)
 		return_doc.submit()
 
-		if applied_outcome == "refund":
-			# Partly-paid original: the refund was capped at what was paid, so the unpaid
-			# remainder of the credit clears the original bill instead of floating.
-			settle_refund_residual(return_doc.name, original_invoice.name)
+		if applied_outcome in ("refund", "store_credit"):
+			# Partly-paid original: the refund/credit was funded only up to what was paid,
+			# so the unpaid remainder clears the original bill instead of floating.
+			settle_unfunded_residual(return_doc.name, original_invoice.name)
 
 		return {
 			"success": True,
