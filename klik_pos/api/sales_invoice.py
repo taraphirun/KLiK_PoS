@@ -3335,18 +3335,19 @@ def return_sales_invoice(invoice_name, outcome=None, payment_method=None):
 
 		# Payments, update_outstanding_for_self and is_pos are decided by the chosen
 		# outcome (refund / reduce_bill / store_credit) - phase-17 §2c.
-		applied_outcome = apply_return_outcome(
+		applied_outcome, unfunded = apply_return_outcome(
 			return_doc, original_invoice, outcome=outcome, payment_method=payment_method
 		)
 
 		return_doc.save(ignore_permissions=True)
 		return_doc.submit()
 
-		# Unfunded slice (unpaid, or partly-paid original) clears the original bill
+		# Unfunded slice (unpaid, or partly-paid original, or nothing spare beyond what
+		# the invoice's unreturned remainder still needs) clears the original bill
 		# instead of floating - the only mechanism that does this now (§2c retirement of
 		# the separate reduce_bill flag write), so its result is returned to the caller
 		# rather than swallowed.
-		residual_settlement = settle_unfunded_residual(return_doc.name, original_invoice.name)
+		residual_settlement = settle_unfunded_residual(return_doc.name, original_invoice.name, unfunded)
 
 		return {
 			"success": True,
@@ -3734,6 +3735,11 @@ def get_customer_invoices_for_return(customer, start_date=None, end_date=None, s
 				"customer",
 				"grand_total",
 				"paid_amount",
+				# Needed by the return-outcome "available for cash/credit" cap
+				# (hd/returns.get_available_for_cash_or_credit) - a partial return must
+				# not drain money still needed for the invoice's unreturned remainder,
+				# which the SPA computes reactively per invoice as quantities change.
+				"outstanding_amount",
 				"status",
 			],
 			order_by="posting_date desc",
@@ -3939,7 +3945,7 @@ def create_partial_return(
 		# outcome (refund / reduce_bill / store_credit) - phase-17 §2c. The old behavior
 		# of always appending a "Cash" payout - even for returns of unpaid credit sales
 		# where no money ever changed hands - is exactly what this replaces.
-		applied_outcome = apply_return_outcome(
+		applied_outcome, unfunded = apply_return_outcome(
 			return_doc,
 			original_invoice,
 			outcome=outcome,
@@ -3950,11 +3956,12 @@ def create_partial_return(
 		return_doc.save(ignore_permissions=True)
 		return_doc.submit()
 
-		# Unfunded slice (unpaid, or partly-paid original) clears the original bill
+		# Unfunded slice (unpaid, or partly-paid original, or nothing spare beyond what
+		# the invoice's unreturned remainder still needs) clears the original bill
 		# instead of floating - the only mechanism that does this now (§2c retirement of
 		# the separate reduce_bill flag write), so its result is returned to the caller
 		# rather than swallowed.
-		residual_settlement = settle_unfunded_residual(return_doc.name, original_invoice.name)
+		residual_settlement = settle_unfunded_residual(return_doc.name, original_invoice.name, unfunded)
 
 		return {
 			"success": True,

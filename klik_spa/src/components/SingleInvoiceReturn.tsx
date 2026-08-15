@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   X,
   RotateCcw,
@@ -54,13 +54,18 @@ export default function SingleInvoiceReturn({
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>("");
   const [returnAmount, setReturnAmount] = useState<number>(0);
 
-  // How the return is settled (phase-17 §2c). refundable = money actually received
-  // against the original (server-computed - includes Payment Entries), which caps
-  // cash/bank refunds and spendable store credit alike. Whatever isn't funded always
-  // settles the original invoice's own balance automatically after submit - there is
-  // no separate "reduce bill" choice anymore (see hd/returns.py).
+  // How the return is settled (phase-17 §2c, revised 2026-08-15). `outcome` is only the
+  // cashier's raw last click - what actually happens is `effectiveOutcome` below, which
+  // is forced to store_credit whenever nothing is `available`. refundable/outstanding
+  // are the invoice's own numbers (server-computed, fixed per invoice); `available` is
+  // derived live from those plus the currently-selected return quantities, since the
+  // cap depends on how much of the invoice would remain unreturned (see hd/returns.py's
+  // get_available_for_cash_or_credit - a partial return must not drain money that's
+  // still needed to cover the rest of the same invoice; only a full return, or genuine
+  // spare beyond that need, is safe to hand out as cash or credit).
   const [outcome, setOutcome] = useState<ReturnOutcome>("refund");
   const [refundable, setRefundable] = useState<number>(0);
+  const [outstanding, setOutstanding] = useState<number>(0);
 
   useEffect(() => {
     if (isOpen && invoice) {
@@ -68,18 +73,30 @@ export default function SingleInvoiceReturn({
     }
   }, [isOpen, invoice]);
 
+  const totalReturnAmount = useMemo(
+    () => returnItems.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0),
+    [returnItems]
+  );
+
+  const available = useMemo(() => {
+    const outstandingAfterPureReduction = Math.max(outstanding - totalReturnAmount, 0);
+    return Math.max(refundable - outstandingAfterPureReduction, 0);
+  }, [refundable, outstanding, totalReturnAmount]);
+
+  // Masks a stale/default `outcome` whenever nothing is available to give out - the
+  // chooser itself is hidden in that case (below), but submission, labels and the
+  // refund-vs-credit breakdown must all agree on what's actually going to happen.
+  const effectiveOutcome: ReturnOutcome = available > 0 ? outcome : "store_credit";
+
   // The refund is not freely choosable: it always equals the value of the returned
-  // items, capped at what was actually received (backend enforces the same rule). To
-  // refund less, the cashier reduces the return quantities. This replaces the old
-  // editable amount + write-off proration, which let refund and returned value silently
+  // items, capped at what's available (backend enforces the same rule). To refund
+  // less, the cashier reduces the return quantities. This replaces the old editable
+  // amount + write-off proration, which let refund and returned value silently
   // disagree - the difference became store credit nobody chose (invoice 00179 case).
   useEffect(() => {
-    const returnedItemsAmount = returnItems.reduce((sum, item) => {
-      return sum + ((item.return_qty || 0) * item.rate);
-    }, 0);
-    const rounded = Math.round(returnedItemsAmount * 100) / 100;
-    setReturnAmount(refundable > 0 ? Math.min(rounded, refundable) : rounded);
-  }, [returnItems, refundable]);
+    const rounded = Math.round(totalReturnAmount * 100) / 100;
+    setReturnAmount(available > 0 ? Math.min(rounded, available) : rounded);
+  }, [totalReturnAmount, available]);
 
   // Set default payment method when payment modes are loaded
 
@@ -98,13 +115,12 @@ export default function SingleInvoiceReturn({
     setLoadingReturnData(true);
     try {
 
-      // Refund/store-credit cap from the server - drives whether a chooser is offered.
+      // Refund/store-credit inputs from the server - `available` (above) derives from
+      // these plus the live selected quantities, so nothing else needs setting here;
+      // `outcome` keeps its default and is masked by `effectiveOutcome` if unavailable.
       const context = await getReturnContext(invoice.name || invoice.id);
-      const contextRefundable = context?.refundable ?? 0;
-      setRefundable(contextRefundable);
-      // Nothing paid -> nothing to choose: the return is automatically a bill reduction
-      // (store_credit mechanic, funded amount 0 - see hd/returns.py). No chooser shown.
-      setOutcome(contextRefundable > 0 ? "refund" : "store_credit");
+      setRefundable(context?.refundable ?? 0);
+      setOutstanding(context?.outstanding ?? 0);
 
       // Always fetch complete invoice details from backend to get accurate grand_total
       let invoiceWithItems = invoice;
@@ -215,19 +231,22 @@ export default function SingleInvoiceReturn({
       };
 
 
+      // effectiveOutcome, not raw outcome: a stale "refund" click left selected while
+      // quantities dropped `available` to 0 must not be sent as-is - the backend would
+      // (correctly) reject it, since nothing is left available to refund.
       const result = await createPartialReturn(
         invoiceName,
         itemsToReturn,
         selectedPaymentMethod,
         returnAmount,
-        outcome
+        effectiveOutcome
       );
 
       if (result.success) {
         const outcomeLabel =
-          outcome === "refund"
+          effectiveOutcome === "refund"
             ? `refunded via ${selectedPaymentMethod || "original payment method"}`
-            : refundable <= 0
+            : available <= 0
             ? "bill reduced"
             : "kept as store credit";
         toast.success(`Return created successfully (${outcomeLabel})`);
@@ -255,11 +274,6 @@ export default function SingleInvoiceReturn({
       setIsLoading(false);
     }
   };
-
-  const totalReturnAmount = returnItems.reduce(
-    (sum, item) => sum + (item.return_qty || 0) * item.rate,
-    0
-  );
 
   const hasItemsToReturn = returnItems.some(item => (item.return_qty || 0) > 0);
 
@@ -325,7 +339,7 @@ export default function SingleInvoiceReturn({
                       refund outcome - for store_credit the full returned value is
                       credited (funded slice as spendable credit, any unfunded slice
                       auto-settling the bill) and there's no "not refunded" remainder. */}
-                  {outcome === "refund" && originalInvoicePaidAmount > 0 && totalReturnAmount !== returnAmount ? (
+                  {effectiveOutcome === "refund" && originalInvoicePaidAmount > 0 && totalReturnAmount !== returnAmount ? (
                     <div className="text-xs font-medium text-gray-700 dark:text-gray-300">
                       <div className="flex justify-between items-center">
                         <span>Total Return Amount:</span>
@@ -350,7 +364,7 @@ export default function SingleInvoiceReturn({
                       {formatCurrencyWithSymbol(totalReturnAmount, currency)}
                     </div>
                   )}
-                  {outcome === "refund" && originalInvoicePaidAmount > 0 && totalReturnAmount === returnAmount && (
+                  {effectiveOutcome === "refund" && originalInvoicePaidAmount > 0 && totalReturnAmount === returnAmount && (
                     <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                       Customer Paid: {formatCurrencyWithSymbol(originalInvoicePaidAmount, currency)}
                     </div>
@@ -495,14 +509,18 @@ export default function SingleInvoiceReturn({
         {/* Fixed Footer with Payment Methods and Return Button */}
         {hasItemsToReturn && (
           <div className="px-6 py-4 bg-gray-50 dark:bg-gray-700 border-t border-gray-200 dark:border-gray-600 flex-shrink-0">
-            {/* Return outcome (phase-17 §2c): where does the returned value go? Only
-                offered when something was actually paid - an unpaid original has
-                nothing to choose between (refund = $0, store credit = $0), so it just
-                reduces the bill automatically, no chooser shown (2026-08-15: the old
-                third "Reduce Bill" button, and defaulting to it for unpaid invoices,
-                is retired - see hd/returns.py for why it was unsafe). */}
+            {/* Return outcome (phase-17 §2c, revised 2026-08-15): where does the
+                returned value go? Only offered when something is actually `available`
+                - money received, minus whatever is still needed to cover the rest of
+                this invoice (get_available_for_cash_or_credit in hd/returns.py). An
+                unpaid original, or a partial return that doesn't clear more than the
+                invoice's paid-for portion, has nothing safe to hand out (refund = $0,
+                store credit = $0) - it just reduces the bill automatically, no chooser
+                shown. This is reactive: increasing the return quantity can make cash/
+                credit become available (a bigger return is more likely to fully cover
+                what's still owed), so the chooser can appear as items are added. */}
             <div className="mb-4">
-              {refundable > 0 ? (
+              {available > 0 ? (
                 <>
                   <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
                     Settle Return As
@@ -511,7 +529,7 @@ export default function SingleInvoiceReturn({
                     <button
                       type="button"
                       onClick={() => setOutcome("refund")}
-                      title={`Up to ${formatCurrencyWithSymbol(refundable, currency)} was received and can be refunded`}
+                      title={`Up to ${formatCurrencyWithSymbol(available, currency)} is available to refund`}
                       className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
                         outcome === "refund"
                           ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
@@ -524,7 +542,7 @@ export default function SingleInvoiceReturn({
                     <button
                       type="button"
                       onClick={() => setOutcome("store_credit")}
-                      title={`Up to ${formatCurrencyWithSymbol(refundable, currency)} of paid value can become store credit`}
+                      title={`Up to ${formatCurrencyWithSymbol(available, currency)} can become store credit`}
                       className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
                         outcome === "store_credit"
                           ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
@@ -539,17 +557,19 @@ export default function SingleInvoiceReturn({
               ) : (
                 <div className="mb-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 px-4 py-3">
                   <p className="text-sm font-medium text-gray-900 dark:text-white">
-                    Nothing was paid on this invoice.
+                    {refundable <= 0
+                      ? "Nothing was paid on this invoice."
+                      : "The amount received on this invoice is needed to cover its remaining balance."}
                   </p>
                   <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
                     This return reduces the invoice's outstanding by{" "}
                     {formatCurrencyWithSymbol(totalReturnAmount, currency)} - no refund, no store
-                    credit, since no money ever changed hands.
+                    credit{refundable <= 0 ? ", since no money ever changed hands." : "."}
                   </p>
                 </div>
               )}
 
-              {outcome === "refund" ? (
+              {available > 0 && (effectiveOutcome === "refund" ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {/* Payment Method Selection */}
                   <div>
@@ -578,7 +598,7 @@ export default function SingleInvoiceReturn({
                   </div>
 
                   {/* Refund amount - read-only: always the value of the returned items,
-                      capped at what was received. Change quantities to change it. */}
+                      capped at what's available. Change quantities to change it. */}
                   <div>
                     <div className="relative">
                       <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-gray-500 dark:text-gray-400 text-sm">
@@ -593,29 +613,28 @@ export default function SingleInvoiceReturn({
                       />
                     </div>
                     <p className="mt-1 text-xs text-gray-500 dark:text-gray-400 text-right">
-                      Refund equals the returned items' value (max {formatCurrencyWithSymbol(refundable, currency)}).
+                      Refund equals the returned items' value (max {formatCurrencyWithSymbol(available, currency)}).
                       Reduce return quantities to refund less.
                     </p>
                   </div>
                 </div>
-              ) : refundable > 0 ? (
-                // Store credit with something actually paid. The "nothing was paid"
-                // case has its own panel above the chooser and needs no repeat here.
+              ) : (
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {totalReturnAmount > refundable
-                    ? // Partly-paid original: only the paid slice becomes spendable
-                      // credit; the unpaid slice settles this invoice's own balance
-                      // instead of floating (server does this automatically after submit).
-                      `No money moves. Only the paid portion, ${formatCurrencyWithSymbol(
-                        refundable,
+                  {totalReturnAmount > available
+                    ? // Partial return where the available slice is smaller than the
+                      // return's full value - the rest settles this invoice's own
+                      // balance instead of floating (server does this automatically
+                      // after submit).
+                      `No money moves. Only ${formatCurrencyWithSymbol(
+                        available,
                         currency
-                      )}, becomes spendable store credit - the remaining ${formatCurrencyWithSymbol(
-                        totalReturnAmount - refundable,
+                      )} becomes spendable store credit - the remaining ${formatCurrencyWithSymbol(
+                        totalReturnAmount - available,
                         currency
-                      )} was never paid, so it settles this invoice's own balance instead.`
+                      )} settles this invoice's own balance instead.`
                     : "No money moves. The returned value stays as the customer's store credit and can be applied to their other invoices."}
                 </p>
-              ) : null}
+              ))}
             </div>
 
             {/* Action Buttons */}

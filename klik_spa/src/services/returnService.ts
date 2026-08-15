@@ -16,6 +16,7 @@ export interface InvoiceForReturn {
   customer: string;
   grand_total: number;
   paid_amount?: number;
+  outstanding_amount?: number;
   status: string;
   items: ReturnItem[];
 }

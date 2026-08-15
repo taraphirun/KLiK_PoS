@@ -19,6 +19,22 @@ Payment Reconciliation mechanism store-credit redemption already used. See
 as the historical record of the original design, not a description of current behavior. 48/48 console
 checks green as of this revision.
 
+**2026-08-15, second revision (same day):** the funding cap itself was too generous. It capped
+refund/credit at *total money ever received on the invoice*, independent of how much of that same
+invoice was still outstanding - so a small partial return on a mostly-unpaid invoice could still hand
+back cash/credit for that one item while the rest of the bill stayed just as owed (user rule: "we
+don't give out cash or credit unless we have more money than the customer owes us"). New formula,
+`get_available_for_cash_or_credit()` in `hd/returns.py`: available = money received, minus whatever
+would still be owed if this return did nothing but reduce the bill. A full return still uses 100% of
+what was received (nothing left to protect); a partial return is capped at the genuine excess. Both
+`apply_return_outcome` (klik) and `validate_return_payout` (Desk hook) use this. `settle_unfunded_residual`
+now takes the unfunded amount explicitly from the caller rather than re-deriving it from the return
+doc's raw outstanding - the old re-derivation was correct for refund by construction but silently
+wrong for store_credit on invoices with prior-refund history. Frontend chooser is now reactive: shown/
+hidden based on `available` recomputed live as return quantities change, not a one-time gate. 58/58
+console checks green (added test_available_rule.py, 12 checks on clean invoice numbers) plus the
+existing 46 unaffected (full-return cases are mathematically identical under the new formula).
+
 ## Objective
 ERPNext already ships a customer statement capability, but it is spread across a report (General
 Ledger), a summary report (Accounts Receivable + ageing), and a batch emailer DocType (Process

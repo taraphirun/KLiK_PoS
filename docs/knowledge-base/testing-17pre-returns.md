@@ -156,6 +156,29 @@ doubled the value) — see phase-17 / hd/returns.py for the mechanism.
 
 - [ ] pass
 
+## 9. Partial return doesn't drain money still owed on the rest of the invoice (2026-08-15)
+
+The rule: cash/credit is only given from money that's genuinely spare - not needed to
+cover what's left owing on the SAME invoice. A small partial return on a mostly-unpaid
+invoice must not hand back cash/credit while the rest of that invoice stays just as
+owed.
+
+1. Credit sale, 10 items @ $10 (grand total $100), then Receive Payment **$30** cash
+   (outstanding $70).
+2. Return just **1 item** ($10). **Expect:** no chooser - gray panel: "The amount
+   received on this invoice is needed to cover its remaining balance." Submit reduces
+   the bill by $10 (outstanding 70 → 60), no cash, no credit.
+3. Same setup, fresh invoice. Return **8 of 10 items** ($80 - big enough to clear the
+   $70 still owed and then some). **Expect:** chooser appears (both Refund and Store
+   Credit enabled), capped at $30 (the full amount paid - nothing left to protect once
+   the return covers what's owed). Submit as Store Credit: credit note ends at exactly
+   -$30 spendable; original settles to $20 (2 unreturned items × $10, correct).
+4. Same setup, fresh invoice, return **all 10 items** (full return). **Expect:**
+   unaffected by this rule - refund/credit available up to the full $30 paid, same as
+   before this change.
+
+- [ ] pass
+
 ## Known test-site quirks (not bugs)
 
 - Old returns created before the fix (00159–00163 era) have phantom "Cash" rows; those

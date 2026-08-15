@@ -444,6 +444,22 @@ export default function MultiInvoiceReturn({
     selectedInvoices.has(invoice.name) && invoice.items.some(item => (item.return_qty || 0) > 0)
   );
 
+  // How much of an invoice's return may become cash or spendable store credit (phase-17
+  // §2c, revised 2026-08-15) - mirrors hd/returns.get_available_for_cash_or_credit. A
+  // partial return must not drain money still needed to cover the invoice's unreturned
+  // remainder; only a full return, or genuine spare beyond that need, is available.
+  // `paid_amount` here is the raw invoice field (a proxy for money received, same
+  // approximation this screen already used pre-2026-08-15) - the backend's actual
+  // `get_refundable_amount` nets out prior refunds/Payment Entry allocations more
+  // precisely and is the real authority; this just decides what the UI offers.
+  const getAvailableForInvoice = (invoice: InvoiceForReturn) => {
+    const paidAmount = (invoice as InvoiceWithPaidAmount).paid_amount || 0;
+    const outstandingAmount = (invoice as InvoiceWithPaidAmount).outstanding_amount || 0;
+    const returnValue = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
+    const outstandingAfterPureReduction = Math.max(outstandingAmount - returnValue, 0);
+    return Math.max(paidAmount - outstandingAfterPureReduction, 0);
+  };
+
   const totalReturnAmount = invoices.reduce((total, invoice) =>
     total + invoice.items.reduce((invoiceTotal, item) =>
       invoiceTotal + (item.return_qty || 0) * item.rate, 0
@@ -454,8 +470,12 @@ export default function MultiInvoiceReturn({
     const invoiceReturns = invoices
       .filter(invoice => selectedInvoices.has(invoice.name))
       .map(invoice => {
-        const outcome = invoiceOutcomes[invoice.name]
-          || (((invoice as InvoiceWithPaidAmount).paid_amount || 0) > 0 ? 'refund' : 'store_credit');
+        // Same effectiveOutcome pattern as SingleInvoiceReturn: a stale "refund" pick
+        // left selected while quantity edits dropped `available` to 0 must not be sent
+        // as-is - the backend would (correctly) reject it.
+        const available = getAvailableForInvoice(invoice);
+        const rawOutcome = invoiceOutcomes[invoice.name] || (available > 0 ? 'refund' : 'store_credit');
+        const outcome = available > 0 ? rawOutcome : 'store_credit';
         const isRefund = outcome === 'refund';
         return {
           invoice_name: invoice.name,
@@ -1173,24 +1193,29 @@ export default function MultiInvoiceReturn({
                     </table>
                   </div>
                   {/* Per-invoice settlement controls - only when invoice is selected.
-                      Nothing was paid -> nothing to choose (refund = $0, store credit =
-                      $0): the return just reduces the bill automatically, same collapse
-                      as SingleInvoiceReturn. No separate "reduce bill" choice anymore
-                      (retired 2026-08-15, see hd/returns.py for why the old flag=0
-                      write was unsafe on a full return of a partly-paid invoice). */}
+                      Nothing available (see getAvailableForInvoice above) -> nothing to
+                      choose (refund = $0, store credit = $0): the return just reduces
+                      the bill automatically, same collapse as SingleInvoiceReturn. No
+                      separate "reduce bill" choice anymore (retired 2026-08-15, see
+                      hd/returns.py for why the old flag=0 write was unsafe, and why the
+                      cap is `available` - money received minus what's still needed for
+                      the invoice's unreturned remainder - not just raw paid_amount). */}
                   {selectedInvoices.has(invoice.name) && (() => {
                     const paidAmount = (invoice as InvoiceWithPaidAmount).paid_amount || 0;
-                    const resolvedOutcome = invoiceOutcomes[invoice.name] || (paidAmount > 0 ? 'refund' : 'store_credit');
-                    if (paidAmount <= 0) {
+                    const available = getAvailableForInvoice(invoice);
+                    const resolvedOutcome = invoiceOutcomes[invoice.name] || (available > 0 ? 'refund' : 'store_credit');
+                    if (available <= 0) {
                       return (
                         <div className="px-4 py-3 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-600">
                           <div className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 px-3 py-2">
                             <p className="text-xs font-medium text-gray-900 dark:text-white">
-                              Nothing was paid on this invoice.
+                              {paidAmount <= 0
+                                ? "Nothing was paid on this invoice."
+                                : "The amount received on this invoice is needed to cover its remaining balance."}
                             </p>
                             <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
                               This return reduces the invoice's outstanding - no refund, no store
-                              credit, since no money ever changed hands.
+                              credit{paidAmount <= 0 ? ", since no money ever changed hands." : "."}
                             </p>
                           </div>
                         </div>
@@ -1253,7 +1278,7 @@ export default function MultiInvoiceReturn({
                               {currencySymbol}
                             </span>
                             {/* Read-only: the refund always equals the returned items' value,
-                                capped at what was paid - change quantities to change it
+                                capped at what's available - change quantities to change it
                                 (backend enforces the same rule). */}
                             <input
                               type="number"
@@ -1261,7 +1286,7 @@ export default function MultiInvoiceReturn({
                               value={(() => {
                                 const returnedItemsAmount = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
                                 const rounded = Math.round(returnedItemsAmount * 100) / 100;
-                                return Math.min(rounded, paidAmount);
+                                return Math.min(rounded, available);
                               })()}
                               className="w-full pl-8 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white text-right cursor-default"
                               placeholder="0.00"
@@ -1274,8 +1299,8 @@ export default function MultiInvoiceReturn({
                           <p className="text-xs text-gray-600 dark:text-gray-400">
                             {(() => {
                               const returnedItemsAmount = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
-                              return returnedItemsAmount > paidAmount
-                                ? `Only the paid portion, ${formatCurrencyWithSymbol(paidAmount, currency)}, becomes spendable store credit - the rest settles this invoice's own balance.`
+                              return returnedItemsAmount > available
+                                ? `Only ${formatCurrencyWithSymbol(available, currency)} becomes spendable store credit - the rest settles this invoice's own balance.`
                                 : "No money moves - value stays as the customer's store credit.";
                             })()}
                           </p>

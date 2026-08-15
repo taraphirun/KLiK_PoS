@@ -18,6 +18,16 @@ engine. For a fully unpaid original this collapses cleanly: the funded slice is 
 refund, no credit), and 100% of the return's value reduces the original bill - exactly
 what a cashier expects from returning items nobody ever paid for.
 
+The funding cap is not simply "money received" (`get_refundable_amount`) though - it is
+`get_available_for_cash_or_credit()` (2026-08-15, user rule): money received minus
+whatever is still needed to cover the invoice's *unreturned* remainder. A partly-paid
+invoice with most of its balance still outstanding should not hand out cash or credit
+for a small partial return just because more was paid historically than this one
+return is worth - that money is still earmarked for the rest of the bill. Only a FULL
+return (nothing left unreturned) uses the whole `refundable` figure, because there's no
+remainder left to protect. Handing out cash/credit while the SAME invoice still owes
+money elsewhere is never done, regardless of how much has been paid in total.
+
 There used to be a third outcome, "reduce_bill" - book the credit directly against the
 original via `update_outstanding_for_self = 0` and stop there. Retired (2026-08-15):
 ERPNext's own accounts_controller auto-flips that flag back to 1 whenever the return's
@@ -108,6 +118,20 @@ def get_refundable_amount(invoice_name, company=None):
 	return flt(original.paid_amount) + flt(pe_net) + flt(prior_refunds)
 
 
+def get_available_for_cash_or_credit(refundable, outstanding_before, return_total):
+	"""How much of a return's value may become cash or spendable store credit.
+
+	Not just `refundable` - a partial return must not drain money that's still needed
+	to cover the invoice's unreturned remainder. Compute what would still be owed if
+	this return did nothing but reduce the bill (`outstanding_after`); only the slice of
+	`refundable` beyond that is genuinely spare and safe to hand out. A FULL return
+	(return_total >= outstanding_before) drives outstanding_after to 0, so the whole of
+	`refundable` becomes available - there's no remainder left to protect.
+	"""
+	outstanding_after = max(flt(outstanding_before) - flt(return_total), 0.0)
+	return max(flt(refundable) - outstanding_after, 0.0)
+
+
 @frappe.whitelist()
 def get_return_context(invoice):
 	"""What the return UI needs to offer the right outcomes: how much money was actually
@@ -128,17 +152,20 @@ def get_return_context(invoice):
 	}
 
 
-def resolve_outcome(outcome, refundable):
-	"""Default when the caller didn't choose: refund what was paid, otherwise store
-	credit - which, at 0 refundable, collapses to a pure bill reduction (see module
-	docstring). Never defaults to the retired "reduce_bill" mechanic."""
+def resolve_outcome(outcome, available):
+	"""Default when the caller didn't choose: refund if there's anything available to
+	refund, otherwise store credit - which, at 0 available, collapses to a pure bill
+	reduction (see module docstring). Never defaults to the retired "reduce_bill"
+	mechanic. `available` is `get_available_for_cash_or_credit()`, not raw
+	`get_refundable_amount()` - a partly-paid partial return with nothing spare still
+	defaults to store_credit (i.e. bill reduction), not a doomed refund attempt."""
 	if outcome:
 		if outcome not in RETURN_OUTCOMES:
 			frappe.throw(_("Invalid return outcome {0}. Use one of: {1}").format(
 				outcome, ", ".join(RETURN_OUTCOMES)
 			))
 		return outcome
-	return "refund" if refundable > 0 else "store_credit"
+	return "refund" if available > 0 else "store_credit"
 
 
 def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_method=None, refund_amount=None):
@@ -146,13 +173,20 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 
 	Must be called after items/qty are set and before save. Totals are computed here
 	(core method) so the refund amount can default to the return's own total.
+
+	Returns (outcome, unfunded_amount): unfunded_amount is the part of the return's
+	value this call did NOT fund as cash or credit (0 if fully funded) - the caller
+	must pass it to settle_unfunded_residual() right after submit so it reconciles
+	against the original's own outstanding instead of floating.
 	"""
 	_set_return_discount_and_write_off(return_doc, original_invoice)
 	return_doc.run_method("calculate_taxes_and_totals")
 	return_total = abs(flt(return_doc.rounded_total) or flt(return_doc.grand_total))
 
 	refundable = get_refundable_amount(original_invoice.name)
-	outcome = resolve_outcome(outcome, refundable)
+	outstanding_before = flt(original_invoice.outstanding_amount)
+	available = get_available_for_cash_or_credit(refundable, outstanding_before, return_total)
+	outcome = resolve_outcome(outcome, available)
 
 	# Legacy alias: "reduce_bill" as its own booking mechanic (flag=0, stop) is retired
 	# - see module docstring for why. Old callers that still pass it get the store_credit
@@ -167,24 +201,34 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 	_set_outcome_field(return_doc, outcome)
 
 	if outcome == "refund":
-		if refundable <= 0:
+		if available <= 0:
+			if refundable <= 0:
+				frappe.throw(
+					_("Original invoice {0} is unpaid - a cash/bank refund is not allowed. "
+					  "Choose 'store credit' instead.").format(original_invoice.name)
+				)
 			frappe.throw(
-				_("Original invoice {0} is unpaid - a cash/bank refund is not allowed. "
-				  "Choose 'store credit' instead.").format(original_invoice.name)
+				_("The {0} received on invoice {1} is needed to cover its remaining {2} "
+				  "balance - nothing is available to refund for this return. It will "
+				  "reduce the bill instead.").format(
+					flt(refundable, 2), original_invoice.name, flt(outstanding_before, 2)
+				)
 			)
 
 		# The refund is NOT freely choosable: it always equals the value of the returned
-		# items, capped at what was actually received. A cashier who wants to hand back
-		# less money must return fewer items - otherwise the difference silently became
-		# floating store credit the cashier never chose (user-reported, invoice 00179:
-		# all items returned at 13.6 but refund typed as 3.6 -> 10.0 orphaned credit).
-		amount = min(return_total, refundable)
+		# items, capped at what's available (money received, minus whatever is still
+		# needed to cover the rest of this invoice - get_available_for_cash_or_credit).
+		# A cashier who wants to hand back less money must return fewer items -
+		# otherwise the difference silently became floating store credit the cashier
+		# never chose (user-reported, invoice 00179: all items returned at 13.6 but
+		# refund typed as 3.6 -> 10.0 orphaned credit).
+		amount = min(return_total, available)
 		if refund_amount is not None and abs(flt(refund_amount) - amount) > 0.01:
 			frappe.throw(
 				_("Refund must equal the value of the returned items ({0}, capped at the {1} "
-				  "actually received) - got {2}. To refund less, reduce the return quantities; "
+				  "available) - got {2}. To refund less, reduce the return quantities; "
 				  "to keep value with the customer instead, use 'store credit'.").format(
-					flt(amount, 2), flt(refundable, 2), flt(refund_amount, 2)
+					flt(amount, 2), flt(available, 2), flt(refund_amount, 2)
 				)
 			)
 		if amount <= 0:
@@ -220,22 +264,27 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 		if not return_doc.get("pos_profile") and original_invoice.get("pos_profile"):
 			return_doc.pos_profile = original_invoice.pos_profile
 
+		unfunded = return_total - amount
+
 	else:  # store_credit (covers the retired reduce_bill alias too - see above)
 		# Store credit is money-equivalent: the customer can spend it on any invoice, so
-		# only the funded slice (up to `refundable`) becomes spendable credit. An unpaid
-		# original funds nothing - no throw here for that anymore; it simply means the
-		# credit note carries no spendable balance at all. Either way, whatever isn't
-		# funded is settled against the original bill right after submit (see
-		# settle_unfunded_residual, called by the caller whenever return_total >
-		# refundable) - so a fully unpaid return still does exactly what a cashier
-		# expects: the bill goes down by the full returned value, nothing floats.
+		# only the funded slice (up to `available`, same cap a refund would use) becomes
+		# spendable credit. An unpaid original, or a partial return with nothing spare,
+		# funds nothing - no throw for that; the credit note just carries no spendable
+		# balance. Either way, whatever isn't funded is settled against the original
+		# bill right after submit (see settle_unfunded_residual) - so a fully unpaid
+		# return still does exactly what a cashier expects: the bill goes down by the
+		# full returned value, nothing floats.
 		#
-		# Keeps its own negative outstanding = the store credit balance, trimmed down to
-		# the funded amount by the post-submit residual settlement.
+		# The doc's own outstanding after submit will mechanically be -return_total
+		# (flag=1 books the whole thing against itself) - the caller's post-submit
+		# settle_unfunded_residual call is what actually trims it down to -funded.
 		return_doc.update_outstanding_for_self = 1
 		_make_non_pos(return_doc)
+		funded = min(return_total, available)
+		unfunded = return_total - funded
 
-	return outcome
+	return outcome, unfunded
 
 
 def _set_return_discount_and_write_off(return_doc, original_invoice):
@@ -299,11 +348,10 @@ def _set_return_discount_and_write_off(return_doc, original_invoice):
 		)
 
 
-def settle_unfunded_residual(return_name, original_name):
-	"""After a refund OR store_credit return submits: if the return kept a negative
-	outstanding beyond what was actually paid (the original was only partly, or not at
-	all, paid, so the refund/credit was capped below the returned value), knock that
-	unfunded residual off against the original invoice's own outstanding instead of
+def settle_unfunded_residual(return_name, original_name, unfunded_amount):
+	"""Reconcile `unfunded_amount` - the part of a return's value apply_return_outcome
+	did NOT fund as cash or store credit (see get_available_for_cash_or_credit) - off
+	the return's own outstanding, against the original invoice's own balance, instead of
 	leaving it floating.
 
 	Without this, a full return of a partly-paid credit sale left the unpaid slice
@@ -315,26 +363,43 @@ def settle_unfunded_residual(return_name, original_name):
 	part is the unpaid part of the very bill being returned, so it clears that bill,
 	leaving only the truly-paid amount as the customer's spendable balance.
 
-	Load-bearing for fully-unpaid returns too (2026-08-15, retirement of the separate
-	"reduce_bill" mechanic): those now go through this same path with 0 funded, so this
-	call is the *only* thing that reduces the original's outstanding at all - not just a
-	cleanup step. Callers must surface a failure to the cashier rather than swallow it.
+	`unfunded_amount` is passed in explicitly rather than re-derived from the return
+	doc's post-submit outstanding_amount: that number is correct-by-construction for
+	refund (payment rows mechanically encode the split) but NOT for store_credit, whose
+	doc always ends up at -return_total regardless of what was actually "available" -
+	re-deriving it from raw outstanding/return_total (as an earlier version of this
+	function did) silently ignored `refundable`/prior-refund history on invoices with
+	more than one prior return. The caller already did that arithmetic correctly.
+
+	Load-bearing for fully-unpaid and no-headroom-left returns too (2026-08-15): those
+	now go through this same path with 0 funded, so this call is the *only* thing that
+	reduces the original's outstanding at all - not just a cleanup step. Callers must
+	surface a failure to the cashier rather than swallow it.
 
 	Uses the same Payment Reconciliation machinery as store-credit redemption. Returns
 	None if there was nothing to settle, else {"success": bool, "amount": flt} - on
 	failure the (accounting-consistent) floating-credit state is left for the /payments
 	reconciliation panel to resolve manually, and the caller must say so.
 	"""
-	residual = -flt(frappe.db.get_value("Sales Invoice", return_name, "outstanding_amount"))
+	unfunded_amount = flt(unfunded_amount)
+	if unfunded_amount <= 0.005:
+		return None
+
+	# Defensive re-read, fresh post-submit: never reconcile more than what's actually
+	# still outstanding on either document, regardless of what the caller computed.
+	return_outstanding = -flt(frappe.db.get_value("Sales Invoice", return_name, "outstanding_amount"))
 	orig = frappe.db.get_value(
 		"Sales Invoice", original_name, ["customer", "outstanding_amount"], as_dict=True
 	)
-	if not orig or residual <= 0.005 or flt(orig.outstanding_amount) <= 0.005:
+	if not orig:
+		return None
+
+	amount = flt(min(unfunded_amount, return_outstanding, flt(orig.outstanding_amount)), 2)
+	if amount <= 0.005:
 		return None
 
 	from klik_pos.hd.store_credit import apply_store_credit
 
-	amount = flt(min(residual, flt(orig.outstanding_amount)), 2)
 	try:
 		apply_store_credit(orig.customer, original_name, amount=amount, credit_note=return_name)
 		return {"success": True, "amount": amount}
@@ -360,8 +425,9 @@ def _set_outcome_field(return_doc, outcome):
 
 def validate_return_payout(doc, method=None):
 	"""Sales Invoice `validate` hook (hooks.py): no return may hand back more money than
-	was actually received against its original invoice - regardless of which client
-	created it (klik SPA, Desk, API)."""
+	is actually available - money received, minus whatever is still needed to cover the
+	original invoice's unreturned remainder (get_available_for_cash_or_credit) -
+	regardless of which client created it (klik SPA, Desk, API)."""
 	if not doc.get("is_return") or not doc.get("return_against"):
 		return
 
@@ -372,14 +438,22 @@ def validate_return_payout(doc, method=None):
 		return
 
 	refundable = get_refundable_amount(doc.return_against)
-	if refund_total > refundable + 0.005:
+	outstanding_before = flt(
+		frappe.db.get_value("Sales Invoice", doc.return_against, "outstanding_amount")
+	)
+	return_total = abs(flt(doc.rounded_total) or flt(doc.grand_total))
+	available = get_available_for_cash_or_credit(refundable, outstanding_before, return_total)
+
+	if refund_total > available + 0.005:
 		frappe.throw(
-			_("Return {0}: refund of {1} exceeds the {2} actually received against {3}. "
-			  "Reduce the refund, or return as store credit / bill reduction instead.").format(
+			_("Return {0}: refund of {1} exceeds the {2} available against {3} ({4} received in "
+			  "total - the rest is needed to cover its remaining balance). Reduce the refund, or "
+			  "return as store credit / let it reduce the bill instead.").format(
 				doc.name or _("(new)"),
 				flt(refund_total, 2),
-				flt(refundable, 2),
+				flt(available, 2),
 				doc.return_against,
+				flt(refundable, 2),
 			),
-			title=_("Refund exceeds amount received"),
+			title=_("Refund exceeds amount available"),
 		)
