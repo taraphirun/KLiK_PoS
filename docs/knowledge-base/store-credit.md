@@ -2,12 +2,14 @@
 
 ## What it is
 
-Store credit is created by a return settled as "Store credit" (see `returns.md`) — only
-possible when money was actually received against the original invoice, and capped at
-that amount, since store credit is money-equivalent. It is
-**not** a separate wallet: it is the credit note itself, sitting in Accounts Receivable
-with a negative outstanding amount. The customer's total store credit = the sum of
-their credit notes that still have negative outstanding.
+Store credit is created by a return settled as "Store credit" (see `returns.md`),
+always capped at the amount actually received against the original invoice — since
+store credit is money-equivalent, it can never exceed real money paid. If nothing was
+paid, the cap is zero and the return simply reduces the original bill instead (no
+chooser is even shown in that case — see `returns.md` §3). It is **not** a separate
+wallet: it is the credit note itself, sitting in Accounts Receivable with a negative
+outstanding amount. The customer's total store credit = the sum of their credit notes
+that still have negative outstanding.
 
 Because it lives in AR, it can never disagree with accounting — the customer statement,
 the Desk Accounts Receivable report, and the POS all read the same number from the same

@@ -55,12 +55,12 @@ export default function SingleInvoiceReturn({
   const [returnAmount, setReturnAmount] = useState<number>(0);
 
   // How the return is settled (phase-17 §2c). refundable = money actually received
-  // against the original (server-computed - includes Payment Entries, excludes bill
-  // reductions), which caps cash/bank refunds; outstanding decides whether "reduce
-  // bill" is meaningful.
+  // against the original (server-computed - includes Payment Entries), which caps
+  // cash/bank refunds and spendable store credit alike. Whatever isn't funded always
+  // settles the original invoice's own balance automatically after submit - there is
+  // no separate "reduce bill" choice anymore (see hd/returns.py).
   const [outcome, setOutcome] = useState<ReturnOutcome>("refund");
   const [refundable, setRefundable] = useState<number>(0);
-  const [outstanding, setOutstanding] = useState<number>(0);
 
   useEffect(() => {
     if (isOpen && invoice) {
@@ -98,12 +98,13 @@ export default function SingleInvoiceReturn({
     setLoadingReturnData(true);
     try {
 
-      // Refund cap + outstanding from the server - drives which outcomes are offered.
+      // Refund/store-credit cap from the server - drives whether a chooser is offered.
       const context = await getReturnContext(invoice.name || invoice.id);
       const contextRefundable = context?.refundable ?? 0;
       setRefundable(contextRefundable);
-      setOutstanding(context?.outstanding ?? 0);
-      setOutcome(contextRefundable > 0 ? "refund" : "reduce_bill");
+      // Nothing paid -> nothing to choose: the return is automatically a bill reduction
+      // (store_credit mechanic, funded amount 0 - see hd/returns.py). No chooser shown.
+      setOutcome(contextRefundable > 0 ? "refund" : "store_credit");
 
       // Always fetch complete invoice details from backend to get accurate grand_total
       let invoiceWithItems = invoice;
@@ -226,10 +227,22 @@ export default function SingleInvoiceReturn({
         const outcomeLabel =
           outcome === "refund"
             ? `refunded via ${selectedPaymentMethod || "original payment method"}`
-            : outcome === "reduce_bill"
+            : refundable <= 0
             ? "bill reduced"
             : "kept as store credit";
         toast.success(`Return created successfully (${outcomeLabel})`);
+        // Any unpaid slice of the return settles the original bill automatically after
+        // submit - if that step failed, the return itself still succeeded but the bill
+        // wasn't reduced and the value is sitting as unresolved credit. Say so; don't
+        // let it look like everything just worked.
+        if (result.residualSettlement && !result.residualSettlement.success) {
+          toast.warning(
+            `Return recorded, but automatically reducing the original bill by ` +
+              `${formatCurrencyWithSymbol(result.residualSettlement.amount, currency)} failed. ` +
+              `Resolve manually in Payments > Reconciliation.`,
+            { autoClose: false }
+          );
+        }
         onSuccess(result.returnInvoice!);
         onClose();
       } else {
@@ -309,8 +322,9 @@ export default function SingleInvoiceReturn({
                 </div>
                 <div className="text-right">
                   {/* The refund-vs-return-value breakdown only means something for the
-                      refund outcome - for reduce_bill / store_credit the full returned
-                      value is credited and no "not refunded" remainder exists. */}
+                      refund outcome - for store_credit the full returned value is
+                      credited (funded slice as spendable credit, any unfunded slice
+                      auto-settling the bill) and there's no "not refunded" remainder. */}
                   {outcome === "refund" && originalInvoicePaidAmount > 0 && totalReturnAmount !== returnAmount ? (
                     <div className="text-xs font-medium text-gray-700 dark:text-gray-300">
                       <div className="flex justify-between items-center">
@@ -481,67 +495,59 @@ export default function SingleInvoiceReturn({
         {/* Fixed Footer with Payment Methods and Return Button */}
         {hasItemsToReturn && (
           <div className="px-6 py-4 bg-gray-50 dark:bg-gray-700 border-t border-gray-200 dark:border-gray-600 flex-shrink-0">
-            {/* Return outcome (phase-17 §2c): where does the returned value go? */}
+            {/* Return outcome (phase-17 §2c): where does the returned value go? Only
+                offered when something was actually paid - an unpaid original has
+                nothing to choose between (refund = $0, store credit = $0), so it just
+                reduces the bill automatically, no chooser shown (2026-08-15: the old
+                third "Reduce Bill" button, and defaulting to it for unpaid invoices,
+                is retired - see hd/returns.py for why it was unsafe). */}
             <div className="mb-4">
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
-                Settle Return As
-              </h3>
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                <button
-                  type="button"
-                  onClick={() => setOutcome("refund")}
-                  disabled={refundable <= 0}
-                  title={
-                    refundable <= 0
-                      ? "Nothing was paid on this invoice - no money to refund"
-                      : `Up to ${formatCurrencyWithSymbol(refundable, currency)} was received and can be refunded`
-                  }
-                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                    outcome === "refund"
-                      ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
-                      : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
-                  } disabled:opacity-40 disabled:cursor-not-allowed`}
-                >
-                  Refund
-                  <span className="block text-xs font-normal">cash / bank back</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOutcome("reduce_bill")}
-                  disabled={outstanding <= 0}
-                  title={
-                    outstanding <= 0
-                      ? "This invoice has nothing outstanding to reduce"
-                      : `Reduces this invoice's unpaid ${formatCurrencyWithSymbol(outstanding, currency)}`
-                  }
-                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                    outcome === "reduce_bill"
-                      ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
-                      : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
-                  } disabled:opacity-40 disabled:cursor-not-allowed`}
-                >
-                  Reduce Bill
-                  <span className="block text-xs font-normal">lower what's owed</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setOutcome("store_credit")}
-                  disabled={refundable <= 0}
-                  title={
-                    refundable <= 0
-                      ? "Nothing was paid on this invoice - no money to convert into store credit"
-                      : `Up to ${formatCurrencyWithSymbol(refundable, currency)} of paid value can become store credit`
-                  }
-                  className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
-                    outcome === "store_credit"
-                      ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
-                      : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
-                  } disabled:opacity-40 disabled:cursor-not-allowed`}
-                >
-                  Store Credit
-                  <span className="block text-xs font-normal">use on other invoices</span>
-                </button>
-              </div>
+              {refundable > 0 ? (
+                <>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-3">
+                    Settle Return As
+                  </h3>
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    <button
+                      type="button"
+                      onClick={() => setOutcome("refund")}
+                      title={`Up to ${formatCurrencyWithSymbol(refundable, currency)} was received and can be refunded`}
+                      className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                        outcome === "refund"
+                          ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
+                          : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
+                      }`}
+                    >
+                      Refund
+                      <span className="block text-xs font-normal">cash / bank back</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOutcome("store_credit")}
+                      title={`Up to ${formatCurrencyWithSymbol(refundable, currency)} of paid value can become store credit`}
+                      className={`px-3 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                        outcome === "store_credit"
+                          ? "border-orange-500 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300"
+                          : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-600"
+                      }`}
+                    >
+                      Store Credit
+                      <span className="block text-xs font-normal">use on other invoices</span>
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="mb-3 rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 px-4 py-3">
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">
+                    Nothing was paid on this invoice.
+                  </p>
+                  <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
+                    This return reduces the invoice's outstanding by{" "}
+                    {formatCurrencyWithSymbol(totalReturnAmount, currency)} - no refund, no store
+                    credit, since no money ever changed hands.
+                  </p>
+                </div>
+              )}
 
               {outcome === "refund" ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -592,11 +598,11 @@ export default function SingleInvoiceReturn({
                     </p>
                   </div>
                 </div>
-              ) : (
+              ) : refundable > 0 ? (
+                // Store credit with something actually paid. The "nothing was paid"
+                // case has its own panel above the chooser and needs no repeat here.
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {outcome === "reduce_bill"
-                    ? "No money moves. The returned value is credited against this invoice, lowering what the customer still owes."
-                    : refundable > 0 && totalReturnAmount > refundable
+                  {totalReturnAmount > refundable
                     ? // Partly-paid original: only the paid slice becomes spendable
                       // credit; the unpaid slice settles this invoice's own balance
                       // instead of floating (server does this automatically after submit).
@@ -609,7 +615,7 @@ export default function SingleInvoiceReturn({
                       )} was never paid, so it settles this invoice's own balance instead.`
                     : "No money moves. The returned value stays as the customer's store credit and can be applied to their other invoices."}
                 </p>
-              )}
+              ) : null}
             </div>
 
             {/* Action Buttons */}

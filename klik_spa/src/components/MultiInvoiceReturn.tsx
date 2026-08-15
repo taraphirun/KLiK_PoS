@@ -51,9 +51,10 @@ export default function MultiInvoiceReturn({
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedInvoices, setSelectedInvoices] = useState<Set<string>>(new Set());
   const [invoicePayments, setInvoicePayments] = useState<Record<string, { method: string; amount: number }>>({});
-  // Per-invoice return outcome (phase-17 §2c): refund / reduce_bill / store_credit.
-  // Defaults per invoice: refund when something was paid, reduce_bill otherwise - the
-  // backend enforces the real caps either way.
+  // Per-invoice return outcome (phase-17 §2c): refund or store_credit. Defaults to
+  // refund when something was paid, store_credit otherwise - which, for an unpaid
+  // invoice, funds $0 and reduces the bill automatically (no separate "reduce bill"
+  // choice; retired 2026-08-15, see hd/returns.py). Backend enforces the real caps.
   const [invoiceOutcomes, setInvoiceOutcomes] = useState<Record<string, string>>({});
 
   // New workflow states
@@ -454,15 +455,15 @@ export default function MultiInvoiceReturn({
       .filter(invoice => selectedInvoices.has(invoice.name))
       .map(invoice => {
         const outcome = invoiceOutcomes[invoice.name]
-          || (((invoice as InvoiceWithPaidAmount).paid_amount || 0) > 0 ? 'refund' : 'reduce_bill');
+          || (((invoice as InvoiceWithPaidAmount).paid_amount || 0) > 0 ? 'refund' : 'store_credit');
         const isRefund = outcome === 'refund';
         return {
           invoice_name: invoice.name,
           return_items: invoice.items.filter(item => (item.return_qty || 0) > 0),
           // Payment info only applies to refunds - the backend rejects payout rows on
-          // reduce_bill / store_credit returns. Resolve the same default the select
-          // displays, so what the cashier sees is what actually gets sent (the old code
-          // sent undefined unless the select was touched).
+          // store_credit returns. Resolve the same default the select displays, so what
+          // the cashier sees is what actually gets sent (the old code sent undefined
+          // unless the select was touched).
           payment_method: isRefund
             ? invoicePayments[invoice.name]?.method
               || paymentModes.find(m => m.default === 1)?.mode_of_payment
@@ -1171,31 +1172,45 @@ export default function MultiInvoiceReturn({
                       </tbody>
                     </table>
                   </div>
-                  {/* Per-invoice settlement controls - only when invoice is selected */}
-                  {selectedInvoices.has(invoice.name) && (
+                  {/* Per-invoice settlement controls - only when invoice is selected.
+                      Nothing was paid -> nothing to choose (refund = $0, store credit =
+                      $0): the return just reduces the bill automatically, same collapse
+                      as SingleInvoiceReturn. No separate "reduce bill" choice anymore
+                      (retired 2026-08-15, see hd/returns.py for why the old flag=0
+                      write was unsafe on a full return of a partly-paid invoice). */}
+                  {selectedInvoices.has(invoice.name) && (() => {
+                    const paidAmount = (invoice as InvoiceWithPaidAmount).paid_amount || 0;
+                    const resolvedOutcome = invoiceOutcomes[invoice.name] || (paidAmount > 0 ? 'refund' : 'store_credit');
+                    if (paidAmount <= 0) {
+                      return (
+                        <div className="px-4 py-3 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-600">
+                          <div className="rounded-lg border border-gray-200 dark:border-gray-600 bg-gray-100 dark:bg-gray-800 px-3 py-2">
+                            <p className="text-xs font-medium text-gray-900 dark:text-white">
+                              Nothing was paid on this invoice.
+                            </p>
+                            <p className="mt-0.5 text-xs text-gray-600 dark:text-gray-400">
+                              This return reduces the invoice's outstanding - no refund, no store
+                              credit, since no money ever changed hands.
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
                     <div className="px-4 py-3 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-600">
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                           <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Settle Return As</label>
                           <select
-                            value={invoiceOutcomes[invoice.name]
-                              || (((invoice as InvoiceWithPaidAmount).paid_amount || 0) > 0 ? 'refund' : 'reduce_bill')}
+                            value={resolvedOutcome}
                             onChange={(e) => setInvoiceOutcomes(prev => ({ ...prev, [invoice.name]: e.target.value }))}
                             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-beveren-500"
                           >
-                            <option value="refund" disabled={((invoice as InvoiceWithPaidAmount).paid_amount || 0) <= 0}>
-                              Refund (money back)
-                            </option>
-                            <option value="reduce_bill">Reduce bill (lower what's owed)</option>
-                            {/* Store credit must be funded by money actually received - unpaid
-                                originals can't grant it (backend enforces the same). */}
-                            <option value="store_credit" disabled={((invoice as InvoiceWithPaidAmount).paid_amount || 0) <= 0}>
-                              Store credit (use on other invoices)
-                            </option>
+                            <option value="refund">Refund (money back)</option>
+                            <option value="store_credit">Store credit (use on other invoices)</option>
                           </select>
                         </div>
-                        {(invoiceOutcomes[invoice.name]
-                          || (((invoice as InvoiceWithPaidAmount).paid_amount || 0) > 0 ? 'refund' : 'reduce_bill')) === 'refund' ? (
+                        {resolvedOutcome === 'refund' ? (
                         <>
                         <div>
                           <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Mode of Payment</label>
@@ -1246,8 +1261,7 @@ export default function MultiInvoiceReturn({
                               value={(() => {
                                 const returnedItemsAmount = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
                                 const rounded = Math.round(returnedItemsAmount * 100) / 100;
-                                const paid = (invoice as InvoiceWithPaidAmount).paid_amount || 0;
-                                return paid > 0 ? Math.min(rounded, paid) : rounded;
+                                return Math.min(rounded, paidAmount);
                               })()}
                               className="w-full pl-8 pr-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-white text-right cursor-default"
                               placeholder="0.00"
@@ -1258,15 +1272,19 @@ export default function MultiInvoiceReturn({
                         ) : (
                         <div className="md:col-span-2 flex items-end pb-2">
                           <p className="text-xs text-gray-600 dark:text-gray-400">
-                            {(invoiceOutcomes[invoice.name] || 'reduce_bill') === 'store_credit'
-                              ? "No money moves - value stays as the customer's store credit."
-                              : "No money moves - the credit lowers what the customer owes on this invoice."}
+                            {(() => {
+                              const returnedItemsAmount = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
+                              return returnedItemsAmount > paidAmount
+                                ? `Only the paid portion, ${formatCurrencyWithSymbol(paidAmount, currency)}, becomes spendable store credit - the rest settles this invoice's own balance.`
+                                : "No money moves - value stays as the customer's store credit.";
+                            })()}
                           </p>
                         </div>
                         )}
                       </div>
                     </div>
-                  )}
+                    );
+                  })()}
                 </div>
                               ))}
               </div>

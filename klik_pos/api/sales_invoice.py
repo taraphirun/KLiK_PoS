@@ -3342,12 +3342,18 @@ def return_sales_invoice(invoice_name, outcome=None, payment_method=None):
 		return_doc.save(ignore_permissions=True)
 		return_doc.submit()
 
-		if applied_outcome in ("refund", "store_credit"):
-			# Partly-paid original: the refund/credit was funded only up to what was paid,
-			# so the unpaid remainder clears the original bill instead of floating.
-			settle_unfunded_residual(return_doc.name, original_invoice.name)
+		# Unfunded slice (unpaid, or partly-paid original) clears the original bill
+		# instead of floating - the only mechanism that does this now (§2c retirement of
+		# the separate reduce_bill flag write), so its result is returned to the caller
+		# rather than swallowed.
+		residual_settlement = settle_unfunded_residual(return_doc.name, original_invoice.name)
 
-		return {"success": True, "return_invoice": return_doc.name}
+		return {
+			"success": True,
+			"return_invoice": return_doc.name,
+			"outcome": applied_outcome,
+			"residual_settlement": residual_settlement,
+		}
 
 	except Exception as e:
 		frappe.log_error(frappe.get_traceback(), "Return Invoice Error")
@@ -3944,15 +3950,17 @@ def create_partial_return(
 		return_doc.save(ignore_permissions=True)
 		return_doc.submit()
 
-		if applied_outcome in ("refund", "store_credit"):
-			# Partly-paid original: the refund/credit was funded only up to what was paid,
-			# so the unpaid remainder clears the original bill instead of floating.
-			settle_unfunded_residual(return_doc.name, original_invoice.name)
+		# Unfunded slice (unpaid, or partly-paid original) clears the original bill
+		# instead of floating - the only mechanism that does this now (§2c retirement of
+		# the separate reduce_bill flag write), so its result is returned to the caller
+		# rather than swallowed.
+		residual_settlement = settle_unfunded_residual(return_doc.name, original_invoice.name)
 
 		return {
 			"success": True,
 			"return_invoice": return_doc.name,
 			"outcome": applied_outcome,
+			"residual_settlement": residual_settlement,
 			"message": f"Return created successfully: {return_doc.name} ({applied_outcome})",
 		}
 

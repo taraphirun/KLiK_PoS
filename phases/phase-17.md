@@ -1,14 +1,23 @@
 # Phase 17: Customer Statement (and later Supplier Statement)
 **Module 18**
 
-**Status:** 🚧 In progress. **17-pre (return-flow rework) implemented and live-tested 2026-08-13** —
-26/26 console checks green against `hd.phirun.me` (all scenarios rolled back): item-link fix +
-over-return guard restored, payout caps (klik + Desk via validate hook), outcome→flag wiring,
-store-credit creation and redemption via Payment Reconciliation, three-outcome return UI
-(Single + Multi), store-credit banner in Receive Payment, balance on customer page,
+**Status:** 🚧 In progress. **17-pre (return-flow rework) implemented and live-tested 2026-08-13,
+revised 2026-08-15** — item-link fix + over-return guard restored, payout caps (klik + Desk via
+validate hook), store-credit creation and redemption via Payment Reconciliation, return UI (Single +
+Multi), store-credit banner in Receive Payment, balance on customer page,
 `docs/knowledge-base/{returns,store-credit}.md`. `custom_return_outcome` field created on
 `hd.phirun.me` (before_migrate handles other sites). 17a-17d (statement itself) not started.
 Design decided (user, 2026-08-13); central claims smoke-tested (see "Proof").
+
+**2026-08-15 revision:** the original "reduce_bill" outcome (§2c below, `update_outstanding_for_self
+= 0`) is retired - live testing found ERPNext's own core silently auto-flips that flag whenever a
+return exceeds the original's remaining outstanding, double-booking the value (left the original
+owed AND floated a same-size credit). Collapsed to two outcomes (Refund, Store Credit), both capped
+at money actually received, with any unfunded remainder auto-settling the original bill via the same
+Payment Reconciliation mechanism store-credit redemption already used. See
+`docs/knowledge-base/returns.md` ("Why not three outcomes") for the full writeup - §2c below is kept
+as the historical record of the original design, not a description of current behavior. 48/48 console
+checks green as of this revision.
 
 ## Objective
 ERPNext already ships a customer statement capability, but it is spread across a report (General

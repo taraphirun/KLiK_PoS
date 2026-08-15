@@ -1,17 +1,38 @@
 """Return-outcome rules for Sales Invoice returns (phase-17 17-pre, §2c).
 
-Every klik-created return goes through one of three explicit outcomes:
+A klik-created return goes through one of two cashier-chosen outcomes, both capped at
+`get_refundable_amount()` - money actually received against the original invoice:
 
 - "refund"       - money actually goes back to the customer (cash/bank rows in the
-                   return's payments table). Only allowed up to the amount that was
-                   actually received against the original invoice.
-- "reduce_bill"  - no money moves; the credit is booked against the original invoice
-                   (update_outstanding_for_self = 0), so its outstanding drops.
+                   return's payments table). Only allowed up to the amount received.
 - "store_credit" - no money moves; the credit note keeps its own negative outstanding
                    (update_outstanding_for_self = 1), which *is* the customer's store
                    credit balance, living in Accounts Receivable like everything else.
                    Redemption against other invoices happens via ERPNext's own
                    Payment Reconciliation machinery (see hd/store_credit.py).
+
+Either way, any UNFUNDED slice of the return - value beyond what was actually paid -
+never floats. `settle_unfunded_residual()` (below) reconciles it against the original
+invoice's own outstanding right after submit, via the same Payment Reconciliation
+engine. For a fully unpaid original this collapses cleanly: the funded slice is 0 (no
+refund, no credit), and 100% of the return's value reduces the original bill - exactly
+what a cashier expects from returning items nobody ever paid for.
+
+There used to be a third outcome, "reduce_bill" - book the credit directly against the
+original via `update_outstanding_for_self = 0` and stop there. Retired (2026-08-15):
+ERPNext's own accounts_controller auto-flips that flag back to 1 whenever the return's
+value exceeds the original's *remaining* outstanding, and when it flips, the *entire*
+credit floats as self-outstanding while GL books nothing against the original -
+producing a return that both left the original's balance untouched AND created a
+same-size floating credit (double-booked, user-reported on 00186-family invoices: paid
+9.5 of 79.5, full "reduce bill" return left 70 still owed on the original *and* 79.5
+floating as credit). The store_credit mechanic above doesn't have this landmine - it
+was already designed to fund only what was paid and settle the rest - so it fully
+subsumes reduce_bill's job. `"reduce_bill"` is still accepted as an outcome value (old
+callers, e.g. multi-return payloads built before this change) and is mapped straight to
+the store_credit mechanic in `apply_return_outcome()`; the custom field's Select options
+still list "Reduce Bill" for existing historical documents, but new returns never write
+it.
 
 The refund cap is also enforced globally through a Sales Invoice `validate` hook
 (validate_return_payout, wired in hooks.py), so Desk-created returns obey the same
@@ -25,6 +46,8 @@ from frappe.utils import flt
 RETURN_OUTCOMES = ("refund", "reduce_bill", "store_credit")
 
 # Value stored on the custom_return_outcome field (created in setup/install.py).
+# "reduce_bill" is never written by new code (see module docstring) - kept only so old
+# documents that already carry it stay meaningful to read.
 OUTCOME_LABELS = {
 	"refund": "Refund",
 	"reduce_bill": "Reduce Bill",
@@ -106,14 +129,16 @@ def get_return_context(invoice):
 
 
 def resolve_outcome(outcome, refundable):
-	"""Default when the caller didn't choose: refund what was paid, reduce the bill otherwise."""
+	"""Default when the caller didn't choose: refund what was paid, otherwise store
+	credit - which, at 0 refundable, collapses to a pure bill reduction (see module
+	docstring). Never defaults to the retired "reduce_bill" mechanic."""
 	if outcome:
 		if outcome not in RETURN_OUTCOMES:
 			frappe.throw(_("Invalid return outcome {0}. Use one of: {1}").format(
 				outcome, ", ".join(RETURN_OUTCOMES)
 			))
 		return outcome
-	return "refund" if refundable > 0 else "reduce_bill"
+	return "refund" if refundable > 0 else "store_credit"
 
 
 def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_method=None, refund_amount=None):
@@ -129,6 +154,15 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 	refundable = get_refundable_amount(original_invoice.name)
 	outcome = resolve_outcome(outcome, refundable)
 
+	# Legacy alias: "reduce_bill" as its own booking mechanic (flag=0, stop) is retired
+	# - see module docstring for why. Old callers that still pass it get the store_credit
+	# mechanic instead, which does exactly what they wanted (bill reduced) and does it
+	# safely at every funding level. The label written on the doc, and the outcome
+	# returned to the caller, reflect what actually happened - "store_credit" - not the
+	# alias that was passed in.
+	if outcome == "reduce_bill":
+		outcome = "store_credit"
+
 	return_doc.payments = []
 	_set_outcome_field(return_doc, outcome)
 
@@ -136,7 +170,7 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 		if refundable <= 0:
 			frappe.throw(
 				_("Original invoice {0} is unpaid - a cash/bank refund is not allowed. "
-				  "Choose 'reduce bill' or 'store credit' instead.").format(original_invoice.name)
+				  "Choose 'store credit' instead.").format(original_invoice.name)
 			)
 
 		# The refund is NOT freely choosable: it always equals the value of the returned
@@ -186,30 +220,18 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 		if not return_doc.get("pos_profile") and original_invoice.get("pos_profile"):
 			return_doc.pos_profile = original_invoice.pos_profile
 
-	elif outcome == "reduce_bill":
-		# Credit books against return_against; the original's outstanding drops. If the
-		# return exceeds the original's remaining outstanding, ERPNext itself flips the
-		# flag back (accounts_controller.validate_return_against) - no double protection
-		# needed here.
-		return_doc.update_outstanding_for_self = 0
-		_make_non_pos(return_doc)
-
-	else:  # store_credit
-		# Store credit is money-equivalent: the customer can spend it on any invoice. So
-		# it must be funded by money actually received - an unpaid original grants no
-		# credit at all (the customer never gave the store anything; that case is
-		# reduce_bill). A partly-paid original grants store credit only up to what was
-		# paid; the unpaid slice of the return isn't spendable credit, it's still owed on
-		# the original bill, so it settles that bill instead of floating (same mechanism
-		# as the refund outcome's residual - see settle_unfunded_residual, called by the
-		# caller after submit whenever return_total > refundable).
-		if refundable <= 0:
-			frappe.throw(
-				_("Original invoice {0} is unpaid - store credit is not allowed because no "
-				  "money was ever received. Use 'reduce bill' instead.").format(original_invoice.name)
-			)
-		# Keeps its own negative outstanding = the store credit balance (trimmed down to
-		# the paid amount post-submit if return_total exceeds refundable).
+	else:  # store_credit (covers the retired reduce_bill alias too - see above)
+		# Store credit is money-equivalent: the customer can spend it on any invoice, so
+		# only the funded slice (up to `refundable`) becomes spendable credit. An unpaid
+		# original funds nothing - no throw here for that anymore; it simply means the
+		# credit note carries no spendable balance at all. Either way, whatever isn't
+		# funded is settled against the original bill right after submit (see
+		# settle_unfunded_residual, called by the caller whenever return_total >
+		# refundable) - so a fully unpaid return still does exactly what a cashier
+		# expects: the bill goes down by the full returned value, nothing floats.
+		#
+		# Keeps its own negative outstanding = the store credit balance, trimmed down to
+		# the funded amount by the post-submit residual settlement.
 		return_doc.update_outstanding_for_self = 1
 		_make_non_pos(return_doc)
 
@@ -279,9 +301,10 @@ def _set_return_discount_and_write_off(return_doc, original_invoice):
 
 def settle_unfunded_residual(return_name, original_name):
 	"""After a refund OR store_credit return submits: if the return kept a negative
-	outstanding beyond what was actually paid (the original was only partly paid, so
-	the refund/credit was capped below the returned value), knock that unfunded residual
-	off against the original invoice's own outstanding instead of leaving it floating.
+	outstanding beyond what was actually paid (the original was only partly, or not at
+	all, paid, so the refund/credit was capped below the returned value), knock that
+	unfunded residual off against the original invoice's own outstanding instead of
+	leaving it floating.
 
 	Without this, a full return of a partly-paid credit sale left the unpaid slice
 	floating as store credit while the original still showed the same amount owed
@@ -292,30 +315,34 @@ def settle_unfunded_residual(return_name, original_name):
 	part is the unpaid part of the very bill being returned, so it clears that bill,
 	leaving only the truly-paid amount as the customer's spendable balance.
 
-	Uses the same Payment Reconciliation machinery as store-credit redemption. Best
-	effort: a failure here leaves the (accounting-consistent) floating-credit state,
-	which the /payments reconciliation panel can resolve manually.
+	Load-bearing for fully-unpaid returns too (2026-08-15, retirement of the separate
+	"reduce_bill" mechanic): those now go through this same path with 0 funded, so this
+	call is the *only* thing that reduces the original's outstanding at all - not just a
+	cleanup step. Callers must surface a failure to the cashier rather than swallow it.
+
+	Uses the same Payment Reconciliation machinery as store-credit redemption. Returns
+	None if there was nothing to settle, else {"success": bool, "amount": flt} - on
+	failure the (accounting-consistent) floating-credit state is left for the /payments
+	reconciliation panel to resolve manually, and the caller must say so.
 	"""
 	residual = -flt(frappe.db.get_value("Sales Invoice", return_name, "outstanding_amount"))
 	orig = frappe.db.get_value(
 		"Sales Invoice", original_name, ["customer", "outstanding_amount"], as_dict=True
 	)
 	if not orig or residual <= 0.005 or flt(orig.outstanding_amount) <= 0.005:
-		return
+		return None
 
 	from klik_pos.hd.store_credit import apply_store_credit
 
+	amount = flt(min(residual, flt(orig.outstanding_amount)), 2)
 	try:
-		apply_store_credit(
-			orig.customer,
-			original_name,
-			amount=min(residual, flt(orig.outstanding_amount)),
-			credit_note=return_name,
-		)
+		apply_store_credit(orig.customer, original_name, amount=amount, credit_note=return_name)
+		return {"success": True, "amount": amount}
 	except Exception:
 		frappe.log_error(
 			frappe.get_traceback(), f"Return residual reconcile failed: {return_name} vs {original_name}"
 		)
+		return {"success": False, "amount": amount}
 
 
 def _make_non_pos(return_doc):

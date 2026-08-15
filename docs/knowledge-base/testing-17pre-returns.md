@@ -1,25 +1,39 @@
 # Test checklist: return-flow rework + store credit (phase-17 17-pre)
 
 Browser tests, ~10 min. Run against a site with an open POS shift. Pick a real test
-customer (not walk-in). Written 2026-08-13; backend already verified by 32 console
-checks — this list verifies the same flows through the real UI.
+customer (not walk-in). Written 2026-08-13; backend already verified by console checks
+(39 across 5 suites as of 2026-08-15) — this list verifies the same flows through the
+real UI.
+
+**2026-08-15 redesign:** the third "Reduce Bill" outcome button is retired. ERPNext's
+own core silently auto-flipped its booking flag whenever a return exceeded the
+original's remaining outstanding, producing a return that left the original's balance
+untouched *and* created a same-size floating credit (user-reported, double-booked). The
+chooser now offers only **Refund** and **Store Credit** — both capped at what was
+actually paid, with any unpaid remainder always auto-settling the original bill right
+after submit. For a fully unpaid invoice this collapses cleanly: no chooser is shown at
+all, since refund and store credit would both be $0 — the return just reduces the bill.
+Cases 1 and 3b below (written for the retired 3-button design) are superseded by the
+new case 3c.
 
 ## Prep
 
 - [x] POS open, shift open, test customer selected.
 
-## 1. Unpaid credit sale → return options
+## 1. Unpaid credit sale → return options (superseded by 3c, 2026-08-15)
 
-1. Make a credit sale (unpaid), e.g. $20.
-2. Invoice History → that invoice → Return (single-return modal).
-3. **Expect:** "Settle Return As" row with 3 buttons. **Refund grayed out** (hover
-   tooltip: "Nothing was paid on this invoice"). **Reduce Bill preselected.** No
-   payment method / amount fields visible.
-4. Return 1 item as **Reduce Bill** → submit.
-5. **Check:** original invoice's outstanding dropped by the returned amount.
-   Desk cross-check: Accounts Receivable report shows the same lower number.
+~~1. Make a credit sale (unpaid), e.g. $20.~~
+~~2. Invoice History → that invoice → Return (single-return modal).~~
+~~3. Expect: "Settle Return As" row with 3 buttons. Refund grayed out. Reduce Bill~~
+   ~~preselected. No payment method / amount fields visible.~~
+~~4. Return 1 item as Reduce Bill → submit.~~
+~~5. Check: original invoice's outstanding dropped by the returned amount.~~
 
-- [x] pass (2026-08-14)
+Passed under the retired 3-button design (2026-08-14). The "Reduce Bill" button no
+longer exists — see case 3c for its replacement (the info-panel collapse on unpaid
+invoices) and the new bug it was covering for.
+
+- [x] superseded — see 3c
 
 ## 2. Over-return guard (the big one)
 
@@ -45,14 +59,43 @@ checks — this list verifies the same flows through the real UI.
 
 - [x] pass (2026-08-14)
 
-## 3b. Store credit blocked on unpaid invoice
+## 3b. Store credit blocked on unpaid invoice (superseded by 3c, 2026-08-15)
 
-1. Unpaid credit sale → open Return.
-2. **Expect:** both Refund AND Store Credit grayed out; only Reduce Bill available.
-3. (Backend double-check: forcing store_credit via API fails with "store credit is not
-   allowed because no money was ever received".)
+~~1. Unpaid credit sale → open Return.~~
+~~2. Expect: both Refund AND Store Credit grayed out; only Reduce Bill available.~~
+~~3. Backend double-check: forcing store_credit via API fails with "no money was ever~~
+   ~~received".~~
 
-- [x] pass (2026-08-14)
+Passed under the retired design (2026-08-14). **The hard block is gone** — see 3c: an
+unpaid invoice no longer *blocks* store credit, it just skips the choice entirely
+(there's nothing to choose between two $0 outcomes) and reduces the bill.
+
+- [x] superseded — see 3c
+
+## 3c. Unpaid invoice: no chooser, automatic bill reduction (2026-08-15)
+
+This replaces 1 and 3b. It also directly covers a real bug: choosing the old "Reduce
+Bill" on a *partly-paid* invoice's full return created a same-size floating credit
+**and** left the original's balance unchanged (ERPNext's own core auto-flip silently
+doubled the value) — see phase-17 / hd/returns.py for the mechanism.
+
+1. Make a credit sale (unpaid), e.g. $20.
+2. Invoice History → that invoice → Return (single-return modal).
+3. **Expect:** no 3-button chooser. Instead a gray info panel: "Nothing was paid on
+   this invoice. This return reduces the invoice's outstanding by $X - no refund, no
+   store credit, since no money ever changed hands." Refund amount fields absent.
+4. Return 1 item (e.g. $2) → submit.
+5. **Check:** original invoice's outstanding dropped by exactly that amount (e.g.
+   20 → 18). The return invoice's own outstanding is **0** — nothing floats as credit.
+   Desk: Accounts Receivable report shows the original's lower balance; the invoice's
+   linked documents include a system Journal Entry of type "Credit Note".
+6. **Regression check (the actual bug):** repeat on a **partly-paid** invoice with a
+   **full** return (e.g. paid $9.50 of $79.50, return all items). **Expect:** original
+   settles to **0**, and store credit ends at exactly the paid amount (**$9.50**) — not
+   $79.50, and not blocked. Customer page should show Store credit: $9.50, not
+   Outstanding: $70 + Store credit: $79.50.
+
+- [ ] pass
 
 ## 4. Store credit redemption (the important one)
 
@@ -92,7 +135,7 @@ checks — this list verifies the same flows through the real UI.
    is 0 too — no floating credit, nothing still due. Desk: a system Journal Entry of
    type "Credit Note" links the two.
 
-- [ ] pass
+- [x] pass (2026-08-15)
 
 ## 7. Desk-side hook (optional)
 
@@ -104,10 +147,12 @@ checks — this list verifies the same flows through the real UI.
 
 ## 8. Multi-invoice return spot-check
 
-1. Returns screen → multi-invoice flow → select an invoice.
-2. **Expect:** per-invoice "Settle Return As" select next to Mode of Payment; payment
-   fields disappear for Reduce Bill / Store Credit.
-3. Submit one and verify the same rules as above.
+1. Returns screen → multi-invoice flow → select a **paid or partly-paid** invoice.
+2. **Expect:** per-invoice "Settle Return As" select with two options (Refund / Store
+   credit); payment fields disappear for Store Credit.
+3. Select an **unpaid** invoice instead. **Expect:** no select — same gray info panel
+   as case 3c ("Nothing was paid on this invoice...").
+4. Submit one of each and verify the same rules as cases 5/3c above.
 
 - [ ] pass
 

@@ -105,7 +105,18 @@ export async function getCustomerInvoicesForReturn(
 }
 
 // How a return is settled - see klik_pos/hd/returns.py (phase-17 §2c).
+// 'reduce_bill' is a retired outcome (2026-08-15) still accepted server-side as a
+// legacy alias for 'store_credit' - new code should never send it.
 export type ReturnOutcome = 'refund' | 'reduce_bill' | 'store_credit';
+
+// What happened to any part of the return's value beyond what was actually paid - it
+// always settles the original invoice's own balance rather than floating. Present
+// whenever there was something to settle (unpaid or partly-paid original); absent when
+// the original was fully paid.
+export interface ResidualSettlement {
+  success: boolean;
+  amount: number;
+}
 
 // Refund cap / outstanding context the return UI needs to offer the right outcomes.
 export async function getReturnContext(
@@ -130,7 +141,7 @@ export async function createPartialReturn(
   paymentMethod?: string,
   returnAmount?: number,
   outcome?: ReturnOutcome
-): Promise<{success: boolean; returnInvoice?: string; message?: string; error?: string}> {
+): Promise<{success: boolean; returnInvoice?: string; message?: string; error?: string; residualSettlement?: ResidualSettlement | null}> {
 
   const csrfToken = window.csrf_token;
   try {
@@ -143,8 +154,8 @@ export async function createPartialReturn(
       body: JSON.stringify({
         invoice_name: invoiceName,
         return_items: returnItems,
-        // Payment method / amount only make sense for a refund; for reduce_bill and
-        // store_credit the backend rejects payout rows outright.
+        // Payment method / amount only make sense for a refund; store_credit rejects
+        // payout rows outright.
         payment_method: outcome === 'refund' ? paymentMethod || undefined : undefined,
         return_amount: outcome === 'refund' ? returnAmount || 0 : undefined,
         outcome: outcome
@@ -168,7 +179,8 @@ export async function createPartialReturn(
     return {
       success: true,
       returnInvoice: result.return_invoice,
-      message: result.message
+      message: result.message,
+      residualSettlement: result.residual_settlement
     };
         //eslint-disable-next-line @typescript-eslint/no-explicit-any
   } catch (error: any) {
