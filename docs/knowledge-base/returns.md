@@ -43,6 +43,17 @@ paid," independent of how much of the *same* invoice remained outstanding — wh
 hand out cash/credit for a small return while the bulk of the invoice stayed untouched
 and just as owed. (User rule, 2026-08-15.)
 
+**A second, related bug found the same day:** "money received" itself has to account
+for everything *already* given away by earlier returns on the same invoice — not just
+earlier cash refunds, but earlier store credit too. Store credit books no payment row,
+so it was invisible to the old calculation; a string of alternating refund/store-credit
+returns on the same invoice kept reporting almost the full amount paid as still
+available on every later return, letting the invoice's own balance go uncorrected even
+after every item had been returned (user-reported, invoice 00215 — a fully-returned
+$159 invoice with $100 paid was still showing $39.75 owed). Fixed by recording exactly
+how much each return actually funded (`Return Funded Amount`, on the credit note) and
+summing that across prior returns, instead of reconstructing it from payment rows alone.
+
 ## 1. Refund (money back)
 
 **When available:** only when `available` (above) is greater than zero. Hidden/no

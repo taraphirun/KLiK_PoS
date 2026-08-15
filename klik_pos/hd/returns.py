@@ -66,15 +66,29 @@ OUTCOME_LABELS = {
 
 
 def get_refundable_amount(invoice_name, company=None):
-	"""Money actually received against this invoice so far, net of refunds already given.
+	"""Money actually received against this invoice so far, net of everything already
+	given away via prior returns against it - cash refunds AND store credit alike.
 
-	This is deliberately NOT grand_total - outstanding_amount: a reduce-bill credit note
-	lowers outstanding without any money having been received, which would overstate what
-	is refundable. Sources counted instead:
+	This is deliberately NOT grand_total - outstanding_amount: a return settled against
+	the original lowers outstanding without any money having been received, which would
+	overstate what is refundable. Sources counted instead:
 
 	- the invoice's own paid_amount (POS payments table + advances applied at submit)
 	- Payment Entry allocations against it (Receive adds, Pay subtracts)
-	- refund rows on already-submitted returns against it (negative amounts subtract)
+	- every prior return's `custom_return_funded_amount` - how much of THAT return was
+	  actually funded as cash or spendable store credit at creation time, fixed and
+	  immune to later events (the unfunded remainder settling against the original, or
+	  the customer later redeeming that credit against some OTHER invoice - neither
+	  changes how much was originally taken out of THIS invoice's paid pool).
+
+	Store credit was previously invisible here (no payment row is booked for it), so a
+	string of alternating cash-refund and store-credit returns against the same invoice
+	kept reporting nearly the full amount paid as still available on every subsequent
+	return, letting later returns over-claim funds that earlier store-credit grants had
+	already spent (user-reported, invoice 00215, 2026-08-15). custom_return_funded_amount
+	closes that gap; for returns created before the field existed (fallback: their own
+	payment-row sum, cash-only - the same undercount the old formula always had for
+	legacy data, not a new regression).
 
 	Journal-entry payments are not counted (not used by klik flows); a JE-paid invoice
 	simply shows a smaller refundable amount, which errs on the safe side.
@@ -102,12 +116,20 @@ def get_refundable_amount(invoice_name, company=None):
 		(invoice_name,),
 	)[0][0]
 
-	# Refund rows on prior returns are stored negative, so a plain SUM subtracts them.
-	prior_refunds = frappe.db.sql(
-		"""
-		SELECT COALESCE(SUM(sip.amount), 0)
-		FROM `tabSales Invoice Payment` sip
-		JOIN `tabSales Invoice` si ON si.name = sip.parent
+	cash_fallback_expr = """COALESCE(
+		(SELECT -SUM(sip.amount) FROM `tabSales Invoice Payment` sip WHERE sip.parent = si.name),
+		0
+	)"""
+	has_funded_field = frappe.get_meta("Sales Invoice").has_field("custom_return_funded_amount")
+	committed_expr = (
+		f"COALESCE(si.custom_return_funded_amount, {cash_fallback_expr})"
+		if has_funded_field
+		else cash_fallback_expr
+	)
+	prior_committed = frappe.db.sql(
+		f"""
+		SELECT COALESCE(SUM({committed_expr}), 0)
+		FROM `tabSales Invoice` si
 		WHERE si.docstatus = 1
 		  AND si.is_return = 1
 		  AND si.return_against = %s
@@ -115,7 +137,7 @@ def get_refundable_amount(invoice_name, company=None):
 		(invoice_name,),
 	)[0][0]
 
-	return flt(original.paid_amount) + flt(pe_net) + flt(prior_refunds)
+	return flt(original.paid_amount) + flt(pe_net) - flt(prior_committed)
 
 
 def get_available_for_cash_or_credit(refundable, outstanding_before, return_total):
@@ -265,6 +287,7 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 			return_doc.pos_profile = original_invoice.pos_profile
 
 		unfunded = return_total - amount
+		_set_funded_amount_field(return_doc, amount)
 
 	else:  # store_credit (covers the retired reduce_bill alias too - see above)
 		# Store credit is money-equivalent: the customer can spend it on any invoice, so
@@ -283,6 +306,7 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 		_make_non_pos(return_doc)
 		funded = min(return_total, available)
 		unfunded = return_total - funded
+		_set_funded_amount_field(return_doc, funded)
 
 	return outcome, unfunded
 
@@ -421,6 +445,15 @@ def _make_non_pos(return_doc):
 def _set_outcome_field(return_doc, outcome):
 	if frappe.get_meta("Sales Invoice").has_field("custom_return_outcome"):
 		return_doc.custom_return_outcome = OUTCOME_LABELS[outcome]
+
+
+def _set_funded_amount_field(return_doc, funded_amount):
+	"""Persist how much of this return was actually funded (cash or spendable credit) -
+	fixed at creation, read back by get_refundable_amount() for every later return
+	against the same original invoice. See that function's docstring for why this can't
+	just be reconstructed from payment rows alone (misses store credit entirely)."""
+	if frappe.get_meta("Sales Invoice").has_field("custom_return_funded_amount"):
+		return_doc.custom_return_funded_amount = flt(funded_amount, 2)
 
 
 def validate_return_payout(doc, method=None):

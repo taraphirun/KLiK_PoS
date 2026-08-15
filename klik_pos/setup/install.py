@@ -61,6 +61,40 @@ def ensure_sales_invoice_return_outcome_field():
     )
 
 
+def ensure_sales_invoice_return_funded_amount_field():
+    """How much of THIS return's value was actually funded as cash or store credit at
+    creation time (phase-17 §2c revision, 2026-08-15) - fixed at creation, never changed
+    by later events (settling the unfunded remainder against the original, or the
+    customer later redeeming spendable credit against some OTHER invoice).
+
+    get_refundable_amount() sums this across a customer invoice's prior returns to know
+    how much of the money actually received has already been committed away. Without a
+    persisted field, that could only be reconstructed from payment rows (misses store
+    credit entirely - it books no payment - undercounting what's already been given out
+    and letting a later return over-claim "available" funds; user-reported, invoice
+    00215: repeated cash+credit returns kept reporting nearly the full amount paid as
+    still available on every subsequent return, because prior store-credit grants were
+    invisible to the old cash-only calculation).
+    """
+    if frappe.db.exists("Custom Field", "Sales Invoice-custom_return_funded_amount"):
+        return
+
+    create_custom_field(
+        "Sales Invoice",
+        {
+            "fieldname": "custom_return_funded_amount",
+            "label": "Return Funded Amount",
+            "fieldtype": "Currency",
+            "insert_after": "custom_return_outcome",
+            "read_only": 1,
+            "depends_on": "eval:doc.is_return",
+            "module": "KLiK PoS",
+            "description": "How much of this return's value was given out as cash refund or spendable store credit (fixed at creation) - the rest settled the original invoice's own balance instead.",
+        },
+        ignore_validate=True,
+    )
+
+
 def ensure_stock_reservation_is_enabled():
     if not frappe.db.get_single_value("Stock Settings", "enable_stock_reservation"):
         frappe.db.set_value("Stock Settings", None, "enable_stock_reservation", 1)

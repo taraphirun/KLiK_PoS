@@ -71,6 +71,7 @@ before_migrate = [
     "klik_pos.setup.install.ensure_stock_reservation_is_enabled",
     "klik_pos.setup.install.ensure_sales_invoice_reserve_stock_field",
     "klik_pos.setup.install.ensure_sales_invoice_return_outcome_field",
+    "klik_pos.setup.install.ensure_sales_invoice_return_funded_amount_field",
     "klik_pos.setup.pos_opening_entry_links.ensure_pos_opening_entry_links"
 ]
 
