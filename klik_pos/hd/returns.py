@@ -19,14 +19,13 @@ refund, no credit), and 100% of the return's value reduces the original bill - e
 what a cashier expects from returning items nobody ever paid for.
 
 The funding cap is not simply "money received" (`get_refundable_amount`) though - it is
-`get_available_for_cash_or_credit()` (2026-08-15, user rule): money received minus
-whatever is still needed to cover the invoice's *unreturned* remainder. A partly-paid
-invoice with most of its balance still outstanding should not hand out cash or credit
-for a small partial return just because more was paid historically than this one
-return is worth - that money is still earmarked for the rest of the bill. Only a FULL
-return (nothing left unreturned) uses the whole `refundable` figure, because there's no
-remainder left to protect. Handing out cash/credit while the SAME invoice still owes
-money elsewhere is never done, regardless of how much has been paid in total.
+`get_available_for_cash_or_credit()` (2026-08-15, revised 2026-08-16, user rule):
+nothing is released while the original invoice still owes money after this return's
+value is applied to it - every dollar of the return goes to paying down the bill first.
+Only once a return's value fully clears what's currently owed does the leftover become
+available, capped at what was truly paid (`refundable`). Handing out cash/credit while
+the SAME invoice still has debt outstanding is never done, regardless of how much has
+been paid in total or how much this specific return happens to be worth.
 
 There used to be a third outcome, "reduce_bill" - book the credit directly against the
 original via `update_outstanding_for_self = 0` and stop there. Retired (2026-08-15):
@@ -143,15 +142,20 @@ def get_refundable_amount(invoice_name, company=None):
 def get_available_for_cash_or_credit(refundable, outstanding_before, return_total):
 	"""How much of a return's value may become cash or spendable store credit.
 
-	Not just `refundable` - a partial return must not drain money that's still needed
-	to cover the invoice's unreturned remainder. Compute what would still be owed if
-	this return did nothing but reduce the bill (`outstanding_after`); only the slice of
-	`refundable` beyond that is genuinely spare and safe to hand out. A FULL return
-	(return_total >= outstanding_before) drives outstanding_after to 0, so the whole of
-	`refundable` becomes available - there's no remainder left to protect.
+	Debt first, always: nothing is released while the original invoice still owes
+	money after this return's value pays down as much of it as it can. Only the
+	genuine EXCESS - the part of the return's value left over once the debt is fully
+	cleared - is ever available, and even that is capped at `refundable` (money truly
+	received). A return smaller than what's still owed contributes 0 (100% reduces the
+	bill); a return that clears the debt and then some releases exactly the leftover;
+	a full return against an already-settled invoice releases up to the full
+	`refundable` figure, same as before this rule existed (2026-08-15, revised
+	2026-08-16, user rule: "we don't give out cash or credit unless we have more money
+	than the customer owes us" - compared against the debt as a whole, not just
+	whatever this one return happens to be worth).
 	"""
-	outstanding_after = max(flt(outstanding_before) - flt(return_total), 0.0)
-	return max(flt(refundable) - outstanding_after, 0.0)
+	excess = max(flt(return_total) - flt(outstanding_before), 0.0)
+	return max(min(excess, flt(refundable)), 0.0)
 
 
 @frappe.whitelist()
@@ -230,17 +234,17 @@ def apply_return_outcome(return_doc, original_invoice, outcome=None, payment_met
 					  "Choose 'store credit' instead.").format(original_invoice.name)
 				)
 			frappe.throw(
-				_("The {0} received on invoice {1} is needed to cover its remaining {2} "
-				  "balance - nothing is available to refund for this return. It will "
-				  "reduce the bill instead.").format(
-					flt(refundable, 2), original_invoice.name, flt(outstanding_before, 2)
+				_("This return's value doesn't yet clear the {0} still owed on invoice "
+				  "{1} - nothing is available to refund until it does. It will reduce "
+				  "the bill instead.").format(
+					flt(outstanding_before, 2), original_invoice.name
 				)
 			)
 
 		# The refund is NOT freely choosable: it always equals the value of the returned
-		# items, capped at what's available (money received, minus whatever is still
-		# needed to cover the rest of this invoice - get_available_for_cash_or_credit).
-		# A cashier who wants to hand back less money must return fewer items -
+		# items, capped at what's available (the genuine excess once this return has
+		# cleared what's owed - get_available_for_cash_or_credit). A cashier who wants
+		# to hand back less money must return fewer items -
 		# otherwise the difference silently became floating store credit the cashier
 		# never chose (user-reported, invoice 00179: all items returned at 13.6 but
 		# refund typed as 3.6 -> 10.0 orphaned credit).
@@ -458,9 +462,9 @@ def _set_funded_amount_field(return_doc, funded_amount):
 
 def validate_return_payout(doc, method=None):
 	"""Sales Invoice `validate` hook (hooks.py): no return may hand back more money than
-	is actually available - money received, minus whatever is still needed to cover the
-	original invoice's unreturned remainder (get_available_for_cash_or_credit) -
-	regardless of which client created it (klik SPA, Desk, API)."""
+	is actually available - the genuine excess once this return has cleared what's
+	still owed on the original invoice (get_available_for_cash_or_credit) - regardless
+	of which client created it (klik SPA, Desk, API)."""
 	if not doc.get("is_return") or not doc.get("return_against"):
 		return
 
@@ -479,14 +483,14 @@ def validate_return_payout(doc, method=None):
 
 	if refund_total > available + 0.005:
 		frappe.throw(
-			_("Return {0}: refund of {1} exceeds the {2} available against {3} ({4} received in "
-			  "total - the rest is needed to cover its remaining balance). Reduce the refund, or "
-			  "return as store credit / let it reduce the bill instead.").format(
+			_("Return {0}: refund of {1} exceeds the {2} available against {3} - this return's "
+			  "value doesn't yet clear the {4} still owed on it. Reduce the refund, or return "
+			  "as store credit / let it reduce the bill instead.").format(
 				doc.name or _("(new)"),
 				flt(refund_total, 2),
 				flt(available, 2),
 				doc.return_against,
-				flt(refundable, 2),
+				flt(outstanding_before, 2),
 			),
 			title=_("Refund exceeds amount available"),
 		)

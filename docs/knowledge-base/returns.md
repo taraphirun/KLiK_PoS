@@ -11,32 +11,43 @@ Every outcome creates a **credit note** in ERPNext (a Sales Invoice with "Is Ret
 checked, linked to the original via "Return Against"). The outcome chosen is stamped on
 the credit note in the "Return Outcome" field.
 
-## The core rule: what "available" means (2026-08-15)
+## The core rule: what "available" means (2026-08-15, revised 2026-08-16)
 
-Cash or store credit is only ever given from money that is genuinely spare — not just
-"money received on this invoice at some point," but money received **that isn't still
-needed to cover what's left owing on the rest of the same invoice**.
+Debt first, always. Nothing is released for a return while the original invoice still
+owes money after this return's value is applied to it. Only once a return's value fully
+clears what's currently owed does the leftover become available — and even then, capped
+at money genuinely received.
 
 ```
-outstanding_after_pure_reduction = max(outstanding_before − return_value, 0)
-available                        = max(money_received − outstanding_after_pure_reduction, 0)
+excess    = max(return_value − outstanding_before, 0)
+available = max(min(excess, money_received), 0)
 ```
 
-In plain terms: imagine this return did nothing but reduce the bill — work out what
-would *still* be owed afterward. Only the slice of money received beyond that remaining
-need is safe to hand out as cash or credit. Everything else pays down the bill instead.
+In plain terms: apply this return's value to the bill first. If any debt remains after
+that, nothing is available — 100% of the return reduces the bill. Only the genuine
+leftover, once the bill is fully cleared, is safe to hand out as cash or credit.
 
-- **A full return** (nothing is left on the invoice afterward) drives the "still owed"
-  figure to zero, so the whole of what was received becomes available — this is why
-  full returns behave exactly as before.
-- **A partial return on a partly-paid invoice** is where this matters: returning one
-  item out of ten on an invoice that's mostly unpaid should not hand back cash or
-  credit for that one item while the other nine remain just as owed — the money
-  already collected is still earmarked for those nine. The return instead reduces
-  what's owed, keeping the money collected exactly where it was.
-- **A partial return large enough to clear what's left** (e.g. returning 8 of 10 items
-  when only 3 items' worth is still outstanding) frees up the genuine excess — that
-  slice becomes available, same as a full return would.
+- **A return smaller than what's still owed** contributes **$0** to cash/credit — every
+  dollar reduces the bill instead, no matter how much was paid historically or how
+  small the shortfall. Returning one item out of ten on a mostly-unpaid invoice gives
+  nothing back; the money already collected stays earmarked for the whole bill until
+  it's actually cleared.
+- **A return that clears the remaining debt and then some** releases exactly the
+  leftover — the part of its value beyond what was needed to zero out the bill —
+  capped at what was truly received.
+- **A full return of an already-settled (or never-owing) invoice** releases up to the
+  full amount received, same as before this revision — there's no debt left to protect
+  against in the first place.
+
+**Why this replaced an earlier version of the rule (2026-08-15 → 2026-08-16):** the
+first version "reserved" whatever debt remained after a return's own value, then
+released anything left over from money received — which could release money *while the
+invoice's total debt still exceeded money received*, not just while this one return's
+own shortfall was covered. Real example (invoice 00237, $63.60 invoice, $20 paid): at
+one step the store held $19.75 of money received against $20 still owed — technically
+*less* than owed — yet the old formula released $7.70 anyway. The new formula compares
+against the debt as a whole and never does this: nothing releases until the debt this
+return is applied to is actually gone.
 
 This replaces an earlier version of the cap that only looked at "how much was ever
 paid," independent of how much of the *same* invoice remained outstanding — which could

@@ -445,19 +445,23 @@ export default function MultiInvoiceReturn({
   );
 
   // How much of an invoice's return may become cash or spendable store credit (phase-17
-  // §2c, revised 2026-08-15) - mirrors hd/returns.get_available_for_cash_or_credit. A
-  // partial return must not drain money still needed to cover the invoice's unreturned
-  // remainder; only a full return, or genuine spare beyond that need, is available.
-  // `paid_amount` here is the raw invoice field (a proxy for money received, same
-  // approximation this screen already used pre-2026-08-15) - the backend's actual
-  // `get_refundable_amount` nets out prior refunds/Payment Entry allocations more
-  // precisely and is the real authority; this just decides what the UI offers.
+  // §2c, revised 2026-08-15, revised again 2026-08-16) - mirrors
+  // hd/returns.get_available_for_cash_or_credit. Debt first, always: nothing is
+  // released while the invoice still owes money after this return's value pays down
+  // as much of it as it can - only the genuine excess, once the debt is fully cleared,
+  // is ever available, capped at what was actually paid. `paid_amount` here is the raw
+  // invoice field (a proxy for money received, same approximation this screen already
+  // used pre-2026-08-15) - the backend's actual `get_refundable_amount` nets out prior
+  // refunds/Payment Entry allocations more precisely and is the real authority; this
+  // just decides what the UI offers.
   const getAvailableForInvoice = (invoice: InvoiceForReturn) => {
     const paidAmount = (invoice as InvoiceWithPaidAmount).paid_amount || 0;
     const outstandingAmount = (invoice as InvoiceWithPaidAmount).outstanding_amount || 0;
     const returnValue = invoice.items.reduce((sum, item) => sum + (item.return_qty || 0) * item.rate, 0);
-    const outstandingAfterPureReduction = Math.max(outstandingAmount - returnValue, 0);
-    return Math.max(paidAmount - outstandingAfterPureReduction, 0);
+    // Rounded before comparing to 0 - same float-epsilon-at-the-crossover reasoning as
+    // SingleInvoiceReturn.tsx.
+    const excess = Math.max(Math.round((returnValue - outstandingAmount) * 100) / 100, 0);
+    return Math.max(Math.min(excess, paidAmount), 0);
   };
 
   const totalReturnAmount = invoices.reduce((total, invoice) =>
@@ -1197,9 +1201,11 @@ export default function MultiInvoiceReturn({
                       choose (refund = $0, store credit = $0): the return just reduces
                       the bill automatically, same collapse as SingleInvoiceReturn. No
                       separate "reduce bill" choice anymore (retired 2026-08-15, see
-                      hd/returns.py for why the old flag=0 write was unsafe, and why the
-                      cap is `available` - money received minus what's still needed for
-                      the invoice's unreturned remainder - not just raw paid_amount). */}
+                      hd/returns.py for why the old flag=0 write was unsafe). `available`
+                      is debt-first (revised 2026-08-16): nothing releases until this
+                      return's value clears what's still owed, then only the excess -
+                      not just raw paid_amount, and not merely "whatever's left after
+                      reserving the remainder" either. */}
                   {selectedInvoices.has(invoice.name) && (() => {
                     const paidAmount = (invoice as InvoiceWithPaidAmount).paid_amount || 0;
                     const available = getAvailableForInvoice(invoice);

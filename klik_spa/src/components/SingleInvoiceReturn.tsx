@@ -54,15 +54,16 @@ export default function SingleInvoiceReturn({
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>("");
   const [returnAmount, setReturnAmount] = useState<number>(0);
 
-  // How the return is settled (phase-17 §2c, revised 2026-08-15). `outcome` is only the
-  // cashier's raw last click - what actually happens is `effectiveOutcome` below, which
-  // is forced to store_credit whenever nothing is `available`. refundable/outstanding
-  // are the invoice's own numbers (server-computed, fixed per invoice); `available` is
-  // derived live from those plus the currently-selected return quantities, since the
-  // cap depends on how much of the invoice would remain unreturned (see hd/returns.py's
-  // get_available_for_cash_or_credit - a partial return must not drain money that's
-  // still needed to cover the rest of the same invoice; only a full return, or genuine
-  // spare beyond that need, is safe to hand out as cash or credit).
+  // How the return is settled (phase-17 §2c, revised 2026-08-15, revised again
+  // 2026-08-16). `outcome` is only the cashier's raw last click - what actually
+  // happens is `effectiveOutcome` below, which is forced to store_credit whenever
+  // nothing is `available`. refundable/outstanding are the invoice's own numbers
+  // (server-computed, fixed per invoice); `available` is derived live from those plus
+  // the currently-selected return quantities. Debt first, always (see hd/returns.py's
+  // get_available_for_cash_or_credit): nothing is released while the invoice still
+  // owes money after this return's value pays down as much of it as it can - only the
+  // genuine excess, once the debt is fully cleared, is ever available, capped at
+  // refundable.
   const [outcome, setOutcome] = useState<ReturnOutcome>("refund");
   const [refundable, setRefundable] = useState<number>(0);
   const [outstanding, setOutstanding] = useState<number>(0);
@@ -79,8 +80,11 @@ export default function SingleInvoiceReturn({
   );
 
   const available = useMemo(() => {
-    const outstandingAfterPureReduction = Math.max(outstanding - totalReturnAmount, 0);
-    return Math.max(refundable - outstandingAfterPureReduction, 0);
+    // Rounded before comparing to 0: this crossover (return value exactly clearing the
+    // outstanding balance) is one cashiers hit often, and float epsilon on live
+    // reactive state could flap the refund/store-credit chooser right at the boundary.
+    const excess = Math.max(Math.round((totalReturnAmount - outstanding) * 100) / 100, 0);
+    return Math.max(Math.min(excess, refundable), 0);
   }, [refundable, outstanding, totalReturnAmount]);
 
   // Masks a stale/default `outcome` whenever nothing is available to give out - the

@@ -35,6 +35,37 @@ hidden based on `available` recomputed live as return quantities change, not a o
 console checks green (added test_available_rule.py, 12 checks on clean invoice numbers) plus the
 existing 46 unaffected (full-return cases are mathematically identical under the new formula).
 
+**2026-08-15, third revision:** `get_refundable_amount()` tracked prior CASH refunds (payment rows)
+but not prior STORE CREDIT grants from earlier returns on the same invoice - store credit books no
+payment row, so it was invisible. A string of alternating refund/store-credit returns kept reporting
+nearly the full amount paid as still available on every subsequent return (user-reported, invoice
+00215: 20 items across 7 returns, all eventually returned, original stuck at $39.75 outstanding
+instead of $0). Fix: a new `custom_return_funded_amount` field records, at creation, exactly how much
+each return was actually funded (cash or credit) - fixed and immune to later events - and
+`get_refundable_amount` sums this across prior returns instead of reconstructing from payment rows
+alone. 68/68 console checks green (11 new, replaying 00215's exact sequence on a clean invoice).
+
+**2026-08-16 revision:** the funding cap formula itself (`get_available_for_cash_or_credit`, unchanged
+by the above) was still too generous in one regime. It "reserved" whatever debt remained after a
+return's own value, then released anything left over from `refundable` - which could release money
+while the invoice's TOTAL debt still exceeded money received, not just while that one return's own
+shortfall was covered. Real example (invoice 00237, $63.60 invoice, $20 paid, 6-step return sequence,
+studied live with the user): one step released $7.70 while the store held $19.75 refundable against
+$20 still owed - technically *less* than owed, violating the user's own stated principle ("we don't
+give out cash or credit unless we have more money than the customer owes us," now read as a *global*
+comparison against the invoice's total debt, not a per-return one). New formula: `excess =
+max(return_value - outstanding_before, 0); available = max(min(excess, refundable), 0)` - debt first,
+always; nothing releases until a return's own value fully clears what's currently owed, only the
+genuine leftover becomes available. Full returns are unaffected (formula-invariant when
+`refundable <= excess`, which a full/near-full return trivially satisfies). `apply_return_outcome`,
+`settle_unfunded_residual`, and `validate_return_payout` needed no structural changes - only the one
+function body, its docstring, two throw messages, and the two frontend mirrors (SingleInvoiceReturn.tsx,
+MultiInvoiceReturn.tsx, both with explicit rounding at the crossover point to avoid float-epsilon
+flapping the chooser). Live-verified by replaying 00237's exact shape on a fresh invoice: funded
+distribution `0, 0, 0, 4.10, 7.95, 7.95` (total $20.00, matching the hand-computed prediction exactly),
+original settles to $0. 68/68 console checks green (2 scripts' hard-coded expected numbers updated to
+match the new formula; the rest were already formula-invariant).
+
 ## Objective
 ERPNext already ships a customer statement capability, but it is spread across a report (General
 Ledger), a summary report (Accounts Receivable + ageing), and a batch emailer DocType (Process
