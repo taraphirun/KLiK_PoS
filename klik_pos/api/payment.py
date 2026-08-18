@@ -54,6 +54,19 @@ def _validate_pos_payment_mode(pos_profile, mode_of_payment):
 		)
 
 
+def _account_exchange_rate(account_currency, company_currency):
+	"""Rate to convert an account's currency into the company currency (1 when they match).
+	Used so counter Payment Entries book at the real rate instead of a hardcoded 1:1."""
+	if not account_currency or not company_currency or account_currency == company_currency:
+		return 1
+	from erpnext.setup.utils import get_exchange_rate
+
+	rate = get_exchange_rate(account_currency, company_currency, nowdate())
+	if not rate:
+		frappe.throw(_("No exchange rate found from {0} to {1}.").format(account_currency, company_currency))
+	return flt(rate)
+
+
 @frappe.whitelist()
 def create_customer_payment_entry(
 	customer,
@@ -121,8 +134,16 @@ def create_customer_payment_entry(
 		payment_entry.paid_to = paid_to
 		payment_entry.paid_amount = amount
 		payment_entry.received_amount = amount
-		payment_entry.source_exchange_rate = 1
-		payment_entry.target_exchange_rate = 1
+		# Real exchange rates, not hardcoded 1:1 - a receivable or cash account in a currency
+		# other than the company currency was previously booked at par. Rates are the
+		# account-currency -> company-currency conversion for each side.
+		# (Audit 2026-08-18, accounting finding #3.)
+		payment_entry.source_exchange_rate = _account_exchange_rate(
+			party_account_currency, company_currency
+		)
+		payment_entry.target_exchange_rate = _account_exchange_rate(
+			paid_to_account_currency, company_currency
+		)
 		payment_entry.paid_from_account_currency = party_account_currency
 		payment_entry.paid_to_account_currency = paid_to_account_currency
 

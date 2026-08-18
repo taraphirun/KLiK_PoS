@@ -137,3 +137,49 @@ class TestClosingReconCounterPayments(IntegrationTestCase):
 		# expected = opening(0) + SI payments(0) + counter PE(100); difference = closing(100) - 100 = 0
 		self.assertEqual(flt(cash["expected_amount"], 2), 100.00)
 		self.assertEqual(flt(cash["difference"], 2), 0.00)
+
+
+class TestMultiCurrencyConversionRate(IntegrationTestCase):
+	"""Audit accounting finding #3: a non-company-currency customer must get the real
+	conversion_rate, not a hardcoded 1.0 (which booked the base-currency GL at par)."""
+
+	def test_foreign_currency_customer_gets_real_rate(self):
+		from klik_pos.api.sales_invoice import _set_pos_profile_fields
+
+		company = _company()
+		company_currency = company.default_currency
+		foreign = "EUR" if company_currency != "EUR" else "GBP"
+		rate = 1.2345
+
+		if not frappe.db.exists("Currency Exchange", {"from_currency": foreign, "to_currency": company_currency}):
+			frappe.get_doc(
+				{
+					"doctype": "Currency Exchange",
+					"from_currency": foreign,
+					"to_currency": company_currency,
+					"exchange_rate": rate,
+					"for_buying": 1,
+					"for_selling": 1,
+					"date": frappe.utils.nowdate(),
+				}
+			).insert(ignore_permissions=True)
+
+		cust = "_KLIK Foreign Cust"
+		if not frappe.db.exists("Customer", cust):
+			frappe.get_doc(
+				{"doctype": "Customer", "customer_name": cust, "default_currency": foreign}
+			).insert(ignore_permissions=True)
+
+		profile_name = frappe.db.get_value("POS Profile", {"company": company.name}, "name") or frappe.db.get_value(
+			"POS Profile", {}, "name"
+		)
+		if not profile_name:
+			self.skipTest("no POS Profile available")
+		profile = frappe.get_doc("POS Profile", profile_name)
+
+		doc = frappe.new_doc("Sales Invoice")
+		_set_pos_profile_fields(doc, profile, cust, None, amount_paid=0)
+
+		self.assertEqual(doc.currency, foreign)
+		self.assertNotEqual(flt(doc.conversion_rate), 1.0)
+		self.assertEqual(flt(doc.conversion_rate, 4), rate)

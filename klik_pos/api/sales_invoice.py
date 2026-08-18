@@ -2381,7 +2381,21 @@ def _set_pos_profile_fields(doc, pos_profile, customer, business_type, amount_pa
 	price_list = get_price_list_with_customer_priority(customer) or getattr(pos_profile, "selling_price_list", None)
 	if price_list:
 		doc.selling_price_list = price_list
-	doc.conversion_rate = 1.0
+	# Book the real exchange rate, not a hardcoded 1:1. A customer whose currency differs
+	# from the company currency previously produced base_grand_total == grand_total, i.e. GL
+	# posted at par. (Audit 2026-08-18, accounting finding #3.)
+	company_currency = frappe.get_cached_value("Company", pos_profile.company, "default_currency")
+	if doc.currency and company_currency and doc.currency != company_currency:
+		from erpnext.setup.utils import get_exchange_rate
+
+		rate = get_exchange_rate(doc.currency, company_currency, doc.get("posting_date") or nowdate())
+		if not rate:
+			frappe.throw(
+				_("No exchange rate found from {0} to {1}.").format(doc.currency, company_currency)
+			)
+		doc.conversion_rate = flt(rate)
+	else:
+		doc.conversion_rate = 1.0
 	doc.update_stock = 1
 	doc.warehouse = pos_profile.warehouse
 	doc.cost_center = pos_profile.cost_center
@@ -3350,6 +3364,14 @@ def return_sales_invoice(invoice_name, outcome=None, payment_method=None):
 		for item in return_doc.items:
 			item.qty = -abs(item.qty)
 
+		# get_mapped_doc copies custom_pos_opening_entry from the original invoice (the field
+		# is not no_copy), so a refund processed in a later shift would otherwise be booked to
+		# the original - possibly already closed - shift. Re-point it at the current open shift,
+		# the drawer the refunded cash actually leaves. (Audit 2026-08-18, accounting finding #5.)
+		current_opening = get_current_pos_opening_entry()
+		if current_opening:
+			return_doc.custom_pos_opening_entry = current_opening
+
 		# Payments, update_outstanding_for_self and is_pos are decided by the chosen
 		# outcome (refund / reduce_bill / store_credit) - phase-17 §2c.
 		applied_outcome, unfunded = apply_return_outcome(
@@ -4005,6 +4027,7 @@ def create_multi_invoice_return(return_data):
 		invoice_returns = return_data.get("invoice_returns", [])
 
 		created_returns = []
+		failed_returns = []
 
 		for _i, invoice_return in enumerate(invoice_returns):
 			invoice_name = invoice_return.get("invoice_name")
@@ -4026,11 +4049,20 @@ def create_multi_invoice_return(return_data):
 					created_returns.append(result.get("return_invoice"))
 				else:
 					frappe.log_error(f"Failed to create return for {invoice_name}: {result.get('message')}")
+					failed_returns.append({"invoice_name": invoice_name, "message": result.get("message")})
 
+		# Report partial failure honestly - previously this always returned success:True even
+		# when individual invoice returns failed, so a cashier could under-refund a customer
+		# and never see an error. (Audit 2026-08-18, accounting finding #4.)
 		return {
-			"success": True,
+			"success": not failed_returns,
 			"created_returns": created_returns,
-			"message": f"Created {len(created_returns)} return invoices successfully",
+			"failed_returns": failed_returns,
+			"message": (
+				f"Created {len(created_returns)} return invoice(s) successfully"
+				if not failed_returns
+				else f"Created {len(created_returns)} return(s); {len(failed_returns)} failed"
+			),
 		}
 
 	except Exception as e:
