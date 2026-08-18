@@ -113,7 +113,7 @@ export function useSalesInvoices(
             (Number(invoice.total_taxes_and_charges) || 0) +
             (Number(invoice.discount_amount) || 0),
           giftCardDiscount: Number(invoice.discount_amount) || 0,
-          giftCardCode: String(invoice.discount_code) || "",
+          giftCardCode: invoice.discount_code ? String(invoice.discount_code) : "",
           taxAmount: Number(invoice.total_taxes_and_charges) || 0,
           totalAmount: Number(invoice.base_grand_total) || 0,
           paymentMethod: invoice.mode_of_payment || "-",
