@@ -20,7 +20,9 @@ Verified working setup (site `hd.phirun.me`, user `pos@phirun.me`, 2026-08-18):
 
 ### Extra role permissions (Role Permission Manager, added to Sales User)
 
-The standard role set above still misses these; each was confirmed missing by a live
+These are shipped as fixtures (`klik_pos/fixtures/custom_docperm.json`, exported for
+`role = Sales User`) and restored automatically by `bench --site <site> migrate` — no
+manual re-adding on a fresh site. Each was confirmed missing by a live
 `frappe.has_permission` audit and each breaks a real POS flow without it:
 
 | Doctype | Perm | Breaks without it |

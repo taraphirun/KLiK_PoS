@@ -80,6 +80,13 @@ fixtures = [
 		"doctype": "Property Setter",
 		"filters": [[ "module", "=", "KLiK PoS", ]],
 	},
+	{
+		# Cashier grants (docs/knowledge-base/cashier-permissions.md) - Sales Invoice
+		# create/submit plus Item Price/Batch/Serial No read for the Sales User role,
+		# so a rebuilt site restores them on migrate instead of breaking the POS.
+		"doctype": "Custom DocPerm",
+		"filters": [[ "role", "=", "Sales User", ]],
+	},
 ]
 # Includes in <head>
 # ------------------
