@@ -1,12 +1,12 @@
 from unittest.mock import MagicMock, patch
 
 import frappe
-from frappe.tests.utils import FrappeTestCase
+from frappe.tests import IntegrationTestCase
 
 from klik_pos.api.customer import check_customer_permission, get_customers
 
 
-class TestCustomerAPI(FrappeTestCase):
+class TestCustomerAPI(IntegrationTestCase):
 	"""Test cases for Customer API functions"""
 
 	def setUp(self):

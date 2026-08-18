@@ -888,13 +888,18 @@ def _calculate_return_quantities(invoice, items):
 		item["available_qty"] = round(item["qty"] - returned_qty_value, 6)
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_invoice_details(invoice_id):
 	"""
 	Main function to fetch complete invoice details.
 	"""
 	try:
 		invoice = frappe.get_doc("Sales Invoice", invoice_id)
+		# Enforce read permission on this specific invoice. Was allow_guest=True with no
+		# check, so any unauthenticated caller could read any invoice by name (names are
+		# sequential, so the whole sales history was enumerable). frappe.get_doc does not
+		# check perms on its own. (Audit 2026-08-18, security finding #1.)
+		invoice.check_permission("read")
 		invoice_data = invoice.as_dict()
 
 		# Get items with return data
@@ -3099,13 +3104,22 @@ def _populate_per_item_taxes(doc, pos_profile, force_inclusive_tax=False):
 		if force_inclusive_tax:
 			included_in_print_rate = True
 
+		# Emit the per-item tax row the way ERPNext core does
+		# (append_taxes_from_item_tax_template): rate=0 and set_by_item_tax_template=1.
+		# The flag is load-bearing - during calculate_taxes_and_totals, update_item_tax_map
+		# re-seeds every item's item_tax_rate from all header rows that are NOT flagged. A
+		# header row carrying a real rate therefore leaks that account onto every item in the
+		# cart (including tax-exempt items and items whose own template omits the account),
+		# over-charging tax. With the flag set and rate 0, core fills each item's own amount
+		# from its own item_tax_rate map only. (Audit 2026-08-18, accounting finding #1.)
 		doc.append(
 			"taxes",
 			{
 				"charge_type": "On Net Total",
 				"account_head": account_head,
 				"description": tax_data["description"],
-				"rate": tax_data["rate"],
+				"rate": 0,
+				"set_by_item_tax_template": 1,
 				"included_in_print_rate": included_in_print_rate,
 			},
 		)

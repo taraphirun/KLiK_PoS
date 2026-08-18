@@ -229,6 +229,19 @@ def _calculate_payment_reconciliation(opening_entry, data):
 	)
 	sales_map = {row.mode_of_payment: row.total_amount for row in sales_data}
 
+	# Standalone counter Payment Entry receipts (customer paying down an invoice at the
+	# counter) are cash that entered this shift's drawer but are NOT Sales Invoice Payment
+	# rows, so the query above misses them. The live drawer summary (payment.py) counts
+	# them; fold them in here too so the closing "expected" matches what the cashier sees
+	# in-shift instead of showing a false surplus. (Audit 2026-08-18, accounting finding #2.)
+	from klik_pos.api.payment import _fetch_opening_payment_entry_data
+
+	for pe_row in _fetch_opening_payment_entry_data(opening_entry_name):
+		mode = pe_row.get("mode_of_payment")
+		if not mode:
+			continue
+		sales_map[mode] = float(sales_map.get(mode) or 0) + float(pe_row.get("total_amount") or 0)
+
 	# Build reconciliation entries
 	closing_balance = data.get("closing_balance", {})
 	reconciliation = []
