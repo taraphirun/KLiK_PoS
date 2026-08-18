@@ -179,12 +179,27 @@ def apply_store_credit(customer, invoice, amount=None, credit_note=None):
 	# permission, so run the final step elevated. Everything the elevated block does was
 	# validated above (same customer, submitted docs, capped amounts) and executes only
 	# ERPNext's own reconciliation code.
-	user = frappe.session.user
+	#
+	# Deliberately NOT frappe.set_user() - that call also overwrites local.session.sid
+	# and wipes local.session.data (user-reported logout bug, 2026-08-16: set_user()
+	# corrupts the live request's session, and once Session.update() persists it back to
+	# Redis under the real sid, the next request resumes with no user and gets treated as
+	# Guest). Permission/role checks only ever read frappe.session.user
+	# (frappe.get_roles(), has_permission() both default to it) - so only that, plus the
+	# two permission caches set_user() also resets, needs touching here. sid and
+	# session.data are never involved.
+	original_user = frappe.session.user
+	original_role_permissions = getattr(frappe.local, "role_permissions", {})
+	original_user_perms = getattr(frappe.local, "user_perms", None)
 	try:
-		frappe.set_user("Administrator")
+		frappe.local.session.user = "Administrator"
+		frappe.local.role_permissions = {}
+		frappe.local.user_perms = None
 		pr.reconcile()
 	finally:
-		frappe.set_user(user)
+		frappe.local.session.user = original_user
+		frappe.local.role_permissions = original_role_permissions
+		frappe.local.user_perms = original_user_perms
 
 	return {
 		"success": True,

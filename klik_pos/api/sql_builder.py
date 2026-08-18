@@ -82,7 +82,12 @@ def apply_sql_permissions(sql: str):
                     if alias != f"`tab{doctype}`":
                         rule = rule.replace(f"`tab{doctype}`", alias)
 
-                    rule = rule.replace("%", "%%")
+                    # frappe.desk.reportview.build_match_conditions() already returns the
+                    # rule with every literal "%" doubled to "%%" (safe for the %-style
+                    # substitution frappe.db.sql/MySQLdb does later) - escaping again here
+                    # would double it a second time ("%%" -> "%%%%"), corrupting any LIKE
+                    # pattern or other literal "%" a user/doctype permission condition
+                    # embeds (e.g. once this site has a non-admin/restricted user).
 
                     permission_conditions.append(f"({rule})")
 
