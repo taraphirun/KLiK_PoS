@@ -101,6 +101,16 @@ def apply_sql_permissions(sql: str):
                 # and returns zero rows - same intent, working mechanics.
                 permission_conditions.append("(1=0)")
 
+            except Exception:
+                # Any other failure resolving this doctype's permission rule must fail
+                # CLOSED, not open - previously an unexpected error here fell through to the
+                # outer handler which returned the query UNSCOPED, leaking every row to a
+                # restricted user. Fail-closed by returning no rows. (Audit 2026-08-18.)
+                frappe.log_error(
+                    frappe.get_traceback(), f"SQL permission rule failed for {doctype}"
+                )
+                permission_conditions.append("(1=0)")
+
         if not permission_conditions:
             return sql
 

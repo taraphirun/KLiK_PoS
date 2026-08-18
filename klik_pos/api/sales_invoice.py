@@ -1428,7 +1428,9 @@ def queue_sales_invoice(data):
 			# (e.g. Delivery Reconciliation's backfill flow, Todo 038/039 - a quick item-table entry
 			# with no live tax preview). doc.grand_total is only known once build_sales_invoice_doc
 			# has run calculate_taxes_and_totals(), which is why this happens here and not earlier.
-			amount_paid = flt(doc.grand_total)
+			# Settle at rounded_total (what the customer actually pays) so no sub-unit residual
+			# outstanding is left on rounding-enabled sites. (Audit 2026-08-18, accounting finding.)
+			amount_paid = flt(doc.rounded_total or doc.grand_total)
 			# _set_pos_profile_fields (inside build_sales_invoice_doc, already run) decided is_pos
 			# from amount_paid as it stood BEFORE this override - which was 0, since the whole point
 			# here is not knowing the amount in advance. A non-POS invoice always submits with
@@ -3493,14 +3495,22 @@ class CustomSalesInvoice(SalesInvoice):
 		if paid_amount < invoice_total and flt(getattr(self, "loyalty_amount", 0)):
 			paid_amount = flt(paid_amount + flt(self.loyalty_amount, precision), precision)
 
-		# Intentional partial payment: some was collected and a remainder is outstanding
-		if paid_amount > 0 and flt(self.outstanding_amount, precision) > 0:
-			return
-
 		allow_partial_payment = frappe.db.get_value(
 			"POS Profile", self.pos_profile, "allow_partial_payment"
 		)
 		allow_partial_payment = allow_partial_payment or getattr(self, "custom_allow_partial_payment", 0)
+
+		# Some collected with a remainder outstanding = a partial payment. Permitted only when
+		# the POS Profile allows it; otherwise block. Previously this early-returned
+		# unconditionally, which made the "not allowed" guard below unreachable so the control
+		# never actually enforced. (Audit 2026-08-18.)
+		if paid_amount > 0 and flt(self.outstanding_amount, precision) > 0:
+			if allow_partial_payment:
+				return
+			frappe.throw(
+				msg=_("Partial Payment in POS Transactions are not allowed."),
+				exc=PartialPaymentValidationError,
+			)
 
 		if not allow_partial_payment and paid_amount < invoice_total:
 			frappe.throw(
@@ -3532,6 +3542,14 @@ class CustomSalesInvoice(SalesInvoice):
 
 		self.make_write_off_gl_entry(gl_entries)
 		self.make_gle_for_rounding_adjustment(gl_entries)
+
+		# Core get_gl_entries stamps transaction_currency / transaction_exchange_rate on each
+		# GL row; this fork omitted the call, leaving those columns NULL. Restore it so GL
+		# rows carry currency info (matters now that foreign-currency invoices are booked at a
+		# real rate). Guarded in case the core method name changes on upgrade.
+		# (Audit 2026-08-18, accounting finding #12.)
+		if hasattr(self, "set_transaction_currency_and_rate_in_gl_map"):
+			self.set_transaction_currency_and_rate_in_gl_map(gl_entries)
 
 		return gl_entries
 

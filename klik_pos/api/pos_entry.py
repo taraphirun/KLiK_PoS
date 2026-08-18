@@ -299,7 +299,9 @@ def _calculate_closing_entry_totals(opening_entry_name):
 			"""
 			SELECT
 				COALESCE(SUM(net_total), 0) as net_total,
-				COALESCE(SUM(grand_total), 0) as grand_total
+				-- rounded_total is what the customer actually paid; fall back to grand_total
+				-- only when rounding is off (rounded_total 0). (Audit 2026-08-18.)
+				COALESCE(SUM(CASE WHEN COALESCE(rounded_total, 0) > 0 THEN rounded_total ELSE grand_total END), 0) as grand_total
 			FROM `tabSales Invoice`
 			WHERE custom_pos_opening_entry = %s
 			  AND docstatus = 1
@@ -411,11 +413,13 @@ def _create_and_submit_closing_doc(opening_entry, data, payment_data, user):
 	# Calculate totals from Sales Invoices linked to opening entry
 	totals = _calculate_closing_entry_totals(opening_entry.name)
 
-	# Set totals (use calculated values, fallback to frontend data if calculation fails)
-	doc.total_quantity = totals.get("total_quantity") or data.get("total_quantity") or 0.0
-	doc.net_total = totals.get("net_total") or data.get("net_total") or 0.0
-	doc.total_amount = totals.get("grand_total") or data.get("total_amount") or 0.0
-	doc.grand_total = totals.get("grand_total") or data.get("total_amount") or 0.0
+	# Server-computed totals are authoritative. Do NOT fall back to client-supplied figures
+	# when a value is 0 - a genuinely zero shift is a real 0, not a cue to trust the payload.
+	# (Audit 2026-08-18.)
+	doc.total_quantity = totals.get("total_quantity") or 0.0
+	doc.net_total = totals.get("net_total") or 0.0
+	doc.total_amount = totals.get("grand_total") or 0.0
+	doc.grand_total = totals.get("grand_total") or 0.0
 
 	# Set credit/unpaid sales total if the custom field exists on the closing entry doctype
 	total_credit_sales = totals.get("total_credit_sales", 0.0)
@@ -426,8 +430,22 @@ def _create_and_submit_closing_doc(opening_entry, data, payment_data, user):
 	for payment in payment_data:
 		doc.append("payment_reconciliation", payment)
 
-	# Append taxes
-	for tax in data.get("taxes", []):
+	# Aggregate taxes server-side from this shift's submitted invoices, instead of trusting
+	# the client payload (which could send arbitrary account_head/rate/amount). Amount is the
+	# meaningful figure; rate is indicative (per-item taxes carry rate 0 on the header row).
+	# (Audit 2026-08-18.)
+	tax_rows = frappe.db.sql(
+		"""
+		SELECT stc.account_head, MAX(stc.rate) as rate, SUM(stc.tax_amount) as amount
+		FROM `tabSales Taxes and Charges` stc
+		INNER JOIN `tabSales Invoice` si ON si.name = stc.parent
+		WHERE si.custom_pos_opening_entry = %s AND si.docstatus = 1
+		GROUP BY stc.account_head
+		""",
+		(opening_entry.name,),
+		as_dict=True,
+	)
+	for tax in tax_rows:
 		doc.append(
 			"taxes",
 			{
