@@ -7,7 +7,7 @@ from klik_pos.klik_pos.utils import get_current_pos_profile
 from ..sql_builder import apply_sql_permissions
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_item_price_for_customer(item_code, customer=None, uom=None):
     try:
         if not item_code:

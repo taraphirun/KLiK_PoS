@@ -4,7 +4,7 @@ from frappe import _
 from klik_pos.klik_pos.utils import clear_pos_profile_cache
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def clear_backend_cache():
 	"""
 	Clear backend cache including POS profile cache.

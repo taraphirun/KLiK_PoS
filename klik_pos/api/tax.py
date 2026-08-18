@@ -4,7 +4,7 @@ from frappe import _
 from klik_pos.klik_pos.utils import get_current_pos_profile
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_sales_tax_categories():
 	try:
 		tax_categories = frappe.get_all(

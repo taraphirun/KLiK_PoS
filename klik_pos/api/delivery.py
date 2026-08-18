@@ -21,6 +21,26 @@ from klik_pos.api.telegram_notify import (
     send_voice,
 )
 
+def _require_delivery_management():
+    """Gate the human delivery-management actions (reconciliation confirm, manual status
+    override). These were whitelisted with no server-side check - only the SPA hid the UI
+    from users whose POS Profile lacks custom_allow_delivery_management, so any authenticated
+    user could call them directly (Audit 2026-08-18, delivery security findings). Admin-tier
+    roles bypass; everyone else must be on a POS Profile with delivery management enabled.
+    """
+    from klik_pos.klik_pos.utils import get_current_pos_profile
+
+    if set(frappe.get_roles()) & {"Administrator", "System Manager", "Sales Manager"}:
+        return
+    try:
+        profile = get_current_pos_profile()
+    except Exception:
+        profile = None
+    if profile and getattr(profile, "custom_allow_delivery_management", 0):
+        return
+    frappe.throw(frappe._("You are not permitted to manage deliveries."), frappe.PermissionError)
+
+
 # completion_status (Delivery Report) -> custom_delivery_status (Sales Invoice, Todo 020).
 DELIVERY_STATUS_MAP = {"Full": "Delivered", "Partial": "Partially Delivered"}
 
@@ -822,6 +842,7 @@ def confirm_delivery_match(report_name, invoice_name=None, mark_paid=None, amoun
     later Full delivery before an earlier Partial one for the same invoice, which without a guard
     would silently regress the invoice back to a less-complete state.
     """
+    _require_delivery_management()
     try:
         report = frappe.get_doc("Delivery Report", report_name)
 
@@ -1272,8 +1293,24 @@ def upload_delivery_file(report_name):
         if not uploaded:
             frappe.throw("No file uploaded")
 
+        # This endpoint deliberately bypasses the generic /upload_file MIME allowlist (see
+        # docstring), so it must apply its own bounds - an extension allowlist (photos + voice
+        # notes + PDF only) and a size cap. (Audit 2026-08-18, security finding.)
+        allowed_ext = {
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
+            ".pdf", ".mp4", ".ogg", ".oga", ".m4a", ".mp3", ".wav", ".amr",
+        }
+        max_bytes = 20 * 1024 * 1024
+        filename = uploaded.filename or ""
+        ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+        if ext not in allowed_ext:
+            frappe.throw(f"File type '{ext or filename}' is not allowed")
+        content = uploaded.stream.read()
+        if len(content) > max_bytes:
+            frappe.throw("File is too large (max 20MB)")
+
         file_doc = save_file(
-            uploaded.filename, uploaded.stream.read(), "Delivery Report", report_name, is_private=1
+            uploaded.filename, content, "Delivery Report", report_name, is_private=1
         )
 
         return {"success": True, "file_url": file_doc.file_url}
@@ -1542,6 +1579,7 @@ def set_manual_delivery_status(invoice_name, status):
     Frappe's own track_changes history on Sales Invoice (decided with the user, 2026-08-02) - no
     timeline comment stamped.
     """
+    _require_delivery_management()
     try:
         if status not in MANUAL_DELIVERY_STATUSES:
             frappe.throw(f"Invalid status '{status}', expected one of {MANUAL_DELIVERY_STATUSES}")

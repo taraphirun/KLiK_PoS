@@ -96,7 +96,7 @@ def _get_customer_credit_info(customer_names, company):
     return info
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_customers(limit: int = 100, start: int = 0, search: str = ""):
     try:
         pos_profile = get_current_pos_profile()
@@ -296,7 +296,7 @@ def get_user_company_and_currency():
     return default_company, company_currency
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_customer_addresses(customer: str):
     """Get all addresses for a specific customer"""
     try:
@@ -387,7 +387,7 @@ def patch_get_default_contact():
         erpnext.accounts.party.get_default_contact = original
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_customer_info(customer_name: str):
     """Fetch comprehensive customer document by customer name or ID."""
     try:
@@ -708,7 +708,7 @@ def get_or_create_customer(name, email, phone, country, tax_id, name_arabic="", 
         raise e
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_customer_groups():
     """Fetch customer groups based on POS profile configuration."""
     try:
@@ -754,7 +754,7 @@ def get_customer_groups():
         return {"success": False, "error": str(e)}
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_territories():
     """Fetch all territories for dropdown selection."""
     try:
@@ -1001,7 +1001,7 @@ def get_customer_statistics(customer_id):
         return {"success": False, "error": str(e)}
 
 
-@frappe.whitelist(allow_guest=True)
+@frappe.whitelist()
 def get_global_totals():
     """Return global totals for customers and invoices for dashboard cards."""
     try:

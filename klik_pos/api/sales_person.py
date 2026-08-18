@@ -1,6 +1,7 @@
 import frappe
 from frappe import _
 from frappe.query_builder import Table
+from frappe.rate_limiter import rate_limit
 from frappe.utils import now
 
 
@@ -82,9 +83,14 @@ def list_salespeople(pos_profile=None):
 
 
 @frappe.whitelist()
+@rate_limit(limit=20, seconds=60)
 def verify_pin(pin, device_id, salesperson=None, pos_profile=None):
     """
-    Verify PIN against all Sales Persons and return matching salesperson
+    Verify PIN against all Sales Persons and return matching salesperson.
+
+    Rate-limited (per client IP) to blunt PIN brute-forcing: the function iterates every
+    active sales person and compares 4-digit PINs, so without a throttle it was an
+    enumeration oracle. (Audit 2026-08-18, security finding PIN-BRUTE-01.)
     """
     try:
         resolved_pos_profile = pos_profile

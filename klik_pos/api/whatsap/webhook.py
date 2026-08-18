@@ -1,5 +1,7 @@
 """Webhook."""
 
+import hashlib
+import hmac
 import json
 
 import frappe
@@ -19,16 +21,43 @@ def webhook():
 def get():
 	"""Get."""
 	hub_challenge = frappe.form_dict.get("hub.challenge")
-	webhook_verify_token = frappe.db.get_single_value("WhatsApp Settings", "webhook_verify_token")
+	# Read from the doctype this app actually ships ("WhatsApp Setup"); the old lookup used a
+	# non-existent "WhatsApp Settings" doctype, so get_single_value returned None and a caller
+	# omitting hub.verify_token matched None == None and passed. Also reject an unconfigured
+	# (empty) token instead of treating it as a valid match. (Audit 2026-08-18, finding F2.)
+	webhook_verify_token = frappe.db.get_single_value("WhatsApp Setup", "webhook_verify_token")
+	provided = frappe.form_dict.get("hub.verify_token")
 
-	if frappe.form_dict.get("hub.verify_token") != webhook_verify_token:
+	if not webhook_verify_token or provided != webhook_verify_token:
 		frappe.throw("Verify token does not match")
 
 	return Response(hub_challenge, status=200)
 
 
+def _verify_meta_signature():
+	"""Authenticate an inbound POST as genuinely from Meta by validating the
+	X-Hub-Signature-256 HMAC over the raw request body. The webhook previously inserted
+	documents (ignore_permissions) from any unauthenticated caller with no signature check
+	at all. (Audit 2026-08-18, finding F1.)
+
+	The HMAC key is Meta's App Secret, held in site config as `whatsapp_app_secret` (not in
+	the WhatsApp Setup doctype, which has no such field). This webhook is opt-in / speculative,
+	so if no secret is configured we fail closed rather than accept forgeable payloads.
+	"""
+	app_secret = frappe.conf.get("whatsapp_app_secret")
+	if not app_secret:
+		frappe.throw("WhatsApp webhook secret is not configured", frappe.PermissionError)
+
+	signature = frappe.get_request_header("X-Hub-Signature-256") or ""
+	body = frappe.request.get_data() or b""
+	expected = "sha256=" + hmac.new(app_secret.encode(), body, hashlib.sha256).hexdigest()
+	if not hmac.compare_digest(expected, signature):
+		frappe.throw("Invalid webhook signature", frappe.PermissionError)
+
+
 def post():
 	"""Post."""
+	_verify_meta_signature()
 	data = frappe.local.form_dict
 	# frappe.get_doc({
 	# 	"doctype": "WhatsApp Notification Log",

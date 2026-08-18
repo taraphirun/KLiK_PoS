@@ -943,6 +943,9 @@ def get_invoice_details(invoice_id):
 @frappe.whitelist()
 def mark_invoice_as_printed(invoice_name):
 	try:
+		# Enforce write permission on the target invoice - this is a raw UPDATE by name that
+		# was previously unchecked. (Audit 2026-08-18, security finding.)
+		frappe.has_permission("Sales Invoice", "write", doc=invoice_name, throw=True)
 		frappe.db.sql(
 			"UPDATE `tabSales Invoice` SET custom_is_printed = 1 WHERE name = %s",
 			(invoice_name,)

@@ -15,15 +15,20 @@ def send_invoice_email(**kwargs):
 	data = kwargs
 
 	email = data.get("email")
-	customer_name = data.get("customer_name")
+	customer_name = frappe.utils.escape_html(data.get("customer_name") or "")
+
 	invoice_no = data.get("invoice_data")
-	sender = data.get("sender")
 
 	if not (email and invoice_no):
 		frappe.throw("Email and invoice number are required.")
 
 	try:
 		doc = frappe.get_doc("Sales Invoice", invoice_no)
+		# Only let a caller email an invoice they can actually read. Was unchecked with a
+		# caller-supplied `sender`, so any user could mail any invoice's PDF to any address
+		# with a spoofed From over company SMTP. customer_name is escaped above to block
+		# HTML injection into the mail body. (Audit 2026-08-18, security finding #5.)
+		doc.check_permission("read")
 
 		pos_profile = get_current_pos_profile()
 		print_format = pos_profile.print_format or pos_profile.print_format or "Standard"
@@ -42,13 +47,13 @@ def send_invoice_email(**kwargs):
 
 		attachments = [{"fname": f"{doc.name}.pdf", "fcontent": pdf_data}]
 
+		# No caller-supplied sender: use the configured outgoing account (prevents spoofing).
 		frappe.sendmail(
 			recipients=[email],
 			subject=subject,
 			message=message,
 			attachments=attachments,
 			delayed=False,
-			sender=sender,
 		)
 
 		return {

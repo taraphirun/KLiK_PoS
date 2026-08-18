@@ -6,6 +6,11 @@ def fix_null_batch_sles(item_code, warehouse, batch_no, invoice_list):
     Fix NULL batch_no on SLEs and Serial and Batch Bundle entries
     for a given list of invoices, then repost stock ledger.
     """
+    # Admin stock-repair tool - writes Stock Ledger Entries directly and forces a repost.
+    # Was whitelisted with no role check, so any authenticated user could corrupt stock
+    # valuation. (Audit 2026-08-18, security finding.)
+    frappe.only_for(["System Manager", "Stock Manager"])
+
     if isinstance(invoice_list, str):
         import json
         invoice_list = json.loads(invoice_list)

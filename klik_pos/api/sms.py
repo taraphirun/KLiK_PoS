@@ -24,6 +24,10 @@ def send_invoice_sms(**kwargs):
 
 	try:
 		doc = frappe.get_doc("Sales Invoice", invoice_no)
+		# Only let a caller SMS an invoice they can actually read (was unchecked, so any
+		# user could leak any invoice's number/amount to an arbitrary mobile).
+		# (Audit 2026-08-18, security finding on send_invoice_sms.)
+		doc.check_permission("read")
 
 		# Get POS print format
 		pos_profile = get_current_pos_profile()
