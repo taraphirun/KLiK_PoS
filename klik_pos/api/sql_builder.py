@@ -92,7 +92,14 @@ def apply_sql_permissions(sql: str):
                     permission_conditions.append(f"({rule})")
 
             except frappe.PermissionError:
-                return "SELECT 1 WHERE 1=0"
+                # No read permission on this doctype at all. Do NOT replace the whole
+                # query - callers still pass their params tuple, and a bare fallback
+                # like "SELECT 1 WHERE 1=0" has no %s placeholders left, so MySQLdb
+                # dies with "not all arguments converted during bytes formatting"
+                # (the exact Error Log crash this replaces, 2026-08-18). Injecting an
+                # always-false condition keeps the query shape and placeholders intact
+                # and returns zero rows - same intent, working mechanics.
+                permission_conditions.append("(1=0)")
 
         if not permission_conditions:
             return sql
