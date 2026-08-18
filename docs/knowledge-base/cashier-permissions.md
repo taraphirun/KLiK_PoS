@@ -31,6 +31,7 @@ manual re-adding on a fresh site. Each was confirmed missing by a live
 | Item Price | read | Item pricing and barcode search show nothing |
 | Batch | read | Batch-tracked item selection |
 | Serial No | read | Serialised item selection |
+| Payment Entry | read (only) | /payments Reconcile tab listings ("Insufficient Permission for Payment Entry") — otherwise only Accounts User/Manager grant it, and those roles must NOT be given to a cashier |
 
 ### Module access (User form → Allow Modules)
 
