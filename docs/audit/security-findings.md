@@ -63,6 +63,10 @@ over WhatsApp becomes a publicly-fetchable PDF of a customer's receipt. Combined
 **Fix direction:** save invoice PDFs with `is_private=1` and deliver via an authenticated/signed
 URL rather than a public path.
 
+> **DEFERRED (2026-08-20):** the owner does not use WhatsApp, so this is low priority and
+> parked to be done **last**. Left as-is for now. Revisit before enabling any WhatsApp invoice
+> delivery. (The WhatsApp inbound webhook was still hardened — finding #4 — since it fails closed.)
+
 ### 3. `get_customer_addresses` — unauthenticated address disclosure — **Medium**
 
 **Location:** `klik_pos/api/customer.py:299`. `allow_guest=True`, reads via `frappe.get_all`
