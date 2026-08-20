@@ -152,6 +152,16 @@ remove `allow_guest` across these.
   / `git log` confirm it is **not committed**. Still, plaintext creds on the app server; the CF
   token is over-privileged. **Fix:** move to site config / a secret store; scope the CF token down.
 
+  > **Reviewed 2026-08-20.** The file is a deliberate rebuild backup (values captured before
+  > recreating `hd.phirun.me`); no code reads it, and it is gitignored/untracked. Owner opted to
+  > **leave the file in place** for now. Standing recommendation, owner to action:
+  > 1. **Rotate** the Cloudflare API token and Google Maps key — they have sat in plaintext, so
+  >    treat as exposed.
+  > 2. Scope the new Cloudflare token to only the KV namespace it needs (not account-wide Workers
+  >    KV Edit).
+  > 3. Store the (rotated) values in a password manager, not a server file; delete the on-disk
+  >    file once the site rebuild no longer needs it.
+
 ---
 
 ## Refuted / checked-safe (recorded so they aren't re-chased)
