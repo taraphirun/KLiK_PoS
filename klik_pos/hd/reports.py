@@ -43,6 +43,7 @@ def get_seller_day_summary(from_date=None, to_date=None, pos_profile=None):
 
 	sales_sql = apply_sql_permissions(
 		"SELECT si.owner AS owner, SUM(si.grand_total) AS sales, "
+		"SUM(si.paid_amount) AS paid, "
 		"COUNT(DISTINCT si.name) AS transactions "
 		"FROM `tabSales Invoice` si "
 		f"WHERE {conditions} "
@@ -82,6 +83,7 @@ def get_seller_day_summary(from_date=None, to_date=None, pos_profile=None):
 				"user": r.owner,
 				"seller_name": names.get(r.owner, r.owner),
 				"sales": flt(r.sales),
+				"paid": flt(r.paid),
 				"transactions": int(r.transactions or 0),
 				"variance": variance_map.get(r.owner) if closed else None,
 				"closed": closed,

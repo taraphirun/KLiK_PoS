@@ -4,6 +4,7 @@ export interface SellerDayRow {
   user: string;
   seller_name: string;
   sales: number;
+  paid: number;
   transactions: number;
   variance: number | null;
   closed: boolean;

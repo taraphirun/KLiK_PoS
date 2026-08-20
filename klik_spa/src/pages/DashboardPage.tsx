@@ -59,9 +59,12 @@ export default function DashboardPage() {
   useEffect(() => {
     const fmt = (d: Date) => d.toISOString().slice(0, 10)
     const today = fmt(new Date())
-    let fromDate = today
-    if (timeRange === "week") fromDate = fmt(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
-    else if (timeRange === "month") fromDate = fmt(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+    // The seller overview is a manager view of everyone, so the default (current-session /
+    // blank) spans the last 30 days rather than just today - otherwise only whoever sold
+    // today would appear. The explicit today/week buttons still narrow it.
+    let fromDate = fmt(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+    if (timeRange === "today") fromDate = today
+    else if (timeRange === "week") fromDate = fmt(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
     let cancelled = false
     getSellerDaySummary(fromDate, today)
       .then((rows) => { if (!cancelled) setSellerSummary(rows) })
@@ -344,8 +347,9 @@ if (Object.prototype.hasOwnProperty.call(hourlySales, hour)) {
             <thead>
               <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
                 <th className="py-2 pr-2 font-medium">Seller</th>
-                <th className="py-2 px-2 font-medium text-right">Sales</th>
-                <th className="py-2 px-2 font-medium text-right"># Txns</th>
+                <th className="py-2 px-2 font-medium text-right"># Sales</th>
+                <th className="py-2 px-2 font-medium text-right">Total Sale</th>
+                <th className="py-2 px-2 font-medium text-right">Total Paid</th>
                 <th className="py-2 pl-2 font-medium text-right">Variance</th>
               </tr>
             </thead>
@@ -353,10 +357,13 @@ if (Object.prototype.hasOwnProperty.call(hourlySales, hour)) {
               {sellerSummary.map((s) => (
                 <tr key={s.user} className="border-b border-gray-100 dark:border-gray-700/50">
                   <td className="py-2 pr-2 text-gray-900 dark:text-white">{s.seller_name}</td>
+                  <td className="py-2 px-2 text-right text-gray-600 dark:text-gray-300">{s.transactions}</td>
                   <td className="py-2 px-2 text-right text-gray-900 dark:text-white">
                     {formatCurrencyWithSymbol(s.sales, posDetails?.currency || "USD")}
                   </td>
-                  <td className="py-2 px-2 text-right text-gray-600 dark:text-gray-300">{s.transactions}</td>
+                  <td className="py-2 px-2 text-right text-gray-900 dark:text-white">
+                    {formatCurrencyWithSymbol(s.paid, posDetails?.currency || "USD")}
+                  </td>
                   <td className="py-2 pl-2 text-right">
                     {s.closed && s.variance !== null ? (
                       <span className={sellerVarianceClass(s.variance)}>
