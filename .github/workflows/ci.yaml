@@ -110,6 +110,25 @@ jobs:
         env:
           TYPE: server
 
+  frontend:
+    runs-on: ubuntu-latest
+    name: Frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22.12.0
+
+      - name: Install deps
+        working-directory: klik_spa
+        run: yarn install --frozen-lockfile
+
+      - name: Unit tests
+        working-directory: klik_spa
+        run: yarn test
+
   pre-commit:
     runs-on: ubuntu-latest
     steps:
