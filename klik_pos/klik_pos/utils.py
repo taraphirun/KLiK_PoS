@@ -321,6 +321,17 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 			if plain_desc
 			else ""
 		)
+		# Per-line tax-inclusive gross-up factor (1 + the line's OWN tax %). The print format
+		# multiplies net_rate/net_amount by this so a taxed row prints its tax-inclusive price
+		# while an untaxed row is unchanged (factor 1). Exact for On-Net-Total item taxes.
+		tax_map = getattr(it, "item_tax_rate", None)
+		if isinstance(tax_map, str):
+			try:
+				tax_map = frappe.parse_json(tax_map or "{}")
+			except Exception:
+				tax_map = {}
+		line_incl = 1 + (sum(frappe.utils.flt(v) for v in (tax_map or {}).values()) / 100.0)
+
 		prepared.append(
 			{
 				"item": it,
@@ -329,6 +340,7 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 				# None for the overwhelming majority of names (they fit at the default) - the
 				# template then emits no inline style and .td-box's own font-size applies.
 				"name_font_size": fit_item_name_font_size(getattr(it, "item_name", "")),
+				"line_incl": line_incl,
 			}
 		)
 
@@ -342,7 +354,7 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 		remaining = slots_per_page - page_slots_used
 		while remaining > 0:
 			running_no += 1
-			page_rows.append({"no": running_no, "item": None, "description": "", "name_font_size": None})
+			page_rows.append({"no": running_no, "item": None, "description": "", "name_font_size": None, "line_incl": 1})
 			remaining -= 1
 		pages.append(page_rows)
 		page_rows = []
@@ -358,6 +370,7 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 				"item": entry["item"],
 				"description": entry["description"],
 				"name_font_size": entry["name_font_size"],
+				"line_incl": entry["line_incl"],
 			}
 		)
 		page_slots_used += entry["slots"]
