@@ -27,6 +27,7 @@ import { usePOSProfileStore } from "../stores/posProfileStore";
 import { useAllPaymentModes } from "../hooks/usePaymentModes"
 import { useSalesInvoices } from "../hooks/useSalesInvoices"
 import { useUserInfo } from "../hooks/useUserInfo"
+import { getSellerDaySummary, type SellerDayRow } from "../services/reports"
 
 export default function DashboardPage() {
   const navigate = useNavigate()
@@ -50,6 +51,23 @@ export default function DashboardPage() {
   const [paymentFilter, setPaymentFilter] = useState("all")
   const [showFilters, setShowFilters] = useState(false)
   const [salesByHourGraphType, setSalesByHourGraphType] = useState<"bar" | "line">("bar")
+
+  // Manager "Sales by Seller" day overview (admin-gated read-only endpoint). Independent of
+  // the client-side invoice filters - always a whole-day, all-sellers view for the selected
+  // range so a manager can see how each seller is doing.
+  const [sellerSummary, setSellerSummary] = useState<SellerDayRow[]>([])
+  useEffect(() => {
+    const fmt = (d: Date) => d.toISOString().slice(0, 10)
+    const today = fmt(new Date())
+    let fromDate = today
+    if (timeRange === "week") fromDate = fmt(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000))
+    else if (timeRange === "month") fromDate = fmt(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000))
+    let cancelled = false
+    getSellerDaySummary(fromDate, today)
+      .then((rows) => { if (!cancelled) setSellerSummary(rows) })
+      .catch(() => { if (!cancelled) setSellerSummary([]) })
+    return () => { cancelled = true }
+  }, [timeRange])
 
   // Default stats for gift card and sales by day (not currently implemented)
   const stats = {
@@ -307,6 +325,59 @@ if (Object.prototype.hasOwnProperty.call(hourlySales, hour)) {
   }
 
   const topPerformer = calculateTopPerformer()
+
+  // Variance color: ~0 green, over blue, short red (mirrors ClosingShiftPage.getVarianceClass).
+  const sellerVarianceClass = (v: number) => {
+    if (Math.abs(v) < 0.005) return "text-green-700 dark:text-green-400"
+    return v > 0 ? "text-blue-700 dark:text-blue-400" : "text-red-700 dark:text-red-400"
+  }
+
+  const salesBySellerCard = (
+    <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Sales by Seller</h3>
+        <Users className="w-5 h-5 text-beveren-600" />
+      </div>
+      {sellerSummary.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-700">
+                <th className="py-2 pr-2 font-medium">Seller</th>
+                <th className="py-2 px-2 font-medium text-right">Sales</th>
+                <th className="py-2 px-2 font-medium text-right"># Txns</th>
+                <th className="py-2 pl-2 font-medium text-right">Variance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sellerSummary.map((s) => (
+                <tr key={s.user} className="border-b border-gray-100 dark:border-gray-700/50">
+                  <td className="py-2 pr-2 text-gray-900 dark:text-white">{s.seller_name}</td>
+                  <td className="py-2 px-2 text-right text-gray-900 dark:text-white">
+                    {formatCurrencyWithSymbol(s.sales, posDetails?.currency || "USD")}
+                  </td>
+                  <td className="py-2 px-2 text-right text-gray-600 dark:text-gray-300">{s.transactions}</td>
+                  <td className="py-2 pl-2 text-right">
+                    {s.closed && s.variance !== null ? (
+                      <span className={sellerVarianceClass(s.variance)}>
+                        {formatCurrencyWithSymbol(s.variance, posDetails?.currency || "USD")}
+                      </span>
+                    ) : (
+                      <span className="text-gray-400 dark:text-gray-500">Open</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+          No seller data for selected period
+        </div>
+      )}
+    </div>
+  )
 
   // Calculate top selling products from invoices
   const calculateTopProducts = () => {
@@ -796,6 +867,9 @@ if (Object.prototype.hasOwnProperty.call(hourlySales, hour)) {
                 </div>
               )}
             </div>
+
+            {/* Sales by Seller (manager overview) */}
+            {salesBySellerCard}
 
             {/* Weekly Trend */}
             <div className="bg-white dark:bg-gray-800 rounded-xl p-4 border border-gray-200 dark:border-gray-700">
@@ -1378,6 +1452,9 @@ if (Object.prototype.hasOwnProperty.call(hourlySales, hour)) {
 
 
         </div>
+
+        {/* Sales by Seller (manager overview) */}
+        <div className="mb-6 sm:mb-8">{salesBySellerCard}</div>
 
         {/* Bottom Section */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
