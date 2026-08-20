@@ -153,6 +153,7 @@ jinja = {
 		"klik_pos.klik_pos.utils.get_customer_credit_summary",
 		"klik_pos.klik_pos.utils.get_invoice_qr_png",
 		"klik_pos.klik_pos.utils.paginate_invoice_items",
+		"klik_pos.klik_pos.utils.line_incl_factor",
 	],
 }
 

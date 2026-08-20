@@ -265,6 +265,22 @@ def _get_az_coil_item_groups(pos_profile):
 	return groups or {"zn"}
 
 
+def line_incl_factor(item):
+	"""Per-line tax-inclusive gross-up factor for a Sales Invoice Item: 1 + the line's OWN
+	tax rate % (summed from its item_tax_rate map). Multiply net_rate/net_amount by this to
+	print a taxed row's tax-inclusive price while leaving an untaxed row unchanged (factor 1).
+	Exact for On-Net-Total item taxes. Exposed to print-format Jinja (see hooks.py
+	`jinja.methods`) for formats that iterate doc.items directly (thermal, DS POS); the A5
+	format gets the same value via paginate_invoice_items."""
+	tax_map = getattr(item, "item_tax_rate", None)
+	if isinstance(tax_map, str):
+		try:
+			tax_map = frappe.parse_json(tax_map or "{}")
+		except Exception:
+			tax_map = {}
+	return 1 + (sum(frappe.utils.flt(v) for v in (tax_map or {}).values()) / 100.0)
+
+
 def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 	"""Exposed to print-format Jinja templates (see hooks.py `jinja.methods`).
 
@@ -321,16 +337,7 @@ def paginate_invoice_items(items, slots_per_page=14, pos_profile=None):
 			if plain_desc
 			else ""
 		)
-		# Per-line tax-inclusive gross-up factor (1 + the line's OWN tax %). The print format
-		# multiplies net_rate/net_amount by this so a taxed row prints its tax-inclusive price
-		# while an untaxed row is unchanged (factor 1). Exact for On-Net-Total item taxes.
-		tax_map = getattr(it, "item_tax_rate", None)
-		if isinstance(tax_map, str):
-			try:
-				tax_map = frappe.parse_json(tax_map or "{}")
-			except Exception:
-				tax_map = {}
-		line_incl = 1 + (sum(frappe.utils.flt(v) for v in (tax_map or {}).values()) / 100.0)
+		line_incl = line_incl_factor(it)
 
 		prepared.append(
 			{
