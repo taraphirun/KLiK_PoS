@@ -1,4 +1,5 @@
 import difflib
+import html
 import json
 import re
 import unicodedata
@@ -350,6 +351,46 @@ KH_PAYMENT = {
     "Partial": "🟡 ខ្លះ",  # Partial
 }
 
+# Delivery app payment rows in the group post (2026-11-13). Banks keep their own names; a mode
+# added to the app later shows as sent, upper-cased.
+KH_PAYMENT_MODE = {"cash": "សាច់ប្រាក់", "aba": "ABA", "acleda": "ACLEDA"}  # cash: "Cash"
+KH_TOTAL = "សរុប"  # Total
+KH_RATE = "អត្រា"  # Rate
+
+
+def _payment_lines(report):
+    """The payments a delivery app driver reported, one line each, then the total in dollars:
+
+        • សាច់ប្រាក់: 50,000៛
+        • ABA: $10.00
+        សរុប ≈ $22.26 (អត្រា 4,077៛)
+
+    Nothing for a report without payment rows (every bot report)."""
+    rows = report.get("payments") or []
+    if not rows:
+        return []
+
+    def money(usd, khr):
+        parts = []
+        if flt(usd):
+            parts.append(f"${flt(usd):,.2f}")
+        if flt(khr):
+            parts.append(f"{flt(khr):,.0f}៛")
+        return " + ".join(parts) or "$0.00"
+
+    lines = []
+    for row in rows:
+        mode = str(row.get("mode") or "").strip().lower()
+        name = html.escape(KH_PAYMENT_MODE.get(mode, mode.upper()))
+        lines.append(f"      • {name}: {money(row.get('amount_usd'), row.get('amount_khr'))}")
+    has_khr = any(flt(row.get("amount_khr")) for row in rows)
+    total = flt(report.get("total_usd"))
+    if not has_khr:
+        lines.append(f"      <b>{KH_TOTAL}: ${total:,.2f}</b>")
+    elif report.get("exchange_rate"):
+        lines.append(f"      <b>{KH_TOTAL} ≈ ${total:,.2f}</b> ({KH_RATE} {cint(report.get('exchange_rate')):,}៛)")
+    return lines
+
 
 def _location_link(report):
     """HTML `<a>` to Google Maps for the delivery's GPS point, or `None` if either coordinate is
@@ -437,6 +478,7 @@ def reporting_summary_text(report):
         f"📦 <b>វិក្កយបត្រ #{report.reported_invoice_no}</b>",
         f"📋 <b>ស្ថានភាពដឹកជញ្ជូន៖</b> {completion}",
         f"💰 <b>ការទូទាត់៖</b> {payment}",
+        *_payment_lines(report),
         f"🛵 <b>អ្នកដឹក៖</b> {driver_name}",
         f"🕒 {time_str}",
     ]
