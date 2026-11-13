@@ -13,7 +13,7 @@ from klik_pos.api.booklet import _extract_number as _extract_invoice_number
 from klik_pos.api.booklet import match_booklet_for_invoice
 from klik_pos.api.cloudflare_kv import get_acks_namespace_id, put_kv
 from klik_pos.api.delivery_app_media import enqueue_post as enqueue_app_media_post
-from klik_pos.api.delivery_app_media import is_app_report, record_summary
+from klik_pos.api.delivery_app_media import hold_for_media, is_app_report
 from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment_entry, queue_sales_invoice
 from klik_pos.api.telegram_notify import (
     _send_telegram_message,
@@ -408,6 +408,44 @@ def _driver_hashtag(report):
     return f"#{id_part}"
 
 
+def reporting_summary_text(report):
+    """The report's text for the reporting group (HTML). Used by the forward below and, for
+    delivery app reports, by delivery_app_media when it posts the report with its files."""
+    # delivery_timestamp is stored as the naive-UTC string the bot sent (see
+    # ARCHITECTURE.md's payload gotchas), so it must be tagged UTC before converting - without
+    # the replace() this would treat it as server-local and be hours off, which is exactly the
+    # bug the Worker's own toLocalDisplayString comment records hitting.
+    local = (
+        get_datetime(report.delivery_timestamp)
+        .replace(tzinfo=timezone.utc)
+        .astimezone(ZoneInfo(REPORTING_TZ))
+    )
+    time_str = _format_delivery_time(local)
+    # delivery_driver_name (the *registered* klik_pos name), not reported_driver_name (the
+    # driver's Telegram *profile* name at delivery time) - changed 2026-08-05 to match
+    # _driver_hashtag below, after a real report showed them disagreeing: a driver's Telegram
+    # display name was "ដេប៉ូ ហុងតារា" (apparently a business name they'd set on their account)
+    # while their registered name was "តារា", so the driver line and the hashtag named two
+    # different things for the same delivery. Falls back to reported_driver_name only when no
+    # driver record resolved at all (delivery_driver_name is then blank).
+    driver_name = report.delivery_driver_name or report.reported_driver_name or "អ្នកដឹកជញ្ជូនមិនស្គាល់"
+    completion = KH_COMPLETION.get(report.completion_status, report.completion_status)
+    payment = KH_PAYMENT.get(report.payment_status, report.payment_status)
+    # "ម៉ោង៖" (Time:) label dropped by request (2026-08-06) - the clock emoji alone now carries
+    # the line's meaning, same pattern as the other short labels in this report.
+    lines = [
+        f"📦 <b>វិក្កយបត្រ #{report.reported_invoice_no}</b>",
+        f"📋 <b>ស្ថានភាពដឹកជញ្ជូន៖</b> {completion}",
+        f"💰 <b>ការទូទាត់៖</b> {payment}",
+        f"🛵 <b>អ្នកដឹក៖</b> {driver_name}",
+        f"🕒 {time_str}",
+    ]
+    map_link = _location_link(report)
+    if map_link:
+        lines.append(f"📍ទីតាំង៖ {map_link}")
+    return "\n".join(lines) + f"\n\n{_driver_hashtag(report)}"
+
+
 def forward_delivery_to_reporting_chat_job(report_name):
     """The delivery review-chat forward - summary, voice note, and photos, for human review.
     Originally bot.py's group-forward (bot.py:844-889), then the Worker's `forwardToReportingChat`,
@@ -436,13 +474,22 @@ def forward_delivery_to_reporting_chat_job(report_name):
 
     report = frappe.get_doc("Delivery Report", report_name)
 
+    # Delivery app reports (2026-11-13): their photos and voice upload after this runs. The whole
+    # post (separator, text, voice, photos) waits for them in delivery_app_media, so it lands in the
+    # group as one block. If that hand-off fails, fall through and post the text now, as before.
+    try:
+        if is_app_report(report):
+            hold_for_media(report_name)
+            return
+    except Exception:
+        frappe.log_error(title="Failed to hand app report to delivery_app_media", message=report_name)
+
     raw = report.telegram_file_ids
     if isinstance(raw, str):
         raw = frappe.parse_json(raw) if raw else {}
     raw = raw or {}
     photo_ids = raw.get("photos") or []
     voice_id = raw.get("voice")
-    summary_id = None
 
     try:
         # Sent first, on its own, so it lands on the boundary between the previous delivery's
@@ -453,39 +500,7 @@ def forward_delivery_to_reporting_chat_job(report_name):
         frappe.log_error(title="Failed to send report separator to reporting chat", message=report_name)
 
     try:
-        # delivery_timestamp is stored as the naive-UTC string the bot sent (see
-        # ARCHITECTURE.md's payload gotchas), so it must be tagged UTC before converting - without
-        # the replace() this would treat it as server-local and be hours off, which is exactly the
-        # bug the Worker's own toLocalDisplayString comment records hitting.
-        local = (
-            get_datetime(report.delivery_timestamp)
-            .replace(tzinfo=timezone.utc)
-            .astimezone(ZoneInfo(REPORTING_TZ))
-        )
-        time_str = _format_delivery_time(local)
-        # delivery_driver_name (the *registered* klik_pos name), not reported_driver_name (the
-        # driver's Telegram *profile* name at delivery time) - changed 2026-08-05 to match
-        # _driver_hashtag below, after a real report showed them disagreeing: a driver's Telegram
-        # display name was "ដេប៉ូ ហុងតារា" (apparently a business name they'd set on their account)
-        # while their registered name was "តារា", so the driver line and the hashtag named two
-        # different things for the same delivery. Falls back to reported_driver_name only when no
-        # driver record resolved at all (delivery_driver_name is then blank).
-        driver_name = report.delivery_driver_name or report.reported_driver_name or "អ្នកដឹកជញ្ជូនមិនស្គាល់"
-        completion = KH_COMPLETION.get(report.completion_status, report.completion_status)
-        payment = KH_PAYMENT.get(report.payment_status, report.payment_status)
-        # "ម៉ោង៖" (Time:) label dropped by request (2026-08-06) - the clock emoji alone now carries
-        # the line's meaning, same pattern as the other short labels in this report.
-        lines = [
-            f"📦 <b>វិក្កយបត្រ #{report.reported_invoice_no}</b>",
-            f"📋 <b>ស្ថានភាពដឹកជញ្ជូន៖</b> {completion}",
-            f"💰 <b>ការទូទាត់៖</b> {payment}",
-            f"🛵 <b>អ្នកដឹក៖</b> {driver_name}",
-            f"🕒 {time_str}",
-        ]
-        map_link = _location_link(report)
-        if map_link:
-            lines.append(f"📍ទីតាំង៖ {map_link}")
-        summary_id = _send_telegram_message(chat_id, "\n".join(lines) + f"\n\n{_driver_hashtag(report)}", **extra)
+        _send_telegram_message(chat_id, reporting_summary_text(report), **extra)
     except Exception:
         frappe.log_error(title="Failed to forward delivery summary to reporting chat", message=report_name)
 
@@ -504,15 +519,6 @@ def forward_delivery_to_reporting_chat_job(report_name):
             send_media_group(chat_id, photo_ids, **extra)
     except Exception:
         frappe.log_error(title="Failed to forward photos to reporting chat", message=report_name)
-
-    # Delivery app reports (2026-11-13): their photos and voice are uploaded after this runs, so
-    # there is nothing above to send. Remember the text's message id; delivery_app_media posts the
-    # files as replies once they are in. Bot reports skip this.
-    try:
-        if is_app_report(report):
-            record_summary(report_name, summary_id)
-    except Exception:
-        frappe.log_error(title="Failed to record app report's group post", message=report_name)
 
 
 STUCK_JOB_AGE_MINUTES = 15

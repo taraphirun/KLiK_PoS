@@ -3,14 +3,17 @@
  "allow_rename": 0,
  "autoname": "field:delivery_report",
  "creation": "2026-11-13 00:00:00.000000",
- "description": "Delivery app reports: which photos and voice notes were posted to the Telegram reporting group. Written by klik_pos/api/delivery_app_media.py.",
+ "description": "Delivery app reports: their post to the Telegram reporting group (posted once as one block, then late files). Written by klik_pos/api/delivery_app_media.py.",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
   "delivery_report",
+  "posted_at",
   "summary_message_id",
+  "warning_message_id",
   "done",
   "posted_urls",
+  "photo_slots",
   "last_error"
  ],
  "fields": [
@@ -25,10 +28,25 @@
    "unique": 1
   },
   {
-   "description": "Telegram message id of the report's text in the reporting group; photos and voice are sent as replies to it. Blank if that send failed.",
+   "description": "When the report was posted to the group (text, voice, photos as one block). Blank while waiting for its files.",
+   "fieldname": "posted_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "label": "Posted At",
+   "read_only": 1
+  },
+  {
+   "description": "Telegram message id of the report's text in the reporting group; late files are sent as replies to it. Blank if that send failed.",
    "fieldname": "summary_message_id",
    "fieldtype": "Data",
    "label": "Summary Message ID",
+   "read_only": 1
+  },
+  {
+   "description": "Message carrying the 'files missing' warning caption; it is removed once every file is in.",
+   "fieldname": "warning_message_id",
+   "fieldtype": "Data",
+   "label": "Warning Message ID",
    "read_only": 1
   },
   {
@@ -45,6 +63,13 @@
    "fieldname": "posted_urls",
    "fieldtype": "JSON",
    "label": "Posted URLs",
+   "read_only": 1
+  },
+  {
+   "description": "The posted album, in order: each photo's message id and file URL. A slot with no URL is a placeholder waiting for its photo.",
+   "fieldname": "photo_slots",
+   "fieldtype": "JSON",
+   "label": "Photo Slots",
    "read_only": 1
   },
   {

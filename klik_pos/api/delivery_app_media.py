@@ -1,48 +1,62 @@
-"""Posts a delivery app report's photos and voice note to the Telegram reporting group
-(2026-11-13).
+"""Posts a delivery app report to the Telegram reporting group as one block - separator, text,
+voice note, photos - once its files are in (2026-11-13).
 
-Why this exists: `forward_delivery_to_reporting_chat_job` (delivery.py) posts a report's text once,
-right after insert, and sends media only from `telegram_file_ids` - the file ids the Telegram bot
-receives. The delivery app (hd-delivery-app) has no Telegram file ids: it sends the report first,
-then uploads each real file through `upload_delivery_file` + `attach_delivery_media`, often minutes
-later on a weak connection. Nothing posted those files, so the group saw the text only.
+Why this exists: `forward_delivery_to_reporting_chat_job` (delivery.py) posts a report right after
+insert and sends media only from `telegram_file_ids` - the file ids the Telegram bot receives. The
+delivery app (hd-delivery-app) has no Telegram file ids: it sends the report first, then uploads
+each real file through `upload_delivery_file` + `attach_delivery_media`, often minutes later on a
+weak connection. Posting the text at once and the files as they come let other deliveries land in
+between, so the group became hard to read.
 
 What it does, for app reports only (raw_payload.source == "App"; bot reports never reach here):
-  - When the report's text is posted, `record_summary` keeps its message id in a
-    Delivery Telegram Post row (one per report).
-  - Each time a file is attached, `post_app_media_job` runs. Once every expected file is in
-    (raw_payload.expected_photos / expected_voice), it posts the voice note, then the photos as
-    albums, as replies to the report's text.
-  - If files are still missing 2 hours after the report, the hourly sweep posts what has arrived,
-    with a warning; files that arrive later follow as replies.
-  - Every posted file URL is recorded, so nothing is posted twice, and a failed send is retried by
-    the sweep (for 3 days).
+  - The forward job hands the report over (`hold_for_media`) instead of posting it.
+  - Each time a file is attached, `post_app_media_job` runs. When every expected file is in
+    (raw_payload.expected_photos / expected_voice), it posts the whole block at once.
+  - If files are still missing WAIT_MINUTES after the report, the per-minute sweep posts the block
+    anyway: the photos that arrived, a placeholder image for each missing one, and a warning
+    caption. A photo that arrives later replaces its placeholder in place (editMessageMedia); if
+    that fails it is sent as a reply. A late voice note is sent as a reply (Telegram cannot turn a
+    photo into a voice message). The warning is removed once everything is in.
+  - Every posted file URL is recorded, so nothing is posted twice; a failed send is retried by the
+    hourly sweep for SWEEP_DAYS.
+  - The block is posted under one lock, so two app reports never interleave.
 
-Kept apart from Delivery Report on purpose: a stale `report.save()` anywhere else would write
-these values back and lose them.
+State lives in Delivery Telegram Post (one row per report), not on Delivery Report: a stale
+`report.save()` anywhere else would write these values back and lose them.
 """
 
+import io
 import json
 
 import frappe
 from frappe.utils import add_to_date, cint, get_datetime, now_datetime
 
-from klik_pos.api.telegram_notify import get_reporting_chat, send_photo_files, send_voice_file
+from klik_pos.api.telegram_notify import (
+    _send_telegram_message,
+    get_reporting_chat,
+    replace_photo_file,
+    send_photo_files,
+    send_voice_file,
+    set_caption,
+)
 
 POST_DOCTYPE = "Delivery Telegram Post"
 
-# Post what has arrived once a report is this old and still missing files.
-STALL_HOURS = 2
-# The sweep stops retrying after this.
+# Post the block anyway once a report is this old and still missing files.
+WAIT_MINUTES = 5
+# The sweeps stop retrying after this.
 SWEEP_DAYS = 3
-# One lock for all reports: posting is a few seconds per report, and this keeps two workers from
-# posting the same file at once (two attach calls finishing together each enqueue a job).
+# One lock for all reports: a block is a few seconds to post, and this keeps two blocks from
+# interleaving and two workers from posting the same file (attach calls finishing together each
+# enqueue a job).
 LOCK_NAME = "delivery_app_media"
 LOCK_TIMEOUT = 300
 MAX_ERROR_TEXT_LENGTH = 500
 
 # "⚠️ Some photos or the voice note have not arrived yet."
 KH_MEDIA_INCOMPLETE = "⚠️ រូបថត ឬសំឡេងខ្លះ មិនទាន់មកដល់នៅឡើយ"
+
+_placeholder = None
 
 
 def _json_value(value, default):
@@ -74,25 +88,36 @@ def enqueue_post(report_name):
     )
 
 
-def record_summary(report_name, message_id):
-    """Called by forward_delivery_to_reporting_chat_job right after it posted an app report's
-    text. Creates the report's Delivery Telegram Post row (its existence means "the text is in the
-    group, media may follow"), then runs the media job once, for files that all arrived before the
-    text was posted. `message_id` is None when that send failed: the media then goes as plain
-    posts instead of replies."""
-    if frappe.db.exists(POST_DOCTYPE, report_name):
-        if message_id and not frappe.db.get_value(POST_DOCTYPE, report_name, "summary_message_id"):
-            frappe.db.set_value(POST_DOCTYPE, report_name, "summary_message_id", str(message_id), update_modified=False)
-    else:
+def hold_for_media(report_name):
+    """Called by forward_delivery_to_reporting_chat_job instead of posting an app report. Creates
+    the report's Delivery Telegram Post row, then runs the job once (a report whose files are all
+    in already - or that has none - posts straight away)."""
+    if not frappe.db.exists(POST_DOCTYPE, report_name):
         frappe.get_doc(
-            {
-                "doctype": POST_DOCTYPE,
-                "delivery_report": report_name,
-                "summary_message_id": str(message_id) if message_id else None,
-                "posted_urls": json.dumps([]),
-            }
+            {"doctype": POST_DOCTYPE, "delivery_report": report_name, "posted_urls": json.dumps([])}
         ).insert(ignore_permissions=True)
     enqueue_post(report_name)
+
+
+def placeholder_jpeg():
+    """A small grey square with an hourglass, shown in the album until the real photo arrives."""
+    global _placeholder
+    if _placeholder is None:
+        from PIL import Image, ImageDraw
+
+        size = 320
+        image = Image.new("RGB", (size, size), (229, 231, 235))
+        draw = ImageDraw.Draw(image)
+        grey = (156, 163, 175)
+        draw.rectangle((110, 92, 210, 102), fill=grey)
+        draw.rectangle((110, 218, 210, 228), fill=grey)
+        draw.polygon([(118, 104), (202, 104), (160, 160)], fill=grey)
+        draw.polygon([(160, 160), (118, 216), (202, 216)], outline=grey, width=6)
+        draw.polygon([(140, 216), (180, 216), (160, 190)], fill=grey)
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=80)
+        _placeholder = buf.getvalue()
+    return _placeholder
 
 
 def _read_file(report_name, file_url):
@@ -119,117 +144,200 @@ def _filename(file_url):
 
 
 def post_app_media_job(report_name):
-    """Enqueued after each file is attached to an app report, after its text is posted, and by the
-    hourly sweep. Safe to run any number of times: it only posts files not posted before."""
+    """Enqueued when an app report is handed over, after each of its files is attached, and by the
+    sweeps. Safe to run any number of times: it posts the block once and each file once."""
     # Imported here, not at the top: delivery.py imports this module, and nothing in it should be
     # able to stop delivery.py from loading.
     from frappe.utils.synchronization import filelock
 
     with filelock(LOCK_NAME, timeout=LOCK_TIMEOUT):
-        # Start a fresh transaction: another worker may have posted files (and committed) while
-        # this one waited for the lock.
+        # Start a fresh transaction: another worker may have posted (and committed) while this one
+        # waited for the lock.
         frappe.db.commit()
-        _post(report_name)
-        frappe.db.commit()
-
-
-def _post(report_name):
-    if not frappe.db.exists(POST_DOCTYPE, report_name):
-        return  # text not posted yet (or forwarding is off); record_summary runs this again later
-    if not frappe.db.exists("Delivery Report", report_name):
-        return
-    target = get_reporting_chat()
-    if not target:
-        return
-    report = frappe.get_doc("Delivery Report", report_name)
-    if not is_app_report(report):
-        return
-
-    post = frappe.db.get_value(POST_DOCTYPE, report_name, ["summary_message_id", "posted_urls", "done"], as_dict=True)
-    posted = list(_json_value(post.posted_urls, []))
-
-    payload = _payload(report)
-    photos = [url for url in _json_value(report.photos, []) if url]
-    voice = report.voice_note or None
-    complete = len(photos) >= cint(payload.get("expected_photos")) and (
-        bool(voice) or not cint(payload.get("expected_voice"))
-    )
-
-    new_voice = voice if voice and voice not in posted else None
-    new_photos = [url for url in photos if url not in posted]
-    if not new_voice and not new_photos:
-        if complete and not post.done:
-            frappe.db.set_value(POST_DOCTYPE, report_name, "done", 1, update_modified=False)
-        return
-
-    stalled = get_datetime(report.creation) < add_to_date(now_datetime(), hours=-STALL_HOURS)
-    if not complete and not stalled:
-        return  # wait for the rest, or for the sweep after STALL_HOURS
-
-    chat_id, topic_id = target
-    extra = {}
-    if topic_id:
-        extra["message_thread_id"] = topic_id
-    if post.summary_message_id:
-        extra["reply_parameters"] = {"message_id": cint(post.summary_message_id), "allow_sending_without_reply": True}
-    # The warning goes on the first file of a report posted before all its files arrived.
-    caption = KH_MEDIA_INCOMPLETE if (not complete and not posted) else None
-    errors = []
-
-    def save_posted():
-        frappe.db.set_value(POST_DOCTYPE, report_name, "posted_urls", json.dumps(posted), update_modified=False)
+        _Post(report_name).run()
         frappe.db.commit()
 
-    # Voice first, then photos: the same order as the bot's forward.
-    if new_voice:
-        content = _read_file(report_name, new_voice)
-        if content is None:
-            errors.append(f"voice {new_voice}: file not readable")
-        elif send_voice_file(chat_id, _filename(new_voice), content, caption=caption, **extra):
-            posted.append(new_voice)
-            caption = None
-            save_posted()
+
+class _Post:
+    def __init__(self, report_name):
+        self.name = report_name
+        self.errors = []
+
+    def run(self):
+        if not frappe.db.exists(POST_DOCTYPE, self.name) or not frappe.db.exists("Delivery Report", self.name):
+            return
+        target = get_reporting_chat()
+        if not target:
+            return
+        self.report = frappe.get_doc("Delivery Report", self.name)
+        if not is_app_report(self.report):
+            return
+        self.chat_id, topic_id = target
+        self.thread = {"message_thread_id": topic_id} if topic_id else {}
+
+        row = frappe.db.get_value(
+            POST_DOCTYPE,
+            self.name,
+            ["posted_at", "summary_message_id", "posted_urls", "photo_slots", "warning_message_id", "done"],
+            as_dict=True,
+        )
+        self.posted = list(_json_value(row.posted_urls, []))
+        self.slots = list(_json_value(row.photo_slots, []))
+        self.summary_id = cint(row.summary_message_id) or None
+        self.warning_id = cint(row.warning_message_id) or None
+
+        payload = _payload(self.report)
+        self.photos = [url for url in _json_value(self.report.photos, []) if url]
+        self.voice = self.report.voice_note or None
+        self.expected_photos = cint(payload.get("expected_photos"))
+        self.expected_voice = cint(payload.get("expected_voice"))
+        complete = len(self.photos) >= self.expected_photos and (bool(self.voice) or not self.expected_voice)
+
+        # Rows from the first version (text posted at once, files as replies) have a message id or
+        # posted files but no posted_at: treat them as posted.
+        if not (row.posted_at or self.summary_id or self.posted):
+            waited = get_datetime(self.report.creation) < add_to_date(now_datetime(), minutes=-WAIT_MINUTES)
+            if not complete and not waited:
+                return  # wait for the rest, or for the sweep after WAIT_MINUTES
+            self.post_block(complete)
         else:
-            errors.append(f"voice {new_voice}: not sent")
+            self.follow_up()
 
-    if new_photos:
+        done = complete and (not self.voice or self.voice in self.posted) and all(u in self.posted for u in self.photos)
+        if done and self.warning_id:
+            if set_caption(self.chat_id, self.warning_id, ""):
+                self.warning_id = None
+                self.save(warning_message_id=None)
+        self.save(
+            done=1 if done else 0,
+            last_error="; ".join(self.errors)[:MAX_ERROR_TEXT_LENGTH] if self.errors else None,
+        )
+
+    def save(self, **values):
+        frappe.db.set_value(POST_DOCTYPE, self.name, values, update_modified=False)
+        frappe.db.commit()
+
+    def save_posted(self):
+        self.save(posted_urls=json.dumps(self.posted), photo_slots=json.dumps(self.slots))
+
+    def post_block(self, complete):
+        """Separator, text, voice, photos (placeholders for missing ones), back to back."""
+        from klik_pos.api.delivery import REPORT_SEPARATOR, reporting_summary_text
+
+        _send_telegram_message(self.chat_id, REPORT_SEPARATOR, **self.thread)
+        try:
+            text = reporting_summary_text(self.report)
+        except Exception:
+            frappe.log_error(title="Delivery app media: report text failed", message=self.name)
+            text = f"📦 <b>#{self.report.reported_invoice_no}</b>"
+        self.summary_id = _send_telegram_message(self.chat_id, text, **self.thread)
+        # Recorded before the files go out: from here on this report only ever gets follow-ups,
+        # whatever happens below, so the block is never posted twice.
+        self.save(posted_at=now_datetime(), summary_message_id=str(self.summary_id) if self.summary_id else None)
+
+        if self.voice:
+            self.send_voice(reply=False)
+
         files, urls = [], []
-        for url in new_photos:
-            content = _read_file(report_name, url)
+        for url in self.photos:
+            content = _read_file(self.name, url)
             if content is None:
-                errors.append(f"photo {url}: file not readable")
+                self.errors.append(f"photo {url}: file not readable")
                 continue
             files.append((_filename(url), content))
             urls.append(url)
-        if files:
-            sent = send_photo_files(chat_id, files, caption=caption, **extra)
-            if sent:
-                posted.extend(urls[:sent])
-                save_posted()
-            if sent < len(files):
-                errors.append(f"{len(files) - sent} photo(s): not sent")
+        missing = max(self.expected_photos - len(urls), 0)
+        files += [(f"waiting-{i + 1}.jpg", placeholder_jpeg()) for i in range(missing)]
+        urls += [None] * missing
+        if not files:
+            return
+        caption = None if complete and not missing else KH_MEDIA_INCOMPLETE
+        ids = send_photo_files(self.chat_id, files, caption=caption, **self.thread)
+        for url, message_id in zip(urls, ids, strict=False):
+            if message_id is None:
+                if url:
+                    self.errors.append(f"photo {url}: not sent")
+                continue
+            self.slots.append({"message_id": message_id, "url": url})
+            if url:
+                self.posted.append(url)
+        if caption and ids and ids[0]:
+            self.warning_id = ids[0]
+            self.save(warning_message_id=str(ids[0]))
+        self.save_posted()
 
-    done = complete and (not voice or voice in posted) and all(url in posted for url in photos)
-    frappe.db.set_value(
-        POST_DOCTYPE,
-        report_name,
-        {"done": 1 if done else 0, "last_error": "; ".join(errors)[:MAX_ERROR_TEXT_LENGTH] if errors else None},
-        update_modified=False,
-    )
+    def follow_up(self):
+        """Files that arrived after the block: photos into their placeholders, the rest as replies."""
+        if self.voice and self.voice not in self.posted:
+            self.send_voice(reply=True)
+        for url in [u for u in self.photos if u not in self.posted]:
+            content = _read_file(self.name, url)
+            if content is None:
+                self.errors.append(f"photo {url}: file not readable")
+                continue
+            slot = next((s for s in self.slots if not s.get("url") and s.get("message_id")), None)
+            # Replacing a photo also replaces its caption: keep the warning on the message that
+            # carries it (it is removed once everything is in).
+            caption = KH_MEDIA_INCOMPLETE if slot and slot["message_id"] == self.warning_id else None
+            if slot and replace_photo_file(self.chat_id, slot["message_id"], _filename(url), content, caption=caption):
+                slot["url"] = url
+            else:
+                ids = send_photo_files(self.chat_id, [(_filename(url), content)], **self.thread, **self.reply())
+                if not ids or ids[0] is None:
+                    self.errors.append(f"photo {url}: not sent")
+                    continue
+            self.posted.append(url)
+            self.save_posted()
+
+    def send_voice(self, reply):
+        content = _read_file(self.name, self.voice)
+        if content is None:
+            self.errors.append(f"voice {self.voice}: file not readable")
+            return
+        extra = {**self.thread, **(self.reply() if reply else {})}
+        if send_voice_file(self.chat_id, _filename(self.voice), content, **extra):
+            self.posted.append(self.voice)
+            self.save_posted()
+        else:
+            self.errors.append(f"voice {self.voice}: not sent")
+
+    def reply(self):
+        if not self.summary_id:
+            return {}
+        return {"reply_parameters": {"message_id": self.summary_id, "allow_sending_without_reply": True}}
 
 
-def sweep_stalled_app_media():
-    """Hourly (hooks.py). App reports from the last 3 days whose files are not all posted: run the
-    media job, which retries sends that failed and, once a report is STALL_HOURS old, posts
-    whatever has arrived (with a warning when files are missing). For a younger report still
-    missing files the job does nothing, so no age floor is needed here."""
-    names = frappe.get_all(
-        POST_DOCTYPE,
-        filters={"done": 0, "creation": [">", add_to_date(now_datetime(), days=-SWEEP_DAYS)]},
-        pluck="name",
-    )
+def _rows(filters):
+    return frappe.get_all(POST_DOCTYPE, filters=filters, pluck="name")
+
+
+def _enqueue_all(names):
     for name in names:
         try:
             enqueue_post(name)
         except Exception:
             frappe.log_error(title="Delivery app media: sweep could not enqueue", message=name)
+
+
+def sweep_waiting_app_reports():
+    """Every minute (hooks.py cron). App reports not posted yet, WAIT_MINUTES or more old: post
+    them now with what has arrived."""
+    now = now_datetime()
+    _enqueue_all(
+        _rows(
+            [
+                ["posted_at", "is", "not set"],
+                ["summary_message_id", "is", "not set"],
+                ["done", "=", 0],
+                ["creation", "<", add_to_date(now, minutes=-WAIT_MINUTES)],
+                ["creation", ">", add_to_date(now, days=-SWEEP_DAYS)],
+            ]
+        )
+    )
+
+
+def sweep_stalled_app_media():
+    """Hourly (hooks.py). App reports from the last SWEEP_DAYS whose files are not all posted:
+    retry sends that failed and post late files. Reports not posted yet are included, as a
+    backstop for the per-minute sweep."""
+    _enqueue_all(_rows([["done", "=", 0], ["creation", ">", add_to_date(now_datetime(), days=-SWEEP_DAYS)]]))

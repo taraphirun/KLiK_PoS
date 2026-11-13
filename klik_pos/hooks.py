@@ -233,6 +233,10 @@ scheduler_events = {
 		"klik_pos.api.delivery.sweep_stuck_delivery_jobs",
 		"klik_pos.api.delivery_app_media.sweep_stalled_app_media"
 	],
+	"cron": {
+		# Delivery app reports still waiting for their files: post them after 5 minutes.
+		"* * * * *": ["klik_pos.api.delivery_app_media.sweep_waiting_app_reports"],
+	},
 }
 
 # Testing

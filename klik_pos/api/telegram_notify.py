@@ -131,8 +131,8 @@ def send_voice(chat_id, file_id, caption=None, **extra):
 # The helpers above resend Telegram file_ids, which only exist for media the Telegram bot received.
 # The delivery app uploads real files to klik_pos instead, so these upload the bytes themselves
 # (multipart, `attach://` parts). Same best-effort contract (never raise, log instead), but they
-# report what was sent: the caller records which files were posted, so a failed send is retried
-# later and a sent one is never posted twice.
+# return the sent messages' ids: the caller records what was posted, so a failed send is retried
+# later, a sent one is never posted twice, and a placeholder photo can be replaced in place.
 # ─────────────────────────────────────────────────────────────────────────────
 
 FILE_SEND_TIMEOUT = 60
@@ -140,12 +140,13 @@ FILE_SEND_TIMEOUT = 60
 
 def _call_telegram_files(method, data, files, what):
     """One multipart Bot API call. `data` values that are lists/dicts (media, reply_parameters)
-    are JSON-encoded, as Telegram expects in a multipart body. Returns True only on `ok`."""
+    are JSON-encoded, as Telegram expects in a multipart body. Returns Telegram's `result` (a
+    Message, a list of Messages, or True), or None if the call failed."""
     try:
         token = get_bot_token()
         if not token:
             frappe.log_error(title="Telegram send skipped - bot token not configured", message=what)
-            return False
+            return None
 
         form = {k: (json.dumps(v) if isinstance(v, list | dict) else v) for k, v in data.items() if v is not None}
         response = requests.post(
@@ -157,57 +158,89 @@ def _call_telegram_files(method, data, files, what):
             body = {}
         if not response.ok or not body.get("ok"):
             frappe.log_error(title=f"Telegram {method} failed", message=f"{what}\n\n{body or response.status_code}")
-            return False
-        return True
+            return None
+        return body.get("result", True)
     except Exception:
         frappe.log_error(title=f"Telegram {method} failed", message=what)
-        return False
+        return None
+
+
+def _message_id(result):
+    return result.get("message_id") if isinstance(result, dict) else None
 
 
 def send_voice_file(chat_id, filename, content, **extra):
     """A voice note from its bytes. OGG/Opus shows as a voice message; anything else goes as an
-    audio file (sendVoice rejects other formats). Returns True if sent."""
+    audio file (sendVoice rejects other formats). Returns the message id, or None."""
     if filename.lower().endswith((".ogg", ".oga")):
         method, field, mime = "sendVoice", "voice", "audio/ogg"
     else:
         method, field, mime = "sendAudio", "audio", "application/octet-stream"
-    return _call_telegram_files(
+    result = _call_telegram_files(
         method, {"chat_id": chat_id, **extra}, {field: (filename, content, mime)}, f"{field} {filename}"
     )
+    return _message_id(result)
 
 
 def send_photo_files(chat_id, photos, caption=None, **extra):
     """Photos from their bytes, as albums **chunked at 10** (see send_media_group for why: over 10,
     Telegram rejects the whole album). A lone item goes as sendPhoto (an album needs 2+).
     `photos` is a list of (filename, bytes). `caption`, if given, goes on the first photo only.
-    Stops at the first failed chunk and returns how many photos (from the start of the list)
-    were sent, so the caller records exactly those.
+    Returns one message id per photo, in order; None for a photo whose chunk failed (the other
+    chunks are still sent).
     """
     CHUNK = 10
-    sent = 0
+    ids = []
     for i in range(0, len(photos), CHUNK):
         batch = photos[i : i + CHUNK]
         first_caption = caption if i == 0 else None
         if len(batch) == 1:
             name, content = batch[0]
             data = {"chat_id": chat_id, "caption": first_caption, **extra}
-            ok = _call_telegram_files("sendPhoto", data, {"photo": (name, content, "image/jpeg")}, f"photo {name}")
-        else:
-            media, files = [], {}
-            for j, (name, content) in enumerate(batch):
-                key = f"p{j}"
-                item = {"type": "photo", "media": f"attach://{key}"}
-                if j == 0 and first_caption:
-                    item["caption"] = first_caption
-                media.append(item)
-                files[key] = (name, content, "image/jpeg")
-            ok = _call_telegram_files(
-                "sendMediaGroup", {"chat_id": chat_id, "media": media, **extra}, files, f"album of {len(batch)}"
-            )
-        if not ok:
-            break
-        sent += len(batch)
-    return sent
+            result = _call_telegram_files("sendPhoto", data, {"photo": (name, content, "image/jpeg")}, f"photo {name}")
+            ids.append(_message_id(result))
+            continue
+        media, files = [], {}
+        for j, (name, content) in enumerate(batch):
+            key = f"p{j}"
+            item = {"type": "photo", "media": f"attach://{key}"}
+            if j == 0 and first_caption:
+                item["caption"] = first_caption
+            media.append(item)
+            files[key] = (name, content, "image/jpeg")
+        result = _call_telegram_files(
+            "sendMediaGroup", {"chat_id": chat_id, "media": media, **extra}, files, f"album of {len(batch)}"
+        )
+        got = [_message_id(m) for m in result] if isinstance(result, list) else []
+        ids.extend(got + [None] * (len(batch) - len(got)))
+    return ids
+
+
+def replace_photo_file(chat_id, message_id, filename, content, caption=None):
+    """Replaces the photo in a message the bot sent (a placeholder, also inside an album) with
+    this one. The message's caption becomes `caption` (none if not given). Returns True if
+    replaced."""
+    media = {"type": "photo", "media": "attach://p"}
+    if caption:
+        media["caption"] = caption
+    result = _call_telegram_files(
+        "editMessageMedia",
+        {"chat_id": chat_id, "message_id": message_id, "media": media},
+        {"p": (filename, content, "image/jpeg")},
+        f"replace photo in message {message_id}",
+    )
+    return result is not None
+
+
+def set_caption(chat_id, message_id, caption):
+    """Changes (or with "" removes) the caption of a message the bot sent. Returns True if done."""
+    result = _call_telegram_files(
+        "editMessageCaption",
+        {"chat_id": chat_id, "message_id": message_id, "caption": caption},
+        None,
+        f"caption of message {message_id}",
+    )
+    return result is not None
 
 
 def get_reporting_chat():
