@@ -13,6 +13,7 @@ import { getCandidateBooklets, resolveBooklet, type DeliveryBooklet } from "../s
 import { getDrivers, type DeliveryDriver } from "../services/driver";
 import CreateInvoiceFromReportModal from "../components/delivery/CreateInvoiceFromReportModal";
 import DeliveryPhotoStrip from "../components/delivery/DeliveryPhotoStrip";
+import DeliveryPayments from "../components/delivery/DeliveryPayments";
 
 type QueueTab = "pending" | "history";
 
@@ -300,6 +301,7 @@ function ReportCard({ report, onChanged }: ReportCardProps) {
             {" · "}
             {report.completion_status} delivery, {report.payment_status} payment
           </div>
+          <DeliveryPayments report={report} />
           {(report.photos || report.voice_note) && (
             <div className="mt-2">
               <DeliveryPhotoStrip photos={report.photos} photoThumbnails={report.photo_thumbnails} voiceNote={report.voice_note} />
@@ -554,6 +556,7 @@ function ReportTableRow({ report, onChanged }: ReportCardProps) {
           <div className="text-xs text-gray-500 dark:text-gray-400">
             {report.completion_status} · {report.payment_status}
           </div>
+          <DeliveryPayments report={report} />
         </td>
         <td className="px-3 py-3 text-sm">
           {report.matched_invoice ? (

@@ -114,7 +114,9 @@ export default function CreateInvoiceFromReportModal({
       ? report.payment_status
       : "Unpaid"
   );
-  const [amountCollected, setAmountCollected] = useState(String(report.amount_collected || ""));
+  // Starts at the delivery app driver's own total (all payments in USD) when there is one -
+  // staff check and adjust it (2026-11-13).
+  const [amountCollected, setAmountCollected] = useState(String(report.amount_collected || report.total_usd || ""));
   const [dueDate, setDueDate] = useState(() => defaultPostingDate(report));
   const [itemQuery, setItemQuery] = useState("");
   const [itemResults, setItemResults] = useState<ItemSearchResult[]>([]);
@@ -168,7 +170,9 @@ export default function CreateInvoiceFromReportModal({
   // confirm that match, or to swap it for a different one, both start from the same place.
   const [selectedMatchInvoice, setSelectedMatchInvoice] = useState<string | null>(report.matched_invoice || null);
   const [matchMarkPaid, setMatchMarkPaid] = useState(report.payment_status !== "Unpaid");
-  const [matchAmountCollected, setMatchAmountCollected] = useState(String(report.amount_collected || ""));
+  const [matchAmountCollected, setMatchAmountCollected] = useState(
+    String(report.amount_collected || report.total_usd || "")
+  );
   const [isLinkingMatch, setIsLinkingMatch] = useState(false);
   // Full detail for whichever invoice was last clicked in the match list, shown in the preview
   // panel to the right (2026-08-06, user request). Independent of selectedMatchInvoice in

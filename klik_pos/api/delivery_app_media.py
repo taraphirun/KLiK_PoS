@@ -20,6 +20,10 @@ What it does, for app reports only (raw_payload.source == "App"; bot reports nev
   - Every posted file URL is recorded, so nothing is posted twice; a failed send is retried by the
     hourly sweep for SWEEP_DAYS.
   - The block is posted under one lock, so two app reports never interleave.
+  - A driver's edit (delivery.update_delivery_report) updates the block in place: the text is
+    edited with an "edited" line, photos and a voice note the driver removed are deleted from the
+    group (Telegram allows this for 48 hours), and added files fill placeholders or follow as
+    replies.
 
 State lives in Delivery Telegram Post (one row per report), not on Delivery Report: a stale
 `report.save()` anywhere else would write these values back and lose them.
@@ -33,6 +37,8 @@ from frappe.utils import add_to_date, cint, get_datetime, now_datetime
 
 from klik_pos.api.telegram_notify import (
     _send_telegram_message,
+    delete_message,
+    edit_message_text,
     get_reporting_chat,
     replace_photo_file,
     send_photo_files,
@@ -55,6 +61,8 @@ MAX_ERROR_TEXT_LENGTH = 500
 
 # "⚠️ Some photos or the voice note have not arrived yet."
 KH_MEDIA_INCOMPLETE = "⚠️ រូបថត ឬសំឡេងខ្លះ មិនទាន់មកដល់នៅឡើយ"
+# "✏️ Edited" - added to the text of a report the driver edited.
+KH_EDITED = "✏️ បានកែប្រែ"
 
 _placeholder = None
 
@@ -76,7 +84,16 @@ def _payload(report):
 
 def is_app_report(report):
     """True for reports sent by the delivery app (it sets source "App"); the bot never does."""
-    return _payload(report).get("source") == "App"
+    return report.get("source") == "App" or _payload(report).get("source") == "App"
+
+
+def _expected(report):
+    """(photos, voice notes) the driver took. From the report's own fields, which an edit
+    updates; reports from before those fields existed only have them in raw_payload."""
+    if report.get("source") == "App":
+        return cint(report.get("expected_photos")), cint(report.get("expected_voice"))
+    payload = _payload(report)
+    return cint(payload.get("expected_photos")), cint(payload.get("expected_voice"))
 
 
 def enqueue_post(report_name):
@@ -143,6 +160,10 @@ def _filename(file_url):
     return file_url.rsplit("/", 1)[-1]
 
 
+def _is_voice(file_url):
+    return _filename(file_url).lower().endswith((".ogg", ".oga", ".m4a", ".mp3", ".wav", ".webm", ".amr"))
+
+
 def post_app_media_job(report_name):
     """Enqueued when an app report is handed over, after each of its files is attached, and by the
     sweeps. Safe to run any number of times: it posts the block once and each file once."""
@@ -178,19 +199,28 @@ class _Post:
         row = frappe.db.get_value(
             POST_DOCTYPE,
             self.name,
-            ["posted_at", "summary_message_id", "posted_urls", "photo_slots", "warning_message_id", "done"],
+            [
+                "posted_at",
+                "summary_message_id",
+                "posted_urls",
+                "photo_slots",
+                "warning_message_id",
+                "voice_message_id",
+                "text_revision",
+                "done",
+            ],
             as_dict=True,
         )
         self.posted = list(_json_value(row.posted_urls, []))
         self.slots = list(_json_value(row.photo_slots, []))
         self.summary_id = cint(row.summary_message_id) or None
         self.warning_id = cint(row.warning_message_id) or None
+        self.voice_message_id = cint(row.voice_message_id) or None
+        self.text_revision = cint(row.text_revision) or 1
 
-        payload = _payload(self.report)
         self.photos = [url for url in _json_value(self.report.photos, []) if url]
         self.voice = self.report.voice_note or None
-        self.expected_photos = cint(payload.get("expected_photos"))
-        self.expected_voice = cint(payload.get("expected_voice"))
+        self.expected_photos, self.expected_voice = _expected(self.report)
         complete = len(self.photos) >= self.expected_photos and (bool(self.voice) or not self.expected_voice)
 
         # Rows from the first version (text posted at once, files as replies) have a message id or
@@ -201,6 +231,7 @@ class _Post:
                 return  # wait for the rest, or for the sweep after WAIT_MINUTES
             self.post_block(complete)
         else:
+            self.apply_edit()
             self.follow_up()
 
         done = complete and (not self.voice or self.voice in self.posted) and all(u in self.posted for u in self.photos)
@@ -222,18 +253,17 @@ class _Post:
 
     def post_block(self, complete):
         """Separator, text, voice, photos (placeholders for missing ones), back to back."""
-        from klik_pos.api.delivery import REPORT_SEPARATOR, reporting_summary_text
+        from klik_pos.api.delivery import REPORT_SEPARATOR
 
         _send_telegram_message(self.chat_id, REPORT_SEPARATOR, **self.thread)
-        try:
-            text = reporting_summary_text(self.report)
-        except Exception:
-            frappe.log_error(title="Delivery app media: report text failed", message=self.name)
-            text = f"📦 <b>#{self.report.reported_invoice_no}</b>"
-        self.summary_id = _send_telegram_message(self.chat_id, text, **self.thread)
+        self.summary_id = _send_telegram_message(self.chat_id, self.text(), **self.thread)
         # Recorded before the files go out: from here on this report only ever gets follow-ups,
         # whatever happens below, so the block is never posted twice.
-        self.save(posted_at=now_datetime(), summary_message_id=str(self.summary_id) if self.summary_id else None)
+        self.save(
+            posted_at=now_datetime(),
+            summary_message_id=str(self.summary_id) if self.summary_id else None,
+            text_revision=self.revision(),
+        )
 
         if self.voice:
             self.send_voice(reply=False)
@@ -266,6 +296,67 @@ class _Post:
             self.save(warning_message_id=str(ids[0]))
         self.save_posted()
 
+    def revision(self):
+        return max(cint(self.report.get("revision")), 1)
+
+    def text(self):
+        from klik_pos.api.delivery import reporting_summary_text
+
+        try:
+            text = reporting_summary_text(self.report)
+        except Exception:
+            frappe.log_error(title="Delivery app media: report text failed", message=self.name)
+            text = f"📦 <b>#{self.report.reported_invoice_no}</b>"
+        return f"{text}\n{KH_EDITED}" if self.revision() > 1 else text
+
+    def apply_edit(self):
+        """After a driver's edit: the text edited in place, removed photos and voice deleted from
+        the group, placeholders no longer needed deleted. Added files are left to follow_up."""
+        if self.revision() > self.text_revision:
+            if not self.summary_id or edit_message_text(self.chat_id, self.summary_id, self.text()):
+                self.text_revision = self.revision()
+                self.save(text_revision=self.text_revision)
+            else:
+                self.errors.append("text not edited")
+
+        if self.revision() == 1:
+            return  # never edited: nothing to remove
+
+        keep = []
+        # Placeholders still needed: expected photos not shown in a slot yet (arrived ones that
+        # are not placed yet will fill placeholders in follow_up).
+        shown = sum(1 for slot in self.slots if slot.get("url") in self.photos)
+        missing = max(self.expected_photos - shown, 0)
+        placeholders = 0
+        for slot in self.slots:
+            url = slot.get("url")
+            if url and url in self.photos:
+                keep.append(slot)
+                continue
+            if not url and placeholders < missing:
+                placeholders += 1
+                keep.append(slot)
+                continue
+            # A photo the driver removed, or a placeholder no longer needed.
+            if delete_message(self.chat_id, slot["message_id"]):
+                if url in self.posted:
+                    self.posted.remove(url)
+                if slot["message_id"] == self.warning_id:
+                    self.warning_id = None
+                    self.save(warning_message_id=None)
+            else:
+                keep.append(slot)  # older than 48 hours: stays in the group
+        if len(keep) != len(self.slots):
+            self.slots = keep
+            self.save_posted()
+
+        old_voice = next((u for u in self.posted if u != self.voice and u not in self.photos and _is_voice(u)), None)
+        if old_voice and self.voice_message_id and delete_message(self.chat_id, self.voice_message_id):
+            self.posted.remove(old_voice)
+            self.voice_message_id = None
+            self.save(voice_message_id=None)
+            self.save_posted()
+
     def follow_up(self):
         """Files that arrived after the block: photos into their placeholders, the rest as replies."""
         if self.voice and self.voice not in self.posted:
@@ -286,6 +377,8 @@ class _Post:
                 if not ids or ids[0] is None:
                     self.errors.append(f"photo {url}: not sent")
                     continue
+                # Kept with the album's slots so an edit that removes it can delete it too.
+                self.slots.append({"message_id": ids[0], "url": url})
             self.posted.append(url)
             self.save_posted()
 
@@ -295,8 +388,11 @@ class _Post:
             self.errors.append(f"voice {self.voice}: file not readable")
             return
         extra = {**self.thread, **(self.reply() if reply else {})}
-        if send_voice_file(self.chat_id, _filename(self.voice), content, **extra):
+        message_id = send_voice_file(self.chat_id, _filename(self.voice), content, **extra)
+        if message_id:
             self.posted.append(self.voice)
+            self.voice_message_id = message_id
+            self.save(voice_message_id=str(message_id))
             self.save_posted()
         else:
             self.errors.append(f"voice {self.voice}: not sent")

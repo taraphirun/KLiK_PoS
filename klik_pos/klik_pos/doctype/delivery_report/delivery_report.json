@@ -27,6 +27,17 @@
   "voice_note",
   "telegram_file_ids",
   "media_sync_error",
+  "section_break_app",
+  "source",
+  "payments",
+  "exchange_rate",
+  "total_usd",
+  "column_break_app_1",
+  "gps_accuracy",
+  "expected_photos",
+  "expected_voice",
+  "revision",
+  "is_edited",
   "section_break_reconciliation",
   "reconciliation_status",
   "match_confidence",
@@ -175,6 +186,84 @@
    "read_only": 1
   },
   {
+   "collapsible": 0,
+   "fieldname": "section_break_app",
+   "fieldtype": "Section Break",
+   "label": "Delivery App"
+  },
+  {
+   "description": "\"App\" for reports from the delivery app (hd-delivery-app); blank for the Telegram bot.",
+   "fieldname": "source",
+   "fieldtype": "Data",
+   "in_standard_filter": 1,
+   "label": "Source",
+   "read_only": 1
+  },
+  {
+   "description": "Payments the driver reported collecting. Mode is as the app sends it (cash, aba, acleda, ...).",
+   "fieldname": "payments",
+   "fieldtype": "Table",
+   "label": "Payments",
+   "options": "Delivery Report Payment",
+   "read_only": 1
+  },
+  {
+   "description": "Riel per US dollar on the day of the delivery (the app's rate, from ACLEDA).",
+   "fieldname": "exchange_rate",
+   "fieldtype": "Int",
+   "label": "Exchange Rate (KHR per USD)",
+   "read_only": 1
+  },
+  {
+   "description": "All payments in US dollars: USD amounts plus KHR amounts at the exchange rate (USD only when there is no rate). Prefills the amount collected at confirm.",
+   "fieldname": "total_usd",
+   "fieldtype": "Currency",
+   "label": "Total Collected (USD)",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_app_1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Phone's GPS accuracy in metres.",
+   "fieldname": "gps_accuracy",
+   "fieldtype": "Float",
+   "label": "GPS Accuracy (m)",
+   "precision": "1",
+   "read_only": 1
+  },
+  {
+   "description": "Photos the driver took; the app uploads them after the report, so fewer may be attached for a while.",
+   "fieldname": "expected_photos",
+   "fieldtype": "Int",
+   "label": "Expected Photos",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "expected_voice",
+   "fieldtype": "Check",
+   "label": "Expected Voice Note",
+   "read_only": 1
+  },
+  {
+   "default": "1",
+   "description": "Version from the app: 1 as first sent, higher after each edit by the driver.",
+   "fieldname": "revision",
+   "fieldtype": "Int",
+   "label": "Revision",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_edited",
+   "fieldtype": "Check",
+   "in_standard_filter": 1,
+   "label": "Edited by Driver",
+   "read_only": 1
+  },
+  {
    "fieldname": "section_break_reconciliation",
    "fieldtype": "Section Break",
    "label": "Reconciliation"
@@ -264,7 +353,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-07-30 00:00:00.000000",
+ "modified": "2026-11-13 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "KLiK PoS",
  "name": "Delivery Report",

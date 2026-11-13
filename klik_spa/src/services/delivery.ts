@@ -5,6 +5,14 @@ export type ReconciliationStatus = "Unmatched" | "Suggested" | "Confirmed" | "Re
 export type CompletionStatus = "Full" | "Partial";
 export type PaymentStatus = "Paid" | "Unpaid" | "Partial";
 
+/** One payment the driver collected, from the delivery app. `mode` is as the app sends it
+ * ("cash", "aba", "acleda", or a bank added later) - see utils/deliveryPayments.ts for names. */
+export interface DeliveryReportPayment {
+  mode: string;
+  amount_usd?: number;
+  amount_khr?: number;
+}
+
 export interface DeliveryReport {
   name: string;
   bot_delivery_id: string;
@@ -45,6 +53,22 @@ export interface DeliveryReport {
   /** Set when reported_invoice_no is numeric but matched no known booklet range - needs manual
    * resolution (see ResolveBookletButton). */
   is_booklet_out_of_range?: 0 | 1;
+  /** Delivery app reports (2026-11-13): "App", else blank (Telegram bot). The fields below are
+   * set only for app reports. */
+  source?: string | null;
+  /** Payments the driver reported; empty for bot reports. */
+  payments?: DeliveryReportPayment[];
+  /** Riel per US dollar on the delivery's day. */
+  exchange_rate?: number | null;
+  /** All payments in USD (KHR at exchange_rate) - prefills "amount collected" at confirm. */
+  total_usd?: number | null;
+  gps_accuracy?: number | null;
+  /** Photos / voice note the driver took; fewer may be attached while they are still uploading. */
+  expected_photos?: number | null;
+  expected_voice?: 0 | 1 | null;
+  /** 1 as first sent, higher after each edit by the driver. */
+  revision?: number | null;
+  is_edited?: 0 | 1 | null;
   /** Suggested customer (docname) when this report matched a VIP booklet - a hint the Create
    * Invoice modal prefills but staff can still override, not an authoritative assignment. */
   booklet_customer?: string | null;

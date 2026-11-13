@@ -6,7 +6,7 @@ from datetime import timezone
 from zoneinfo import ZoneInfo
 
 import frappe
-from frappe.utils import add_days, flt, get_datetime, get_url, now_datetime, nowdate
+from frappe.utils import add_days, cint, flt, get_datetime, get_url, now_datetime, nowdate
 from frappe.utils.file_manager import save_file
 
 from klik_pos.api.booklet import _extract_number as _extract_invoice_number
@@ -612,6 +612,154 @@ def push_delivery_ack_job(bot_delivery_id):
         frappe.log_error(title=f"Delivery ack push to Cloudflare KV failed ({bot_delivery_id})")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Delivery app reports (hd-delivery-app, 2026-11-13).
+#
+# The app sends the same core fields as the bot plus `source: "App"`, the driver's klik_pos id,
+# payment rows, the day's exchange rate, GPS accuracy, the number of photos / voice notes it will
+# upload, and a revision that goes up with each edit. Bot payloads never carry `source`, so none
+# of this touches them.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _is_app_payload(data):
+    return (data or {}).get("source") == "App"
+
+
+def _app_driver(data):
+    """The app knows the driver's Delivery Driver id (it pairs phones by it): use it when it
+    exists, instead of matching by name."""
+    if not _is_app_payload(data):
+        return None
+    driver_id = str(data.get("delivery_driver_id") or "").strip()
+    return driver_id if driver_id and frappe.db.exists("Delivery Driver", driver_id) else None
+
+
+def _apply_app_fields(report, data):
+    """Sets the Delivery App fields from an app payload (submit and edit). Does nothing for a bot
+    payload. Payment modes are kept as sent (cash, aba, acleda, or a bank added to the app later);
+    total_usd is the USD amounts plus the KHR amounts at the report's rate."""
+    if not _is_app_payload(data):
+        return
+    rate = cint(data.get("exchange_rate")) or None
+    report.source = "App"
+    report.exchange_rate = rate
+    report.gps_accuracy = flt(data["gps_accuracy"]) if data.get("gps_accuracy") is not None else None
+    report.expected_photos = cint(data.get("expected_photos"))
+    report.expected_voice = 1 if cint(data.get("expected_voice")) else 0
+    report.revision = max(cint(data.get("revision")), 1)
+    report.set("payments", [])
+    total = 0.0
+    for row in data.get("payments") or []:
+        mode = str((row or {}).get("mode") or "").strip().lower()
+        if not mode:
+            continue
+        usd, khr = flt(row.get("amount_usd")), flt(row.get("amount_khr"))
+        report.append("payments", {"mode": mode, "amount_usd": usd, "amount_khr": khr})
+        total += usd + (khr / rate if rate else 0)
+    report.total_usd = flt(total, 2)
+
+
+def _file_id_of(url):
+    """The app names each file `<uuid>.<ext>`; Frappe may add a suffix before the extension."""
+    name = str(url or "").rsplit("/", 1)[-1]
+    return name[:36].lower()
+
+
+def _keep_app_files(report, photo_ids, voice_id):
+    """After an edit: drop attached photos (and their thumbnails) and the voice note the driver
+    removed. Files still uploading are not attached yet and simply arrive later."""
+    keep = {str(i).lower() for i in (photo_ids or [])}
+    photos = report.photos or []
+    if isinstance(photos, str):
+        photos = json.loads(photos) if photos else []
+    thumbs = report.photo_thumbnails or []
+    if isinstance(thumbs, str):
+        thumbs = json.loads(thumbs) if thumbs else []
+    kept = [(i, url) for i, url in enumerate(photos) if _file_id_of(url) in keep]
+    if len(kept) != len(photos):
+        report.photos = json.dumps([url for _, url in kept])
+        if thumbs:
+            report.photo_thumbnails = json.dumps([thumbs[i] for i, _ in kept if i < len(thumbs)])
+    if report.voice_note and _file_id_of(report.voice_note) != str(voice_id or "").lower():
+        report.voice_note = None
+
+
+@frappe.whitelist()
+def update_delivery_report(data):
+    """An edit from the delivery app (hd-delivery-app): the driver changed a report klik_pos
+    already has. Same authentication as submit_delivery_report (the app server's API user).
+
+    - Refused once the office has decided: Confirmed or Rejected answer
+      {"success": False, "locked": True, ...}; the app then locks the report on the phone and
+      rolls it back to the version klik_pos has.
+    - Only a higher `revision` is applied; the same or an older one (a retry, or an old edit
+      arriving late) answers success and changes nothing.
+    - The invoice number, delivery and payment status, GPS, payments and expected media are
+      replaced; photos and the voice note the driver removed are dropped; a new invoice number is
+      matched again (invoice and booklet). raw_payload keeps the first version; the Version log
+      (track_changes) and `revision` / `is_edited` record the edit.
+    - The reporting group post is updated in place (delivery_app_media).
+    """
+    try:
+        if isinstance(data, str):
+            data = json.loads(data)
+        _validate_delivery_payload(data)
+        if not _is_app_payload(data):
+            frappe.throw("Only delivery app reports can be edited this way")
+
+        name = frappe.db.get_value("Delivery Report", {"bot_delivery_id": data.get("bot_delivery_id")}, "name")
+        if not name:
+            frappe.throw("Delivery Report does not exist")
+        report = frappe.get_doc("Delivery Report", name)
+
+        if report.reconciliation_status in ("Confirmed", "Rejected"):
+            return {
+                "success": False,
+                "locked": True,
+                "message": f"Delivery Report is {report.reconciliation_status.lower()} and cannot be edited",
+                "delivery_report": report.name,
+                "reconciliation_status": report.reconciliation_status,
+            }
+
+        if cint(data.get("revision")) <= cint(report.revision):
+            return _delivery_report_response(report)
+
+        invoice_changed = (report.reported_invoice_no or "") != (data.get("reported_invoice_no") or "")
+        report.reported_invoice_no = data.get("reported_invoice_no")
+        report.completion_status = data.get("completion_status")
+        report.payment_status = data.get("payment_status")
+        report.gps_latitude = flt(data["gps_latitude"]) if data.get("gps_latitude") is not None else None
+        report.gps_longitude = flt(data["gps_longitude"]) if data.get("gps_longitude") is not None else None
+        _apply_app_fields(report, data)
+        report.is_edited = 1
+        _keep_app_files(report, data.get("photo_ids"), data.get("voice_id"))
+
+        if invoice_changed:
+            reported_no = report.reported_invoice_no
+            booklet_match = match_booklet_for_invoice(reported_no, report.delivery_timestamp)
+            report.booklet = booklet_match
+            report.is_booklet_out_of_range = (
+                1 if (not booklet_match and _extract_invoice_number(reported_no) is not None) else 0
+            )
+            match_delivery_report(report)
+
+        report.save(ignore_permissions=True)
+
+        try:
+            enqueue_app_media_post(report.name)
+        except Exception:
+            frappe.log_error(title="Failed to enqueue app report's group update", message=report.name)
+
+        return _delivery_report_response(report)
+
+    except frappe.exceptions.ValidationError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        frappe.log_error(title="Delivery Report edit failed")
+        return {"success": False, "message": str(e)}
+
+
 @frappe.whitelist()
 def submit_delivery_report(data):
     """Ingestion endpoint for the Telegram delivery bot.
@@ -658,7 +806,8 @@ def submit_delivery_report(data):
                 "completion_status": data.get("completion_status"),
                 "payment_status": data.get("payment_status"),
                 "reported_driver_name": data.get("delivery_driver"),
-                "delivery_driver": resolve_driver(data.get("delivery_driver"), data.get("driver_telegram_id")),
+                "delivery_driver": _app_driver(data)
+                or resolve_driver(data.get("delivery_driver"), data.get("driver_telegram_id")),
                 "driver_telegram_id": data.get("driver_telegram_id"),
                 "delivery_timestamp": get_datetime(data["delivery_timestamp"])
                 if data.get("delivery_timestamp")
@@ -678,6 +827,8 @@ def submit_delivery_report(data):
                 "raw_payload": data,
             }
         )
+        # Delivery app reports only: payments, rate, expected media, revision (no-op for the bot).
+        _apply_app_fields(report, data)
 
         # Booklet matching (Module 16) - best-effort, mirrors invoice matching below: a numeric
         # reported_invoice_no that falls outside every known booklet range is flagged for manual
@@ -1092,6 +1243,16 @@ DELIVERY_REPORT_LIST_FIELDS = [
     "payment_entry",
     "booklet",
     "is_booklet_out_of_range",
+    # Delivery app reports (2026-11-13); blank/0 for bot reports. `payments` (a child table) is
+    # attached per row by get_delivery_reports.
+    "source",
+    "exchange_rate",
+    "total_usd",
+    "gps_accuracy",
+    "expected_photos",
+    "expected_voice",
+    "revision",
+    "is_edited",
     "creation",
 ]
 
@@ -1218,6 +1379,22 @@ def get_delivery_reports(status=None, search="", start=0, limit=100, driver=None
             row["booklet_customer"] = b.customer if (b and b.is_vip) else None
 
         group_info = _group_info_for_keys({row["group_key"] for row in all_matches})
+
+        # Payment rows of delivery app reports, in one query for the whole list.
+        app_names = [row["name"] for row in all_matches if row.get("source") == "App"]
+        payments = {}
+        if app_names:
+            for p in frappe.get_all(
+                "Delivery Report Payment",
+                filters={"parent": ["in", app_names], "parenttype": "Delivery Report"},
+                fields=["parent", "mode", "amount_usd", "amount_khr"],
+                order_by="idx asc",
+            ):
+                payments.setdefault(p.parent, []).append(
+                    {"mode": p.mode, "amount_usd": p.amount_usd, "amount_khr": p.amount_khr}
+                )
+        for row in all_matches:
+            row["payments"] = payments.get(row["name"], [])
 
         def is_flagged(row):
             info = group_info.get(row["group_key"])

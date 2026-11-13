@@ -11,6 +11,8 @@
   "posted_at",
   "summary_message_id",
   "warning_message_id",
+  "voice_message_id",
+  "text_revision",
   "done",
   "posted_urls",
   "photo_slots",
@@ -77,12 +79,26 @@
    "fieldtype": "Small Text",
    "label": "Last Error",
    "read_only": 1
+  },
+  {
+   "description": "Report revision the posted text shows; a driver's edit raises the report's revision and the text is edited in place.",
+   "fieldname": "text_revision",
+   "fieldtype": "Int",
+   "label": "Text Revision",
+   "read_only": 1
+  },
+  {
+   "description": "Telegram message id of the posted voice note, so an edit that replaces or removes it can delete it.",
+   "fieldname": "voice_message_id",
+   "fieldtype": "Data",
+   "label": "Voice Message ID",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 0,
  "links": [],
- "modified": "2026-11-13 00:00:00.000000",
+ "modified": "2026-11-13 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "KLiK PoS",
  "name": "Delivery Telegram Post",

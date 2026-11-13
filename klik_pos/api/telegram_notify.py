@@ -138,10 +138,11 @@ def send_voice(chat_id, file_id, caption=None, **extra):
 FILE_SEND_TIMEOUT = 60
 
 
-def _call_telegram_files(method, data, files, what):
+def _call_telegram_files(method, data, files, what, harmless=()):
     """One multipart Bot API call. `data` values that are lists/dicts (media, reply_parameters)
     are JSON-encoded, as Telegram expects in a multipart body. Returns Telegram's `result` (a
-    Message, a list of Messages, or True), or None if the call failed."""
+    Message, a list of Messages, or True), or None if the call failed. An error whose description
+    contains one of `harmless` counts as success (True), unlogged."""
     try:
         token = get_bot_token()
         if not token:
@@ -157,6 +158,9 @@ def _call_telegram_files(method, data, files, what):
         except ValueError:
             body = {}
         if not response.ok or not body.get("ok"):
+            description = str(body.get("description") or "")
+            if any(h in description for h in harmless):
+                return True
             frappe.log_error(title=f"Telegram {method} failed", message=f"{what}\n\n{body or response.status_code}")
             return None
         return body.get("result", True)
@@ -239,6 +243,32 @@ def set_caption(chat_id, message_id, caption):
         {"chat_id": chat_id, "message_id": message_id, "caption": caption},
         None,
         f"caption of message {message_id}",
+    )
+    return result is not None
+
+
+def edit_message_text(chat_id, message_id, text):
+    """Replaces the text (HTML) of a message the bot sent. Returns True if done (also when the
+    text was already the same)."""
+    result = _call_telegram_files(
+        "editMessageText",
+        {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"},
+        None,
+        f"text of message {message_id}",
+        harmless=("message is not modified",),
+    )
+    return result is not None
+
+
+def delete_message(chat_id, message_id):
+    """Deletes a message the bot sent. Telegram refuses after 48 hours; that is logged and the
+    message stays. Returns True if deleted (also when it was already gone)."""
+    result = _call_telegram_files(
+        "deleteMessage",
+        {"chat_id": chat_id, "message_id": message_id},
+        None,
+        f"delete message {message_id}",
+        harmless=("message to delete not found",),
     )
     return result is not None
 
