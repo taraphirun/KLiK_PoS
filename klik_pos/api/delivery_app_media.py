@@ -43,7 +43,7 @@ from klik_pos.api.telegram_notify import (
 POST_DOCTYPE = "Delivery Telegram Post"
 
 # Post the block anyway once a report is this old and still missing files.
-WAIT_MINUTES = 5
+WAIT_MINUTES = 1
 # The sweeps stop retrying after this.
 SWEEP_DAYS = 3
 # One lock for all reports: a block is a few seconds to post, and this keeps two blocks from
