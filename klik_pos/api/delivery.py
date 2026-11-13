@@ -733,7 +733,10 @@ def update_delivery_report(data):
         report.gps_longitude = flt(data["gps_longitude"]) if data.get("gps_longitude") is not None else None
         _apply_app_fields(report, data)
         report.is_edited = 1
-        _keep_app_files(report, data.get("photo_ids"), data.get("voice_id"))
+        # Only when the app says which files the report has now: an app server from before
+        # photo_ids existed sends edits without it, and must not wipe every attached file.
+        if "photo_ids" in data:
+            _keep_app_files(report, data.get("photo_ids"), data.get("voice_id"))
 
         if invoice_changed:
             reported_no = report.reported_invoice_no
@@ -1381,18 +1384,23 @@ def get_delivery_reports(status=None, search="", start=0, limit=100, driver=None
         group_info = _group_info_for_keys({row["group_key"] for row in all_matches})
 
         # Payment rows of delivery app reports, in one query for the whole list.
+        # Own try: a problem here must never empty the reconciliation list.
         app_names = [row["name"] for row in all_matches if row.get("source") == "App"]
         payments = {}
-        if app_names:
-            for p in frappe.get_all(
-                "Delivery Report Payment",
-                filters={"parent": ["in", app_names], "parenttype": "Delivery Report"},
-                fields=["parent", "mode", "amount_usd", "amount_khr"],
-                order_by="idx asc",
-            ):
-                payments.setdefault(p.parent, []).append(
-                    {"mode": p.mode, "amount_usd": p.amount_usd, "amount_khr": p.amount_khr}
-                )
+        try:
+            if app_names:
+                for p in frappe.get_all(
+                    "Delivery Report Payment",
+                    filters={"parent": ["in", app_names], "parenttype": "Delivery Report"},
+                    fields=["parent", "mode", "amount_usd", "amount_khr"],
+                    order_by="idx asc",
+                ):
+                    payments.setdefault(p.parent, []).append(
+                        {"mode": p.mode, "amount_usd": p.amount_usd, "amount_khr": p.amount_khr}
+                    )
+        except Exception:
+            frappe.log_error(title="Delivery report payments not loaded")
+            payments = {}
         for row in all_matches:
             row["payments"] = payments.get(row["name"], [])
 

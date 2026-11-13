@@ -307,7 +307,9 @@ class _Post:
         except Exception:
             frappe.log_error(title="Delivery app media: report text failed", message=self.name)
             text = f"📦 <b>#{self.report.reported_invoice_no}</b>"
-        return f"{text}\n{KH_EDITED}" if self.revision() > 1 else text
+        # is_edited, not revision: a report edited on the phone before it first reached klik_pos
+        # arrives at revision 2 but was never changed after the office saw it.
+        return f"{text}\n{KH_EDITED}" if self.report.get("is_edited") else text
 
     def apply_edit(self):
         """After a driver's edit: the text edited in place, removed photos and voice deleted from
