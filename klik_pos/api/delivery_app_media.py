@@ -219,16 +219,13 @@ def _post(report_name):
 
 
 def sweep_stalled_app_media():
-    """Hourly (hooks.py). App reports whose files are not all posted, from 2 hours to 3 days old:
-    run the media job, which posts whatever has arrived (with a warning when files are missing)
-    and retries sends that failed."""
-    now = now_datetime()
+    """Hourly (hooks.py). App reports from the last 3 days whose files are not all posted: run the
+    media job, which retries sends that failed and, once a report is STALL_HOURS old, posts
+    whatever has arrived (with a warning when files are missing). For a younger report still
+    missing files the job does nothing, so no age floor is needed here."""
     names = frappe.get_all(
         POST_DOCTYPE,
-        filters={
-            "done": 0,
-            "creation": ["between", [add_to_date(now, days=-SWEEP_DAYS), add_to_date(now, hours=-STALL_HOURS)]],
-        },
+        filters={"done": 0, "creation": [">", add_to_date(now_datetime(), days=-SWEEP_DAYS)]},
         pluck="name",
     )
     for name in names:
