@@ -230,7 +230,8 @@ after_migrate = "klik_pos.setup.install.after_install"
 scheduler_events = {
 	"hourly": [
 		"klik_pos.api.booklet.check_booklet_lifecycle",
-		"klik_pos.api.delivery.sweep_stuck_delivery_jobs"
+		"klik_pos.api.delivery.sweep_stuck_delivery_jobs",
+		"klik_pos.api.delivery_app_media.sweep_stalled_app_media"
 	],
 }
 

@@ -1,0 +1,79 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:delivery_report",
+ "creation": "2026-11-13 00:00:00.000000",
+ "description": "Delivery app reports: which photos and voice notes were posted to the Telegram reporting group. Written by klik_pos/api/delivery_app_media.py.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "delivery_report",
+  "summary_message_id",
+  "done",
+  "posted_urls",
+  "last_error"
+ ],
+ "fields": [
+  {
+   "description": "Delivery Report name. Plain text, not a Link, so deleting a report is never blocked by this record.",
+   "fieldname": "delivery_report",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Delivery Report",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "description": "Telegram message id of the report's text in the reporting group; photos and voice are sent as replies to it. Blank if that send failed.",
+   "fieldname": "summary_message_id",
+   "fieldtype": "Data",
+   "label": "Summary Message ID",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "description": "Every expected photo and the voice note have been posted.",
+   "fieldname": "done",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Done",
+   "read_only": 1
+  },
+  {
+   "description": "File URLs already posted to the group, so none is posted twice.",
+   "fieldname": "posted_urls",
+   "fieldtype": "JSON",
+   "label": "Posted URLs",
+   "read_only": 1
+  },
+  {
+   "fieldname": "last_error",
+   "fieldtype": "Small Text",
+   "label": "Last Error",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-11-13 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "KLiK PoS",
+ "name": "Delivery Telegram Post",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

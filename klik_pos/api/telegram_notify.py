@@ -5,6 +5,8 @@ alert, new-registration DM) reuses send_admin_alert / _send_telegram_message rat
 duplicating this.
 """
 
+import json
+
 import frappe
 import requests
 from frappe.utils import cint
@@ -40,12 +42,16 @@ def _send_telegram_message(chat_id, text, **extra):
     `**extra` merges straight into the sendMessage body - e.g. `message_thread_id` for
     send_booklet_status_alert's reporting-chat broadcast, the one caller so far that needs
     anything beyond chat_id/text.
+
+    Returns the sent message's id, or None if nothing was sent. Only the delivery app's group
+    post uses it (to reply to the report's text with its photos and voice, see
+    api/delivery_app_media.py); every other caller ignores it.
     """
     try:
         token = get_bot_token()
         if not token:
             frappe.log_error(title="Telegram alert skipped - bot token not configured", message=text)
-            return
+            return None
 
         response = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
@@ -56,8 +62,11 @@ def _send_telegram_message(chat_id, text, **extra):
         body = response.json()
         if not body.get("ok"):
             frappe.log_error(title="Telegram alert send failed", message=f"{text}\n\n{body}")
+            return None
+        return (body.get("result") or {}).get("message_id")
     except Exception:
         frappe.log_error(title="Telegram alert send failed", message=text)
+        return None
 
 
 def _call_telegram(method, payload, what):
@@ -114,6 +123,91 @@ def send_voice(chat_id, file_id, caption=None, **extra):
     if caption:
         payload["caption"] = caption
     _call_telegram("sendVoice", payload, f"voice {file_id}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sending real files (the delivery app, 2026-11-13).
+#
+# The helpers above resend Telegram file_ids, which only exist for media the Telegram bot received.
+# The delivery app uploads real files to klik_pos instead, so these upload the bytes themselves
+# (multipart, `attach://` parts). Same best-effort contract (never raise, log instead), but they
+# report what was sent: the caller records which files were posted, so a failed send is retried
+# later and a sent one is never posted twice.
+# ─────────────────────────────────────────────────────────────────────────────
+
+FILE_SEND_TIMEOUT = 60
+
+
+def _call_telegram_files(method, data, files, what):
+    """One multipart Bot API call. `data` values that are lists/dicts (media, reply_parameters)
+    are JSON-encoded, as Telegram expects in a multipart body. Returns True only on `ok`."""
+    try:
+        token = get_bot_token()
+        if not token:
+            frappe.log_error(title="Telegram send skipped - bot token not configured", message=what)
+            return False
+
+        form = {k: (json.dumps(v) if isinstance(v, list | dict) else v) for k, v in data.items() if v is not None}
+        response = requests.post(
+            f"https://api.telegram.org/bot{token}/{method}", data=form, files=files, timeout=FILE_SEND_TIMEOUT
+        )
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if not response.ok or not body.get("ok"):
+            frappe.log_error(title=f"Telegram {method} failed", message=f"{what}\n\n{body or response.status_code}")
+            return False
+        return True
+    except Exception:
+        frappe.log_error(title=f"Telegram {method} failed", message=what)
+        return False
+
+
+def send_voice_file(chat_id, filename, content, **extra):
+    """A voice note from its bytes. OGG/Opus shows as a voice message; anything else goes as an
+    audio file (sendVoice rejects other formats). Returns True if sent."""
+    if filename.lower().endswith((".ogg", ".oga")):
+        method, field, mime = "sendVoice", "voice", "audio/ogg"
+    else:
+        method, field, mime = "sendAudio", "audio", "application/octet-stream"
+    return _call_telegram_files(
+        method, {"chat_id": chat_id, **extra}, {field: (filename, content, mime)}, f"{field} {filename}"
+    )
+
+
+def send_photo_files(chat_id, photos, caption=None, **extra):
+    """Photos from their bytes, as albums **chunked at 10** (see send_media_group for why: over 10,
+    Telegram rejects the whole album). A lone item goes as sendPhoto (an album needs 2+).
+    `photos` is a list of (filename, bytes). `caption`, if given, goes on the first photo only.
+    Stops at the first failed chunk and returns how many photos (from the start of the list)
+    were sent, so the caller records exactly those.
+    """
+    CHUNK = 10
+    sent = 0
+    for i in range(0, len(photos), CHUNK):
+        batch = photos[i : i + CHUNK]
+        first_caption = caption if i == 0 else None
+        if len(batch) == 1:
+            name, content = batch[0]
+            data = {"chat_id": chat_id, "caption": first_caption, **extra}
+            ok = _call_telegram_files("sendPhoto", data, {"photo": (name, content, "image/jpeg")}, f"photo {name}")
+        else:
+            media, files = [], {}
+            for j, (name, content) in enumerate(batch):
+                key = f"p{j}"
+                item = {"type": "photo", "media": f"attach://{key}"}
+                if j == 0 and first_caption:
+                    item["caption"] = first_caption
+                media.append(item)
+                files[key] = (name, content, "image/jpeg")
+            ok = _call_telegram_files(
+                "sendMediaGroup", {"chat_id": chat_id, "media": media, **extra}, files, f"album of {len(batch)}"
+            )
+        if not ok:
+            break
+        sent += len(batch)
+    return sent
 
 
 def get_reporting_chat():

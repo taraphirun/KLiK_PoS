@@ -12,6 +12,8 @@ from frappe.utils.file_manager import save_file
 from klik_pos.api.booklet import _extract_number as _extract_invoice_number
 from klik_pos.api.booklet import match_booklet_for_invoice
 from klik_pos.api.cloudflare_kv import get_acks_namespace_id, put_kv
+from klik_pos.api.delivery_app_media import enqueue_post as enqueue_app_media_post
+from klik_pos.api.delivery_app_media import is_app_report, record_summary
 from klik_pos.api.sales_invoice import _get_default_payment_mode, create_payment_entry, queue_sales_invoice
 from klik_pos.api.telegram_notify import (
     _send_telegram_message,
@@ -440,6 +442,7 @@ def forward_delivery_to_reporting_chat_job(report_name):
     raw = raw or {}
     photo_ids = raw.get("photos") or []
     voice_id = raw.get("voice")
+    summary_id = None
 
     try:
         # Sent first, on its own, so it lands on the boundary between the previous delivery's
@@ -482,7 +485,7 @@ def forward_delivery_to_reporting_chat_job(report_name):
         map_link = _location_link(report)
         if map_link:
             lines.append(f"📍ទីតាំង៖ {map_link}")
-        _send_telegram_message(chat_id, "\n".join(lines) + f"\n\n{_driver_hashtag(report)}", **extra)
+        summary_id = _send_telegram_message(chat_id, "\n".join(lines) + f"\n\n{_driver_hashtag(report)}", **extra)
     except Exception:
         frappe.log_error(title="Failed to forward delivery summary to reporting chat", message=report_name)
 
@@ -501,6 +504,15 @@ def forward_delivery_to_reporting_chat_job(report_name):
             send_media_group(chat_id, photo_ids, **extra)
     except Exception:
         frappe.log_error(title="Failed to forward photos to reporting chat", message=report_name)
+
+    # Delivery app reports (2026-11-13): their photos and voice are uploaded after this runs, so
+    # there is nothing above to send. Remember the text's message id; delivery_app_media posts the
+    # files as replies once they are in. Bot reports skip this.
+    try:
+        if is_app_report(report):
+            record_summary(report_name, summary_id)
+    except Exception:
+        frappe.log_error(title="Failed to record app report's group post", message=report_name)
 
 
 STUCK_JOB_AGE_MINUTES = 15
@@ -1394,6 +1406,15 @@ def attach_delivery_media(report_name, photo_urls=None, voice_url=None):
 
         report = frappe.get_doc("Delivery Report", report_name)
         _attach_delivery_media(report, photo_urls=photo_urls, voice_url=voice_url)
+
+        # Delivery app reports (2026-11-13): post the file to the reporting group once all of the
+        # report's files are in (delivery_app_media decides; it runs after this commits). Never
+        # allowed to fail the attach itself. Bot reports skip this.
+        try:
+            if is_app_report(report):
+                enqueue_app_media_post(report.name)
+        except Exception:
+            frappe.log_error(title="Failed to enqueue app report's group media post", message=report_name)
 
         return {
             "success": True,
