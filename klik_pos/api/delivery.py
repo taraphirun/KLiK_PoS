@@ -484,7 +484,10 @@ def reporting_summary_text(report):
     ]
     map_link = _location_link(report)
     if map_link:
-        lines.append(f"📍ទីតាំង៖ {map_link}")
+        # How close the GPS fix was, e.g. "±7m" (delivery app reports only; the bot sends none).
+        accuracy = report.get("gps_accuracy")
+        near = f" ±{max(round(flt(accuracy)), 1)}m" if accuracy else ""
+        lines.append(f"📍ទីតាំង៖ {map_link}{near}")
     return "\n".join(lines) + f"\n\n{_driver_hashtag(report)}"
 
 
